@@ -506,13 +506,13 @@ export class Game {
       }
     }
 
-    // Named something that is not here. Say so, and say what is — the one
-    // branch of the old interpreter that already got this right.
-    const present = node.zones.flatMap((z) => z.features.filter((f) => !f.spent).map((f) => f.name));
-    say(`You look for "${what}"`, "room", [
-      "There is nothing here by that name.",
-      present.length ? `What is actually in here: ${commaList(present)}.` : "This room is bare, which is its own kind of bad news.",
-    ]);
+    // Named something that is not a distinct object here — "the walls", "the
+    // floor", "the ceiling". Those are not nothing: they are the room, and the
+    // room report already knows what it is made of. Answering the question
+    // that was asked beats being technically correct about the noun.
+    this.examineRoom(node, enc, (subject, scope, facts) =>
+      say(subject, scope, [`Nothing here is called "${what}" in particular, so: the room.`, ...facts]),
+    );
   }
 
   private examineRoom(

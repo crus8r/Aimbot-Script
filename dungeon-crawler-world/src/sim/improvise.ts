@@ -500,15 +500,35 @@ export function interpret(state: GameState, raw: string): Interpretation {
 /**
  * What somebody is looking at, once the looking words are taken off the front.
  * "examine the ruptured gas main" → "the ruptured gas main".
+ *
+ * Conservative on purpose. "i look around and see what the walls and floors are
+ * made of" is one sentence with a verb in the middle of it, and taking
+ * everything after the first "look" as the name of an object produced
+ * `You look for "and see what the walls and floors are"` — technically a
+ * faithful reading, and useless. When in doubt this returns nothing, which
+ * means the whole room, which is the answer that sentence wanted.
  */
 function subjectOf(text: string): string | undefined {
   const m = /\b(?:look(?:ing)?(?: at| in| inside| over)?|examine|inspect|study|survey|observe|scan|check|describe|read|what(?:'s| is| are)|tell me about|size up)\b\s*(.*)$/i.exec(text);
-  const rest = (m?.[1] ?? "")
-    .replace(/^(?:at|the|a|an|my|this|that|these|those|is|are|it|to|into|in|on|around|about)\b\s*/gi, "")
-    .replace(/\b(?:made of|look like|made from)\b.*$/i, "")
+  let rest = (m?.[1] ?? "")
+    // A new verb ends the noun phrase. Everything past it is a second thought.
+    .replace(/\b(?:and|then|so|to)\s+(?:see|tell|check|look|find|know|work out|figure)\b.*$/i, "")
+    .replace(/\b(?:made of|made from|look like|looks like|consist)\b.*$/i, "")
+    .replace(/\b(?:is|are|was|were)\b\s*$/i, "")
     .replace(/[?.!]+$/, "")
     .trim();
-  if (!rest || /^(around|round|about|here|the room|room|it|things|stuff|everything)$/.test(rest)) return undefined;
+
+  // Leading filler comes off in a loop, because "at the" and "in this" stack.
+  let prev = "";
+  while (rest !== prev) {
+    prev = rest;
+    rest = rest.replace(/^(?:at|the|a|an|my|this|that|these|those|is|are|it|to|into|in|on|around|about|and|of|for)\b\s*/i, "").trim();
+  }
+
+  if (!rest) return undefined;
+  if (/^(around|round|about|here|room|place|everything|things|stuff|it|anything|something)$/i.test(rest)) return undefined;
+  // A name, not a sentence. Anything longer is somebody thinking out loud.
+  if (rest.split(/\s+/).length > 4) return undefined;
   return rest;
 }
 

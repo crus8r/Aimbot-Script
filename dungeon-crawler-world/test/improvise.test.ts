@@ -229,3 +229,27 @@ test("rummaging mid-fight is refused for free rather than thrown or charged", ()
   assert.equal(r.command, null, "searching during a fight was dispatched");
   assert.match(r.note, /nothing spent/i);
 });
+
+/* ---------------------------------------- a sentence is not an object name */
+
+test("a verb in the middle of the sentence ends the noun phrase", () => {
+  const s = ready().state;
+  // "i look around and see what the walls and floors are made of" once produced
+  // `You look for "and see what the walls and floors are"` — a faithful reading
+  // of the characters, and no use to anybody.
+  const junk = (input: string) => (interpret(s, input).command as { what?: string }).what;
+  assert.equal(junk("i look around and see what the walls and floors are made of"), undefined);
+  assert.equal(junk("look around and tell me about this place"), undefined);
+  assert.equal(junk("what's this place made of"), undefined);
+  // But a real name still comes through intact.
+  assert.equal(junk("examine the storm grate"), "storm grate");
+  assert.equal(junk("look at the dry ledge"), "dry ledge");
+});
+
+test("naming part of the room that is not an object still answers the question", async () => {
+  const g = ready();
+  const r = await g.execute({ t: "improvise", text: "what are the walls made of" });
+  const text = r.lines.map((l) => l.text).join(" ");
+  assert.doesNotMatch(text, /There is nothing here by that name/, "it dead-ended on a noun that means the room");
+  assert.match(text, /room|takes \d|searched/i, "it did not fall back to describing the room");
+});
