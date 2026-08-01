@@ -120,12 +120,16 @@ export function derive(state: GameState): Derived {
     else if (wSkill >= 6) critRange -= 1;
   }
 
+  // A wall of racking is technique as much as space: knowing how a heavy thing
+  // comes off the ground is most of getting it off the ground.
+  const racking = state.space?.owned && state.space.upgrades.includes("stores") ? 45 : 0;
+
   return {
     stats,
     hpMax: Math.round(30 + stats.con * 8 + c.level * 6 + modSum(mods, "hp")),
     manaMax: Math.max(0, stats.int), // canon: the pool is Intelligence, one for one
     staminaMax: Math.round(40 + stats.con * 2 + stats.str * 2),
-    carry: Math.round(30 * Math.pow(Math.max(1, stats.str) / 4, 1.6) + skillLevel(state, "clean_lift") * 8 + modSum(mods, "carry") + hookBonus(state, "carry")),
+    carry: Math.round(30 * Math.pow(Math.max(1, stats.str) / 4, 1.6) + skillLevel(state, "clean_lift") * 8 + modSum(mods, "carry") + hookBonus(state, "carry") + racking),
     armor: Math.max(0, modSum(mods, "armor")),
     accuracy,
     defense,

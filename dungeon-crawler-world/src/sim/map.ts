@@ -290,7 +290,7 @@ function rollSpawns(
   pressure: number,
   kind: NodeKind,
   depth: number,
-): { mob: string; count: number }[] {
+): { mob: string; count: number; level: number }[] {
   // A third of the rooms on a floor are empty, more of them near the entrance.
   // Not every corner has a monster in it, and the ones that do land harder.
   if (rng.chance(0.42 - pressure * 0.24)) return [];
@@ -301,23 +301,39 @@ function rollSpawns(
     return (
       def &&
       def.behavior !== "neutral" &&
+      // Bounty hunters are not scenery. They are scaled to you and they arrive
+      // because somebody read your number — a level band of [3, 40] is meant
+      // for that one scripted spawn, and rolling it as generic room fill puts
+      // a level-forty stranger in a floor-four cupboard.
+      !def.tags.includes("hunter") &&
       floor >= def.floors[0] &&
       floor <= def.floors[1] &&
       def.level[0] <= ceiling
     );
   });
+  /**
+   * Past the authored bestiary the floors keep coming, and every mob's floor
+   * window has closed behind you. Reaching for the weakest thing left on the
+   * list is how a floor-eighteen corridor ends up holding a level-four crab —
+   * so instead the pool reopens without its window and levels are allowed past
+   * their authored band, scaled to depth.
+   *
+   * This is a placeholder with the right shape rather than real content, and
+   * it is deliberately marked as one: floors five and deeper want their own
+   * bestiary and will get it.
+   */
+  let extrapolated = false;
   if (!legal.length) {
-    // Nothing gentle enough for this depth: fall back to the weakest thing on
-    // the floor rather than silently emptying the room.
-    legal = pool
-      .filter((m) => MOB_BY_ID[m] && MOB_BY_ID[m]!.behavior !== "neutral")
-      .sort((a, b) => MOB_BY_ID[a]!.level[0] - MOB_BY_ID[b]!.level[0])
-      .slice(0, 1);
+    extrapolated = true;
+    legal = pool.filter((m) => {
+      const def = MOB_BY_ID[m];
+      return def && def.behavior !== "neutral" && !def.tags.includes("hunter");
+    });
   }
   if (!legal.length) return [];
 
   const groups = depth >= 3 && rng.chance(0.2 + pressure * 0.4) ? 2 : 1;
-  const out: { mob: string; count: number }[] = [];
+  const out: { mob: string; count: number; level: number }[] = [];
   for (let g = 0; g < groups; g++) {
     const mobId = rng.pick(legal);
     const def = MOB_BY_ID[mobId]!;
@@ -325,11 +341,21 @@ function rollSpawns(
     let count = Math.max(1, Math.round(rng.int(def.group[0], def.group[1]) * scale));
     if (kind === "corridor") count = Math.max(1, count - 1); // corridors hold fewer
     if (kind === "plaza" && pressure > 0.4 && rng.chance(0.5)) count += 1;
-    const band = def.level[1] - def.level[0];
+    // The same depth budget that decided what is allowed in the room decides
+    // how big it is. Without this, a mob with a wide band arrives at the top
+    // of that band the moment it becomes legal at all, and the difficulty
+    // curve stops being a curve and becomes a step.
+    // Out past its authored window a mob keeps growing, about two levels a
+    // floor, rather than sitting at the top of its band forever or lurching
+    // up in one step the moment the window closes.
+    const past = extrapolated ? Math.max(0, floor - def.floors[1]) : 0;
+    const top = extrapolated
+      ? def.level[1] + Math.round(past * 2.4)
+      : Math.max(def.level[0], Math.min(def.level[1], Math.round(ceiling)));
     const level = clamp(
-      Math.round(def.level[0] + band * pressure + rng.int(-1, 1)),
+      Math.round(def.level[0] + (top - def.level[0]) * pressure + rng.int(-1, 1)),
       def.level[0],
-      def.level[1],
+      top,
     );
     out.push({ mob: mobId, count, level });
   }

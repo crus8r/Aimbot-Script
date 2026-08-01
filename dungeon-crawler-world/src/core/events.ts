@@ -142,6 +142,15 @@ export type GameEvent =
 
 export type EventKind = GameEvent["kind"];
 
+/**
+ * An event as a caller writes it — the clock is stamped on by the log.
+ *
+ * Distributive on purpose. A plain `Omit<GameEvent, "at">` collapses the union
+ * down to the keys every variant shares, which is `kind` and `channel` and
+ * nothing else, and then quietly rejects every real event in the codebase.
+ */
+export type Unstamped<T> = T extends unknown ? Omit<T, "at"> : never;
+
 /** Collects a turn's worth of events. Systems push; nobody reads mid-turn. */
 export class EventLog {
   private events: GameEvent[] = [];
@@ -151,7 +160,7 @@ export class EventLog {
     this.clock = clock;
   }
 
-  push<E extends GameEvent>(e: Omit<E, "at">): void {
+  push(e: Unstamped<GameEvent>): void {
     this.events.push({ ...e, at: this.clock() } as GameEvent);
   }
 

@@ -1,5 +1,8 @@
 import type { RngState } from "./rng.ts";
 import type { Hook, MintedSkill, SpellDef } from "./hooks.ts";
+import type { Style } from "./events.ts";
+
+export type { Style };
 
 /* ------------------------------------------------------------------ stats */
 
@@ -122,6 +125,15 @@ export interface Item {
   equipped?: boolean;
   /** Protected from `drop junk` and other bulk operations. */
   locked?: boolean;
+  /** Built rather than found. Devices are delivered, not swung. */
+  device?: {
+    kind: "burn" | "blast" | "shaped" | "toxin" | "shock" | "smoke";
+    power: number;
+    vital: boolean;
+    tags: string[];
+    placed?: boolean;
+    note: string;
+  };
   /** True for anything the item generator invented rather than the catalogue. */
   generated?: boolean;
 }
@@ -397,6 +409,25 @@ export interface GameState {
   classMenu?: unknown;
   /** Ordinary Earth objects claimed from pockets, capped per floor. */
   claims: number;
+  /** Recipes this crawler knows. Unbounded; most are worked out at a bench. */
+  recipes: string[];
+  /** The room off every safe room that belongs to you, and what is in it. */
+  space: { owned: boolean; stations: string[]; upgrades: string[] };
+  /** Stock for the shop currently standing in front of you. */
+  shop: { node: string; stock: Item[] } | null;
+  /**
+   * Backloads. Death rewinds you to the start of the room, then to the start
+   * of the floor, and then it is a death. Both come back on descending.
+   *
+   * This exists so the simulation never has to pull a punch: the stakes stay
+   * real because the third one is final, and the game stays fair because the
+   * first two are yours. Stored as JSON so a snapshot never contains a
+   * snapshot.
+   */
+  restores: { room: boolean; floor: boolean };
+  checkpoints: { room: string | null; floor: string | null };
+  /** Set when the crawler is down but restores remain — the UI offers them. */
+  pendingDeath: { cause: string; outs: string[] } | null;
   world: { crawlersLeft: number; feed: string[]; dead: string[] };
   flags: Record<string, number | string | boolean>;
   history: string[];

@@ -112,6 +112,51 @@ test("floor generation: difficulty rises with distance from the entrance", () =>
   assert.ok(far > near + 0.5, `deep rooms (${far.toFixed(2)}) are not harder than shallow ones (${near.toFixed(2)})`);
 });
 
+test("floor generation: the level curve rises all the way to the bottom", () => {
+  // Sampled across the whole season, because the authored bestiary runs out
+  // around floor four and everything below it is extrapolated. A flat stretch
+  // there is not "no content yet", it is a floor-eighteen corridor holding a
+  // level-four crab, and it is invisible unless something measures it.
+  const meanLevel = (floor: number): number => {
+    const levels: number[] = [];
+    for (let s = 1; s <= 24; s++) {
+      for (const node of Object.values(generateFloor(s * 97, floor).nodes)) {
+        for (const g of node.spawn) levels.push(g.level ?? 0);
+      }
+    }
+    return levels.reduce((a, b) => a + b, 0) / Math.max(1, levels.length);
+  };
+
+  const curve = Array.from({ length: 18 }, (_, i) => meanLevel(i + 1));
+  for (let i = 1; i < curve.length; i++) {
+    assert.ok(
+      curve[i]! > curve[i - 1]! - 1,
+      `floor ${i + 1} (mean level ${curve[i]!.toFixed(1)}) is easier than floor ${i} (${curve[i - 1]!.toFixed(1)})`,
+    );
+    // And no single floor may double the one above it. A curve, not a cliff.
+    assert.ok(
+      curve[i]! < curve[i - 1]! * 1.7 + 2,
+      `floor ${i} to ${i + 1} is a cliff: ${curve[i - 1]!.toFixed(1)} to ${curve[i]!.toFixed(1)}`,
+    );
+  }
+  assert.ok(curve[17]! > curve[0]! * 4, "the bottom of the dungeon is not meaningfully worse than the top");
+});
+
+test("floor generation: bounty hunters are never room decoration", () => {
+  // Their level band is [3, 40] because they are scaled to whoever they came
+  // for. Rolled as generic fill, that band puts a level-forty stranger in a
+  // floor-four cupboard, which is how a run ends for no reason at all.
+  for (let floor = 1; floor <= 18; floor++) {
+    for (let s = 1; s <= 12; s++) {
+      for (const node of Object.values(generateFloor(s * 313, floor).nodes)) {
+        for (const g of node.spawn) {
+          assert.notEqual(g.mob, "hunter_crawler", `a bounty crawler was generated into floor ${floor}`);
+        }
+      }
+    }
+  }
+});
+
 test("floor generation is a pure function of seed and floor number", () => {
   assert.deepEqual(generateFloor(24680, 2), generateFloor(24680, 2));
   assert.notDeepEqual(generateFloor(24680, 2), generateFloor(24681, 2));

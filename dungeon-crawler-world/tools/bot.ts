@@ -3,6 +3,8 @@ import type { GameState, MapNode } from "../src/core/types.ts";
 import { crawlerOf, hostilesOf, living, zoneDistance, zoneOf } from "../src/sim/tactics.ts";
 import { derive } from "../src/sim/character.ts";
 import { BOSS_BY_ID, MOB_BY_ID } from "../src/data/mobs.ts";
+import { SPACE_COST, STATION_BY_ID, UPGRADES } from "../src/data/recipes.ts";
+import { sellPrice } from "../src/sim/craft.ts";
 
 /**
  * A competent-but-not-clairvoyant policy that plays the game through the same
@@ -39,11 +41,20 @@ export interface BotResult {
   boxesOpened: number;
   gold: number;
   topSkill: number;
+  /** Gold, plus everything in the pack a shop would have paid for it. The real
+   *  number when asking whether a bench is reachable. */
+  liquid: number;
+  ownsSpace: boolean;
+  stations: number;
+  devicesBuilt: number;
+  /** Deaths the ladder absorbed. The last one is the run. */
+  backloads: number;
 }
 
 export async function autoPlay(game: Game, opts: BotOptions = {}): Promise<BotResult> {
   const max = opts.maxTurns ?? 2500;
   let turns = 0;
+  let backloads = 0;
 
   const run = async (cmd: Command): Promise<void> => {
     turns++;
@@ -64,8 +75,21 @@ export async function autoPlay(game: Game, opts: BotOptions = {}): Promise<BotRe
   let lastProgress = "";
   let stuck = 0;
 
-  while (turns < max && game.state.crawler.alive) {
+  while (turns < max) {
     if (opts.stopAtFloor && game.state.floor.n >= opts.stopAtFloor) break;
+
+    // The backload ladder is part of playing, not part of losing. A harness
+    // that ignores it measures a game with permadeath and no second chances,
+    // which is not the game — and it is the number the difficulty of every
+    // floor was set against.
+    if (!game.state.crawler.alive) {
+      const took = game.canRestore("room") ? "room" : game.canRestore("floor") ? "floor" : null;
+      if (!took) break;
+      game.restore(took);
+      backloads++;
+      continue;
+    }
+
     const s = game.state;
     const now = progress();
     if (now === lastProgress) stuck++;
@@ -104,6 +128,15 @@ export async function autoPlay(game: Game, opts: BotOptions = {}): Promise<BotRe
     boxesOpened: s.counters.boxesOpened,
     gold: s.crawler.gold,
     topSkill: Math.max(0, ...Object.values(s.skills).map((k) => k.level)),
+    liquid:
+      s.crawler.gold +
+      s.inventory
+        .filter((i) => !i.equipped && !i.locked)
+        .reduce((n, i) => n + sellPrice(s, i) * i.qty, 0),
+    ownsSpace: s.space.owned,
+    stations: s.space.stations.length,
+    devicesBuilt: s.inventory.filter((i) => i.device).length,
+    backloads,
   };
 }
 
@@ -243,6 +276,18 @@ function explorePlan(s: GameState, game: Game): Command {
   if (safe) {
     if (s.boxes.length > 0) return { t: "open" };
     if (s.crawler.points > 0) return { t: "spend", stat: bestStat(s) };
+
+    // Turn the pack into money. Almost all of a crawler's income is loot they
+    // are never going to wear, and a harness that never sells reports an
+    // economy that does not exist.
+    const trader = node.kind === "shop" || node.kind === "guild";
+    if (trader) {
+      if (hasJunk(s)) return { t: "sell", what: "junk" };
+      const spare = findSpare(s);
+      if (spare) return { t: "sell", what: spare };
+      const purchase = shopping(s);
+      if (purchase) return purchase;
+    }
     // Only if it will actually work. A refused command costs no time, and a
     // policy that keeps asking for a meal it cannot afford never stops asking.
     const canBuyMeal = floor.n <= 2 || s.crawler.gold >= 15 * floor.n;
@@ -416,6 +461,49 @@ function bestStat(s: GameState): "str" | "dex" | "con" | "int" | "cha" {
   if (c.str < 10) return "str";
   if (c.dex < 10) return "dex";
   return "con";
+}
+
+function hasJunk(s: GameState): boolean {
+  return s.inventory.some(
+    (i) => !i.equipped && !i.locked && !i.use && !i.device && !i.tags.includes("craft") && i.rarity === "junk",
+  );
+}
+
+/** Gear that is not worn, is not better than what is worn, and is not a
+ *  consumable or a material. In other words: money. */
+function findSpare(s: GameState): string | null {
+  for (const item of s.inventory) {
+    if (item.equipped || item.locked || item.use || item.device) continue;
+    if (item.tags.includes("craft") || item.kind === "food") continue;
+    if (!item.slot) continue;
+    const worn = s.inventory.find((i) => i.equipped && i.slot === item.slot);
+    if (worn && score(item) <= score(worn)) return item.iid;
+  }
+  return null;
+}
+
+/**
+ * The gold sinks, in the order a real crawler would reach for them.
+ *
+ * A room first, because nothing else is possible without one, then the bench
+ * that pays for itself fastest. The harness needs this to answer the only
+ * question that matters about a sink: is it ever actually reachable?
+ */
+function shopping(s: GameState): Command | null {
+  if (!s.space.owned) {
+    return s.floor.n >= 3 && s.crawler.gold >= SPACE_COST ? { t: "buySpace" } : null;
+  }
+  const wanted = ["alchemy", "engineering", "ordnance", "forge"];
+  for (const id of wanted) {
+    if (s.space.stations.includes(id)) continue;
+    const cost = STATION_BY_ID[id]!.cost;
+    if (s.crawler.gold >= cost) return { t: "install", what: id };
+  }
+  for (const u of UPGRADES) {
+    if (s.space.upgrades.includes(u.id)) continue;
+    if (s.crawler.gold >= u.cost + 2000) return { t: "upgrade", what: u.id };
+  }
+  return null;
 }
 
 function findUpgrade(s: GameState): string | null {

@@ -1,6 +1,7 @@
 import { Game } from "../src/sim/game.ts";
 import { autoPlay, type BotResult } from "./bot.ts";
 import { Rng } from "../src/core/rng.ts";
+import { SPACE_COST, STATION_BY_ID } from "../src/data/recipes.ts";
 
 /**
  * Balance harness.
@@ -52,7 +53,10 @@ for (let i = 0; i < RUNS; i++) {
     carried: seedRng.sample(["phone", "keys", "lighter", "food", "tools", "weapon"], seedRng.int(0, 4)),
     companion: seedRng.pick(["none", "cat", "dog", "person"]),
   });
-  results.push(await autoPlay(game, { stopAtFloor: STOP_FLOOR, maxTurns: 4000 }));
+  // Generous, because the backload ladder roughly triples a run: a crawler who
+  // spends all three lives plays the same floor four times. A cap that clips
+  // those runs reports them as stalls and quietly deletes the deepest data.
+  results.push(await autoPlay(game, { stopAtFloor: STOP_FLOOR, maxTurns: 12_000 }));
   if ((i + 1) % 20 === 0) process.stderr.write(`  ${i + 1}/${RUNS}\n`);
 }
 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -98,15 +102,30 @@ row("boss kills", (r) => r.bossKills);
 row("rooms cleared", (r) => r.roomsCleared);
 row("times fled", (r) => r.fled);
 row("boxes opened", (r) => r.boxesOpened);
+row("backloads spent", (r) => r.backloads);
 row("achievements", (r) => r.achievements);
 row("gold", (r) => r.gold);
+row("gold + sellable", (r) => r.liquid);
 row("views (thousands)", (r) => r.views / 1000);
 row("turns taken", (r) => r.turns);
+
+// A sink nobody reaches is not a sink, it is a number on a menu. This is the
+// only way to find out which one it is.
+console.log("\n  THE ECONOMY");
+const owned = results.filter((r) => r.ownsSpace).length;
+const benched = results.filter((r) => r.stations > 0).length;
+const reachedFloor3 = results.filter((r) => r.floor >= 3).length;
+const rich = (n: number) => results.filter((r) => r.liquid >= n).length;
+console.log(`    bought a personal space     ${owned} of ${reachedFloor3} who reached floor three`);
+console.log(`    installed a bench           ${benched}`);
+console.log(`    could afford a space        ${rich(SPACE_COST)}  (${SPACE_COST}g)`);
+console.log(`    could afford an alchemy bench ${rich(STATION_BY_ID["alchemy"]!.cost)}  (${STATION_BY_ID["alchemy"]!.cost}g)`);
+console.log(`    could afford the studio     ${rich(STATION_BY_ID["ordnance"]!.cost)}  (${STATION_BY_ID["ordnance"]!.cost}g)`);
 
 console.log("\n  SANITY");
 const noKills = results.filter((r) => r.kills === 0).length;
 const neverFought = results.filter((r) => r.roomsCleared === 0).length;
-const stalled = results.filter((r) => r.turns >= 3999).length;
+const stalled = results.filter((r) => r.turns >= 11_999).length;
 console.log(`    runs with zero kills        ${noKills}  ${noKills > RUNS * 0.1 ? "<-- combat is not happening" : "ok"}`);
 console.log(`    runs that cleared nothing   ${neverFought}  ${neverFought > RUNS * 0.1 ? "<-- exploration is stuck" : "ok"}`);
 console.log(`    runs that hit the turn cap  ${stalled}  ${stalled > 0 ? "<-- policy is looping" : "ok"}`);

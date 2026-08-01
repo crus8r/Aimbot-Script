@@ -10,7 +10,7 @@ import type {
 import { STAT_NAMES } from "../core/types.ts";
 import { EventLog, type GameEvent } from "../core/events.ts";
 import { Rng } from "../core/rng.ts";
-import { article, clamp } from "../core/util.ts";
+import { article, clamp, commaList } from "../core/util.ts";
 import { ProceduralNarrator, type Narrator, type RenderedLine } from "../voice/narrator.ts";
 import { generateFloor, currentNode, revealFrom, route } from "./map.ts";
 import {
@@ -43,6 +43,12 @@ import {
   worldTick,
 } from "./show.ts";
 import { buildFromIntake, DEFAULT_INTAKE, type Intake } from "./intake.ts";
+import {
+  brew, buySpace, buyPrice, buyUpgrade, canCraft, craft, experiment, installStation,
+  inSafeRoom, rollShopStock, sellPrice, startingRecipes, stationsHere,
+  BREWS, RECIPES, RECIPE_BY_ID, SPACE_COST, STATIONS, STATION_BY_ID, UPGRADES,
+} from "./craft.ts";
+import { calledShotModifier, deliverDevice, describeTraits, traitsOf } from "./devices.ts";
 import { checkMinting, generateClassOptions, hookBonus, hookFraction, notePractice, type ClassOption } from "./emergent.ts";
 import { castSpell, knownSpells, learnSpell, spellFromTome, tickCooldowns } from "./spells.ts";
 import { interpret, ruleOnClaim } from "./improvise.ts";
@@ -70,7 +76,7 @@ export type Command =
   | { t: "prep"; what: "barricade" | "trap" | "ambush" | "breather"; zone?: string }
   | { t: "engage" }
   // ------- fighting
-  | { t: "attack"; target: string }
+  | { t: "attack"; target: string; called?: boolean }
   | { t: "move"; zone: string }
   | { t: "feature"; id: string }
   | { t: "throw"; item: string; zone?: string }
@@ -99,7 +105,18 @@ export type Command =
   | { t: "equipBest" }
   | { t: "dropJunk" }
   | { t: "lock"; item: string }
-  | { t: "stance"; who: string; stance: "aggressive" | "defensive" | "support" | "hide" };
+  | { t: "stance"; who: string; stance: "aggressive" | "defensive" | "support" | "hide" }
+  // ------- building things, and spending the money on doing so
+  | { t: "craft"; what: string }
+  | { t: "brew"; what: string }
+  | { t: "experiment" }
+  | { t: "deploy"; item: string; target?: string }
+  | { t: "shop" }
+  | { t: "buy"; what: string }
+  | { t: "sell"; what: string }
+  | { t: "buySpace" }
+  | { t: "install"; what: string }
+  | { t: "upgrade"; what: string };
 
 export interface TurnResult {
   lines: RenderedLine[];
@@ -207,10 +224,18 @@ export class Game {
       spellbook: {},
       cooldowns: {},
       claims: 0,
+      recipes: [],
+      space: { owned: false, stations: [], upgrades: [] },
+      shop: null,
+      restores: { room: true, floor: true },
+      checkpoints: { room: null, floor: null },
+      pendingDeath: null,
     };
 
+    state.recipes = startingRecipes(state);
     const game = new Game(state, narrator);
     game.openingBeats(full, build.verdict);
+    game.takeCheckpoint("floor");
     return game;
   }
 
@@ -299,7 +324,7 @@ export class Game {
 
     if (fighting) {
       switch (cmd.t) {
-        case "attack": return this.cmdAttack(cmd.target);
+        case "attack": return this.cmdAttack(cmd.target, cmd.called === true);
         case "move": return this.cmdMove(cmd.zone);
         case "feature": return this.cmdFeature(cmd.id);
         case "throw": return this.cmdThrow(cmd.item, cmd.zone);
@@ -314,6 +339,7 @@ export class Game {
         case "improvise": return this.cmdImprovise(cmd.text);
         case "look": return this.cmdLook();
         case "lock": return this.cmdLock(cmd.item);
+        case "deploy": return this.cmdDeploy(cmd.item, cmd.target);
         default:
           throw new Error("Not while something is trying to kill you.");
       }
@@ -345,6 +371,16 @@ export class Game {
       case "dropJunk": return this.cmdDropJunk();
       case "lock": return this.cmdLock(cmd.item);
       case "stance": return this.cmdStance(cmd.who, cmd.stance);
+      case "craft": return this.cmdCraft(cmd.what);
+      case "brew": return this.cmdBrew(cmd.what);
+      case "experiment": return this.cmdExperiment();
+      case "deploy": return this.cmdDeploy(cmd.item, cmd.target);
+      case "shop": return this.cmdShop();
+      case "buy": return this.cmdBuy(cmd.what);
+      case "sell": return this.cmdSell(cmd.what);
+      case "buySpace": return this.cmdBuySpace();
+      case "install": return this.cmdInstall(cmd.what);
+      case "upgrade": return this.cmdUpgrade(cmd.what);
       default:
         throw new Error("There is nothing to fight here.");
     }
@@ -392,6 +428,8 @@ export class Game {
 
     floor.at = target.id;
     revealFrom(floor, target.id);
+    // Before anything in the new room gets a turn.
+    this.takeCheckpoint("room");
     this.log.push({ kind: "travel", channel: "narration", from: "", to: target.name, minutes, firstVisit: first });
     this.log.push({
       kind: "arrive",
@@ -612,7 +650,7 @@ export class Game {
     return this.state.floor.nodes[this.enc().nodeId]!;
   }
 
-  private cmdAttack(ref: string): void {
+  private cmdAttack(ref: string, called = false): void {
     const enc = this.enc();
     if (enc.actions.act <= 0) throw new Error("You have already acted this round. End the turn.");
     const target = this.resolveCombatant(ref);
@@ -628,8 +666,17 @@ export class Game {
       );
     }
 
+    // A called shot: much harder, ignores armour, and triples what the weapon
+    // does. A firearm or a bow ends an ordinary mob outright — which is what
+    // happened to every crawler who came down the stairs holding one — without
+    // ever being able to one-shot something built out of a building.
+    const shot = called ? calledShotModifier(this.state, me, target) : null;
+    if (shot?.note) this.log.say(shot.note);
     resolveAttack(this.state, this.rng, this.log, enc, this.node(), me, target, {
       improvised: this.equippedWeapon()?.tags.includes("improvised") ?? false,
+      extraAccuracy: shot?.accuracy ?? 0,
+      calledShot: shot ? { multiplier: shot.multiplier, ignoresArmour: shot.ignoresArmour } : undefined,
+      label: called ? `${d.weaponName}, aimed` : undefined,
     });
     enc.actions.act--;
 
@@ -1134,7 +1181,9 @@ export class Game {
     c.stamina = d.staminaMax;
     c.fatigue = 0;
     c.statuses = c.statuses.filter((s) => s.id !== "exhausted");
-    if (!c.statuses.some((s) => s.id === "rested")) c.statuses.push(makeStatus("rested", 8));
+    const bed = this.state.space.owned && this.state.space.upgrades.includes("bed");
+    if (!c.statuses.some((s) => s.id === "rested")) c.statuses.push(makeStatus("rested", bed ? 18 : 8));
+    if (bed) this.log.say("Your own bed, in your own room, behind your own door. It holds for twice as long.");
     for (const comp of this.state.companions) if (comp.alive) comp.hp = comp.hpMax;
     this.log.push({ kind: "rest", channel: "good", hours, where: node.name });
   }
@@ -1460,6 +1509,205 @@ export class Game {
     });
   }
 
+  /* ------------------------------------------------ building and buying */
+
+  private cmdCraft(what: string): void {
+    const node = currentNode(this.state.floor);
+    if (!what) {
+      this.listWorkshop(node);
+      return;
+    }
+    const lower = what.toLowerCase();
+    const recipe =
+      RECIPE_BY_ID[lower] ??
+      RECIPES.find((r) => r.name.toLowerCase() === lower) ??
+      RECIPES.find((r) => r.name.toLowerCase().includes(lower));
+    if (!recipe) {
+      // A brew by the same name is almost certainly what they meant.
+      const b = BREWS.find((x) => x.name.toLowerCase().includes(lower) || x.id === lower);
+      if (b) return this.cmdBrew(b.id);
+      throw new Error(`Nothing called "${what}". Try \`craft\` on its own for the list.`);
+    }
+    const { item, minutes } = craft(this.state, this.rng, this.log, node, recipe.id);
+    if (item && !this.pickUp(item)) return;
+    this.advanceTime(minutes / 60, "building");
+  }
+
+  private cmdBrew(what: string): void {
+    const node = currentNode(this.state.floor);
+    const lower = what.toLowerCase();
+    const b = BREWS.find((x) => x.id === lower || x.name.toLowerCase().includes(lower));
+    if (!b) throw new Error(`Nothing called "${what}". Try \`craft\` for the list.`);
+    const { items, minutes } = brew(this.state, this.log, node, b.id, this.rng);
+    for (const i of items) this.pickUp(i);
+    this.advanceTime(minutes / 60, "brewing");
+  }
+
+  private cmdExperiment(): void {
+    const node = currentNode(this.state.floor);
+    const { minutes } = experiment(this.state, this.rng, this.log, node);
+    this.advanceTime(minutes / 60, "at the bench");
+  }
+
+  private listWorkshop(node: MapNode): void {
+    const stations = stationsHere(this.state, node);
+    this.log.say(
+      stations.length
+        ? `Benches to hand: ${stations.map((x) => STATION_BY_ID[x]!.name).join(", ")}.`
+        : "No bench here. Guild halls keep a communal one; the good ones you buy and put in your own room.",
+    );
+    for (const r of RECIPES) {
+      if (!this.state.recipes.includes(r.id)) continue;
+      const check = canCraft(this.state, node, r.id);
+      this.log.say(
+        `${r.name} — ${r.materials.map((m) => `${m.qty}× ${m.id}`).join(", ")}${r.station ? `, ${STATION_BY_ID[r.station]!.name}` : ""}. ` +
+          (check.ok ? (check.improvised ? "You could improvise it, slowly, and it might not work." : "Ready.") : check.reason),
+      );
+    }
+    for (const b of BREWS) {
+      if (skillLevel(this.state, b.skill.id) < b.skill.level) continue;
+      this.log.say(`${b.name} — ${b.materials.map((m) => `${m.qty}× ${m.id}`).join(", ")}, ${STATION_BY_ID[b.station]!.name}.`);
+    }
+    const unknown = RECIPES.filter((r) => !this.state.recipes.includes(r.id)).length;
+    if (unknown) {
+      this.log.say(`There are ${unknown} things you have not worked out. A bench and some materials you can afford to waste is how that changes — try \`experiment\`.`);
+    }
+  }
+
+  private cmdDeploy(ref: string, targetRef?: string): void {
+    const enc = this.state.encounter && !this.state.encounter.finished ? this.state.encounter : null;
+    if (!enc) throw new Error("There is nothing here to use it on, and you are not wasting it.");
+    if (enc.actions.act <= 0) throw new Error("You have already acted this round.");
+    const item = this.findItem(ref);
+    if (!item.device) throw new Error(`${item.name} is not something you deploy. Try \`throw\`.`);
+
+    const node = this.node();
+    const me = crawlerOf(enc);
+    const target = targetRef ? this.resolveCombatant(targetRef) : this.bestDeviceTarget(enc, item);
+    const zoneId = target ? target.zone : me.zone;
+
+    this.consumeItem(item);
+    const result = deliverDevice(this.state, this.rng, this.log, enc, node, item, target, zoneId);
+    notePractice(this.state, "improvised_kill");
+    if (item.device.tags.includes("fire")) notePractice(this.state, "fire");
+    if (result.killed) notePractice(this.state, "env_kill");
+    trainSkill(this.state, "throwing", 2);
+    enc.actions.act--;
+    this.afterCombatStep();
+  }
+
+  /** The thing a charge is worth spending on: biggest, or whatever it counters. */
+  private bestDeviceTarget(enc: NonNullable<GameState["encounter"]>, item: Item): Combatant | null {
+    const me = crawlerOf(enc);
+    const foes = hostilesOf(enc, me);
+    if (!foes.length) return null;
+    return foes
+      .slice()
+      .sort((a, b) => b.hpMax - a.hpMax)[0]!;
+  }
+
+  private cmdShop(): void {
+    const node = currentNode(this.state.floor);
+    if (node.kind !== "shop" && node.kind !== "guild") {
+      throw new Error("Nobody here is selling anything.");
+    }
+    if (!this.state.shop || this.state.shop.node !== node.id) {
+      this.state.shop = { node: node.id, stock: rollShopStock(this.state, this.rng) };
+    }
+    this.log.say(`${this.state.crawler.gold} gold on you.`);
+    this.state.shop.stock.forEach((it, n) => {
+      this.log.say(`${n + 1}) ${it.name}${it.qty > 1 ? ` ×${it.qty}` : ""} — ${buyPrice(this.state, it)} gold. ${it.desc}`);
+    });
+    this.log.say(
+      "`buy <n>` and `sell <item>`. Selling is where the money actually comes from, which is why you have been carrying all that.",
+    );
+  }
+
+  private cmdBuy(what: string): void {
+    const node = currentNode(this.state.floor);
+    if (!this.state.shop || this.state.shop.node !== node.id) this.cmdShop();
+    const shop = this.state.shop!;
+    const index = parseInt(what, 10);
+    const item =
+      (!Number.isNaN(index) ? shop.stock[index - 1] : undefined) ??
+      shop.stock.find((i) => i.name.toLowerCase().includes(what.toLowerCase()));
+    if (!item) throw new Error(`Nothing on the shelf called "${what}".`);
+    const price = buyPrice(this.state, item);
+    if (this.state.crawler.gold < price) {
+      throw new Error(`${item.name} is ${price} gold. You have ${this.state.crawler.gold}.`);
+    }
+    this.state.crawler.gold -= price;
+    shop.stock = shop.stock.filter((i) => i.iid !== item.iid);
+    this.pickUp(item);
+    trainSkill(this.state, "negotiation", 1);
+    this.log.push({ kind: "trade", channel: "loot", verb: "buy", item: item.name, gold: price, vendor: node.name });
+  }
+
+  private cmdSell(what: string): void {
+    const node = currentNode(this.state.floor);
+    if (node.kind !== "shop" && node.kind !== "guild") throw new Error("Nobody here is buying.");
+    if (what.toLowerCase() === "junk") return this.sellJunk(node);
+    const item = this.findItem(what);
+    if (item.equipped) throw new Error("Take it off first.");
+    if (item.locked) throw new Error(`${item.name} is locked.`);
+    const price = sellPrice(this.state, item) * item.qty;
+    this.state.inventory = this.state.inventory.filter((i) => i.iid !== item.iid);
+    this.state.crawler.gold += price;
+    trainSkill(this.state, "negotiation", 1);
+    this.log.push({ kind: "trade", channel: "loot", verb: "sell", item: item.name, gold: price, vendor: node.name });
+  }
+
+  private sellJunk(node: MapNode): void {
+    const doomed = this.state.inventory.filter(
+      (i) => !i.equipped && !i.locked && !i.use && !i.device && !i.tags.includes("craft") && i.rarity === "junk",
+    );
+    if (!doomed.length) throw new Error("Nothing worthless and unlocked to sell.");
+    let total = 0;
+    for (const item of doomed) {
+      total += sellPrice(this.state, item) * item.qty;
+      this.state.inventory = this.state.inventory.filter((i) => i.iid !== item.iid);
+    }
+    this.state.crawler.gold += total;
+    trainSkill(this.state, "negotiation", 2);
+    this.log.push({ kind: "trade", channel: "loot", verb: "sell", item: `${doomed.length} pieces of rubbish`, gold: total, vendor: node.name });
+  }
+
+  private cmdBuySpace(): void {
+    const node = currentNode(this.state.floor);
+    if (!inSafeRoom(node)) throw new Error("You buy one from a safe room, which is the only place the door exists.");
+    buySpace(this.state, this.log);
+  }
+
+  private cmdInstall(what: string): void {
+    const node = currentNode(this.state.floor);
+    if (!inSafeRoom(node)) throw new Error("Your room opens off a safe room. You have to be in one.");
+    if (!what) {
+      for (const st of STATIONS) {
+        const owned = this.state.space.stations.includes(st.id);
+        this.log.say(`${st.id} — ${st.name}, ${st.cost} gold${owned ? " (installed)" : ""}. ${st.desc}`);
+      }
+      return;
+    }
+    installStation(this.state, this.log, what.toLowerCase());
+  }
+
+  private cmdUpgrade(what: string): void {
+    const node = currentNode(this.state.floor);
+    if (!inSafeRoom(node)) throw new Error("Your room opens off a safe room. You have to be in one.");
+    if (!what) {
+      this.log.say(
+        this.state.space.owned
+          ? `Your room: ${this.state.space.stations.length ? this.state.space.stations.join(", ") : "empty"}. Upgrades held: ${this.state.space.upgrades.join(", ") || "none"}.`
+          : `You do not have a room. ${SPACE_COST} gold, from a safe room, with \`space\`.`,
+      );
+      for (const u of UPGRADES) {
+        this.log.say(`${u.id} — ${u.name}, ${u.cost} gold${this.state.space.upgrades.includes(u.id) ? " (owned)" : ""}. ${u.desc}`);
+      }
+      return;
+    }
+    buyUpgrade(this.state, this.log, what.toLowerCase());
+  }
+
   private cmdSign(sponsorId: string): void {
     if (!signSponsor(this.state, this.log, sponsorId)) {
       throw new Error("Nobody by that name is offering you anything.");
@@ -1481,7 +1729,24 @@ export class Game {
     const def = floorDef(next);
     this.state.floor = generateFloor(this.state.seed, next);
     this.state.floorTally = blankTally();
+    this.state.claims = 0;
+    this.state.shop = null;
     revealFrom(this.state.floor, this.state.floor.at);
+    // Both backloads come back on the way down. That is the whole reason the
+    // descent feels like the safest moment in the game.
+    this.state.restores = { room: true, floor: true };
+
+    // What the room pays out, quietly, while you were being hit elsewhere.
+    if (this.state.space.owned) {
+      if (this.state.space.upgrades.includes("garden")) {
+        const grown = fromId("reagent", 2, this.rng);
+        if (this.pickUp(grown)) this.log.say("The lamps have been on the whole time. Two reagents, waiting for you.");
+      }
+      if (this.state.space.upgrades.includes("armoury")) {
+        this.dispatch({ t: "equipBest" });
+      }
+    }
+    this.takeCheckpoint("floor");
 
     const d = derive(this.state);
     this.state.crawler.hp = d.hpMax; // stairwells refill health, always have
@@ -1507,6 +1772,15 @@ export class Game {
     if (hours <= 0) return;
     const s = this.state;
     const c = s.crawler;
+
+    // Zero is zero. Out-of-combat regeneration below would otherwise quietly
+    // heal somebody who is already finished — an hour of resting is not a
+    // treatment for having none left.
+    if (c.hp <= 0) {
+      this.die("Bled out on the floor of a room nobody was filming, an hour after it stopped mattering.");
+      return;
+    }
+
     s.elapsed += hours;
     s.floor.hoursLeft -= hours;
 
@@ -1604,7 +1878,73 @@ export class Game {
     c.alive = false;
     c.hp = 0;
     c.death = { cause, floor: this.state.floor.n, at: this.state.elapsed };
+
+    // What was in reach and unused. The point is not to soften the death — it
+    // is that a death you can see the shape of is a death you can learn from,
+    // and the alternative is a screen that just says no.
+    const outs: string[] = [];
+    const heals = this.state.inventory.filter((i) => i.use?.effect === "heal");
+    if (heals.length) {
+      outs.push(`${heals.reduce((n, i) => n + i.qty, 0)} healing item${heals.length > 1 ? "s" : ""} you were carrying and did not drink`);
+    }
+    const bandages = this.state.inventory.filter((i) => i.use?.effect === "bleed");
+    if (bandages.length && c.statuses.some((x) => x.id === "bleeding")) {
+      outs.push("a bandage, while you were bleeding");
+    }
+    const devices = this.state.inventory.filter((i) => i.device);
+    if (devices.length) outs.push(`${devices.length} built device${devices.length > 1 ? "s" : ""} still in the bag`);
+    const castable = Object.values(this.state.spellbook).filter((sp) => sp.mana <= c.mana);
+    if (castable.length) outs.push(`${castable[0]!.name}, which you could afford`);
+
     this.log.push({ kind: "death", channel: "bad", cause, floor: this.state.floor.n, level: c.level });
+    this.state.pendingDeath = { cause, outs };
+    if (outs.length) {
+      this.log.say(`For the record, and only for the record: ${commaList(outs)}.`);
+    }
+  }
+
+  /* ----------------------------------------------------------- backloads */
+
+  /**
+   * Two per floor and then it is a death.
+   *
+   * The reason this exists is so the simulation never has to pull a punch. A
+   * game with permadeath and no backloads has to be careful with you or it is
+   * cruel; a game with infinite ones has no stakes. Room, then floor, then
+   * that is the run — and both come back on the way down.
+   */
+  takeCheckpoint(kind: "room" | "floor"): void {
+    const { checkpoints, ...rest } = this.state as GameState & { checkpoints: unknown };
+    const snapshot = JSON.stringify({ ...rest, rng: this.rng.save(), pendingDeath: null });
+    this.state.checkpoints[kind] = snapshot;
+    if (kind === "floor") this.state.checkpoints.room = snapshot;
+  }
+
+  canRestore(kind: "room" | "floor"): boolean {
+    return this.state.restores[kind] && this.state.checkpoints[kind] !== null;
+  }
+
+  restore(kind: "room" | "floor"): boolean {
+    if (!this.canRestore(kind)) return false;
+    const snapshot = JSON.parse(this.state.checkpoints[kind]!) as GameState;
+    const restores = { ...this.state.restores, [kind]: false };
+    // Going back to the start of the floor gives you the room back with it.
+    if (kind === "floor") restores.room = true;
+    const keptCheckpoints = { ...this.state.checkpoints };
+
+    this.state = { ...snapshot, restores, checkpoints: keptCheckpoints, pendingDeath: null };
+    this.rng = new Rng(this.state.rng);
+    this.log = new EventLog(() => this.state.elapsed);
+    this.state.crawler.alive = true;
+    delete this.state.crawler.death;
+
+    const left = [restores.room && "the room", restores.floor && "the floor"].filter(Boolean);
+    this.log.say(
+      kind === "room"
+        ? `Back to the doorway of ${currentNode(this.state.floor).name}, with everything you had when you walked in and nothing you learned since. ${left.length ? `${commaList(left as string[])} left.` : "Nothing left after this one. The next death is the run."}`
+        : `Back to the landing on floor ${this.state.floor.n}. Every hour since is gone, along with everything in it. ${left.length ? `${commaList(left as string[])} left.` : "Nothing left. The next death is the run."}`,
+    );
+    return true;
   }
 
   /* ------------------------------------------------------------ helpers */

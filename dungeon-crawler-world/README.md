@@ -8,15 +8,35 @@ of the prose is reproduced from the novels.
 
 ```bash
 cd dungeon-crawler-world
-npm run play          # start a run
+npm run play          # start a run in the terminal
 npm run play -- --seed 4242   # start a specific run
 npm run play -- --load        # resume
-npm test              # 76 tests, no dependencies
+npm test              # 105 tests
 npm run sim -- --runs 200     # play 200 runs and print the balance
+npm run build:web     # one self-contained HTML file you can host anywhere
+npm run smoke         # build it, then play it in a real browser
 ```
 
-Node 22.6+. **No dependencies, no build step** — Node runs the TypeScript
-directly.
+Node 22.6+. The game itself has **no dependencies and no build step** — Node
+runs the TypeScript directly, and every test, the CLI and the balance harness
+run against the source. The three devDependencies (esbuild, TypeScript,
+Playwright) exist only to bundle the web page, typecheck, and drive a headless
+browser over it.
+
+## Playing it on a phone
+
+`npm run build:web` produces `web/index.html`: the entire game — engine,
+content, client, styles — inlined into a single file that makes no network
+requests at all. Put it on any static host, or open it off the filesystem, and
+it works. It saves to `localStorage` after every single command, so closing the
+tab mid-fight and coming back a week later resumes exactly where you were, and
+the menu will hand you the whole run as text to paste onto another device.
+
+It is built for a phone first: one column, every action a tap, and the freeform
+text box as a power feature rather than the price of entry. `npm run smoke`
+builds it and then plays it in a headless Chromium on a 390px viewport —
+walking the intake, taking sixty turns, opening every sheet, reloading the page
+and checking the run survived.
 
 ---
 
@@ -188,6 +208,19 @@ It is not a free life. Nothing is healed, the clock does not stop, and the next
 thing that lands finishes it — but you get to answer. Some minted skills and
 classes grant a second one.
 
+Past that there is a ladder, and it is the reason nothing in this game has to
+pull a punch: **the start of the room, then the start of the floor, then that is
+the run.** Both come back every time you take the stairs. A game with permadeath
+and no second chances has to be careful with you or it is cruel; a game with
+unlimited ones has no stakes; this one can build a floor that genuinely kills
+people and still be fair about it.
+
+The death screen also tells you, flatly and without softening anything, what was
+in reach and never used — the healing you were carrying and did not drink, the
+device still in the bag, the spell you could afford. Not to soften the death. A
+death you can see the shape of is one you can learn from, and the alternative is
+a screen that just says no.
+
 ---
 
 ## The clock is the antagonist
@@ -218,6 +251,86 @@ Sponsors watch for a pattern, offer you gear for it, then hold you to a clause
 checked against the simulation at the end of every floor. *No fleeing. Twelve
 kills a floor. A third of them with your hands. Spare something, once.* Break it
 twice and they terminate the arrangement publicly, by name.
+
+---
+
+## The game is allowed to lose
+
+A crawler who works out how to build a burn-through charge, puts a fuse in a
+pouch, throws it, and lands it on a person-sized boss's head does not get a
+health bar in reply. The boss dies. The fight is over in four seconds, the
+pacing is ruined, the encounter budget is a joke, and **that is the correct
+outcome** — the same way the crawlers who came down the stairs holding service
+pistols got to shoot things in the head until the ammunition ran out.
+
+Nothing here is a damage cap. What keeps it from trivialising the game is that
+every devastating answer is narrow in four separate places:
+
+- **Knowledge.** Recipes are gated on real skill levels, and the serious ones
+  are learned, found, or worked out at a bench over hours you do not have.
+- **Materials.** Not lying around.
+- **Delivery.** It has to land, on something moving that has noticed you.
+- **The target's own nature.** This is the one that does the work.
+
+```ts
+export function vitalMultiplier(target: Combatant, tags: readonly string[]): number {
+  const traits = traitsOf(target);
+  for (const tag of tags) if (traits.includes(`immune:${tag}`)) return 0;
+  let mult = 1;
+  if (traits.includes("no_vitals")) mult *= 0.2;   // an ooze, a swarm, a construct
+  if (traits.includes("massive")) mult *= 0.35;    // more mass than you can carry upstairs
+  else if (traits.includes("large")) mult *= 0.7;
+  ...
+```
+
+Same charge, same throw, three targets:
+
+| target | | result |
+|---|---|---|
+| The Hoarder | 220 hp, person-sized | **888 damage. Dead.** |
+| The Ball of Swine | 620 hp, `massive` | 194 damage. It has 426 left and a great many other places. |
+| Soot Djinn | 96 hp, `immune:fire` | 0. You have given it a warm afternoon and told it where you are standing. |
+
+Called shots work the same way: much harder to land, ignore armour entirely,
+and triple what the weapon does — so a firearm reliably ends an ordinary mob in
+one shot without ever one-shotting something built out of a building. An ooze
+will tell you there is nowhere on it that matters more than anywhere else on it.
+
+Build the run around one answer and the floor that answers back kills you. That
+is a better trade than a damage cap, and it is the whole reason bosses can be
+genuinely hard.
+
+## Where the gold goes
+
+Money used to accumulate with nothing to spend it on, which quietly deletes a
+whole decision layer: whether to sell the thing, whether to walk back to a shop,
+whether this is a buying floor or a saving floor.
+
+A **personal space** (3,200g, from floor three) is a door that was not there,
+off every safe room on every floor from then on. It is empty. It is four walls
+and a light, and it is the first thing since the sky went that belongs to you.
+Then you pay for everything you put in it:
+
+| | | |
+|---|---|---|
+| Alchemy Bench | 2,600g | potions, toxins, reagents worth carrying |
+| Engineering Bench | 4,200g | traps that reset, repairs that are not a bodge |
+| **Ordnance Studio** | **7,800g** | blast-rated, ventilated, behind its own door — the reason people take out loans |
+| Forge | 11,000g | raises a weapon's damage die permanently, which nothing else does |
+| A Real Bed | 1,800g | Rested lasts twice as long |
+| Grow Lamps | 3,600g | reagents accumulate while you are elsewhere being hit |
+| Armoury Wall | 2,900g | gear kept here does not degrade |
+| Storage Racking | 1,400g | somewhere to put the vending machine |
+
+Guild halls keep a communal alchemy and engineering bench — worn out, always
+busy, free — which is how most crawlers make their first potion and why the
+crafting layer is never gated behind money entirely. The Ordnance Studio is
+never communal. That is the entire reason it costs what it costs.
+
+The numbers are measured, not guessed: `npm run sim` reports what a crawler is
+actually carrying at each depth, and prices are set so a room lands around floor
+five, the first bench a floor or two later, and the studio is a real commitment
+somewhere past floor eight.
 
 ---
 
@@ -278,18 +391,22 @@ and above — are **tailored**: made for you, and they say so.
 
 ```
 src/core/     rng, events, types, and hooks — the vocabulary generated content is built from
-src/data/     content: items, mobs, floors, skills, boxes, sponsors, statuses
+src/data/     content: items, mobs, floors, skills, boxes, sponsors, statuses, recipes
 src/sim/      map generation, tactics, combat, enemy AI, loot, spells, the show,
-              emergent (minted skills and assembled classes), improvise, the facade
+              emergent (minted skills and assembled classes), crafting, devices,
+              improvise, the facade
 src/voice/    the System AI's procedural voice, and the optional LLM camera
 src/cli/      the terminal client — thin, and it cannot reach past Game.execute
-tools/        the auto-player, and the balance harness built on it
-test/         76 tests
+src/web/      the browser client, and the HTML shell it gets inlined into
+tools/        the auto-player, the balance harness, the web build, the browser smoke test
+test/         105 tests
+web/          the built single-file page, committed so it can be hosted directly
 ```
 
 Everything goes through `Game.execute(command)`. The terminal client, the
-balance harness and the test suite all play exactly the same game, because none
-of them can reach past that method.
+browser client, the balance harness and the test suite all play exactly the same
+game, because none of them can reach past that method — the web client has no
+privileged access whatsoever, it can only ask questions and draw answers.
 
 ## Determinism
 
@@ -304,31 +421,49 @@ prints your seed.
 `npm run sim` plays a few hundred complete runs with a competent policy and
 reports what happened. Tuning a damage formula by reading it is guesswork.
 
+The policy plays through the same public command surface a person uses,
+including the backload ladder — a harness that ignores it is measuring a game
+with permadeath and no second chances, which is not this game, and it is the
+number every floor's difficulty was set against.
+
 ```
-  100 runs, stopping at floor 6
+  120 runs, stopping at floor 18
 
   SURVIVAL
-    died                98  (98%)
-    reached floor 2     60  (60%)
-    reached floor 3     41  (41%)
-    reached floor 4     24  (24%)
-    reached floor 5      8  (8%)
-    reached floor 6      2  (2%)
+    died               110  (92%)
+    reached floor 2     80  (67%)
+    reached floor 4     47  (39%)
+    reached floor 6     17  (14%)
+    reached floor 9      9  (8%)
+    reached floor 12     3  (3%)
+    reached floor 16     1  (1%)
 
-  WHERE IT ENDED
-      3  Killed in the soot-choked brake house, by Bounty Crawler
-      2  Killed in the well-kept pilgrim camp, by Wight Hound
-      1  Killed in the burnt-out underpass, by The Juicer
-      1  Caught on the floor at collapse
+  PROGRESSION            mean    median
+    backloads spent         3.3     3.0
+    gold                  656.9   319.0
+    gold + sellable      5081.2  2212.0
+
+  THE ECONOMY
+    could afford a space        50  (3200g)
+    could afford the studio     19  (7800g)
 ```
 
-The harness is also the most demanding test in the repo. It found the collapsed
-ceiling that orphaned a position so a fight could never end, the bounty hunter
-that spawned at level 40 against a level 4 crawler, the Celestial box that
-quietly handed out rare loot because the catalogue fallback walked *down* the
-rarity table, and the build bias that appended tags to an already-broad pool so
-a Gold box felt identical for a brawler and an archer. A hand-written test
+The harness is the most demanding test in the repo, and it is the only reason
+any of the following were ever found: the collapsed ceiling that orphaned a
+position so a fight could never end; the bounty hunter that spawned at level 40
+against a level 4 crawler; the Celestial box that quietly handed out rare loot
+because the catalogue fallback walked *down* the rarity table; the build bias
+that appended tags to an already-broad pool so a Gold box felt identical for a
+brawler and an archer; the five-level cliff between floors three and four,
+caused by a mob arriving at the top of its level band the instant it became
+legal at all; and a floor-eighteen corridor holding a level-four crab, because
+the authored bestiary runs out around floor four and the fallback reached for
+the weakest thing on the list rather than the hardest. A hand-written test
 exercises the case you thought of.
+
+Floors five and deeper currently reuse floor four's template with levels
+extrapolated by depth. That is a placeholder with the right shape, and it is
+marked as one in the code — it wants its own bestiary and bosses.
 
 ## Adding content
 

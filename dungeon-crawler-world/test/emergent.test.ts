@@ -150,7 +150,7 @@ test("casting spends mana, respects cooldowns, and refuses the unknown", () => {
   state.crawler.hp = 10;
   const before = state.crawler.mana;
   const r = castSpell(state, Rng.fromSeed(8), l, null, null, "heal");
-  assert.ok(r.ok, r.reason);
+  assert.ok(r.ok, r.reason ?? "the cast failed for no stated reason");
   assert.equal(state.crawler.mana, before - 6);
   assert.ok(state.crawler.hp > 10, "heal healed nothing");
 

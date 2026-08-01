@@ -27,10 +27,13 @@ test("forty complete runs finish without the simulation throwing", async () => {
   for (let i = 0; i < 40; i++) {
     const seed = (900_000 + i * 7919) | 0;
     const game = Game.create(seed, { ...PROFILES[i % PROFILES.length]!, name: `C${i}` });
-    const result = await autoPlay(game, { stopAtFloor: 5, maxTurns: 3000 });
+    // The cap has to clear a run that spends the whole backload ladder: three
+    // deaths means playing the same floor four times, so a bound tight enough
+    // for one life reports honest long runs as loops.
+    const result = await autoPlay(game, { stopAtFloor: 5, maxTurns: 12_000 });
     outcomes.push({ floor: result.floor, died: result.died, turns: result.turns });
 
-    assert.ok(result.turns < 3000, `seed ${seed} hit the turn cap — something is looping`);
+    assert.ok(result.turns < 12_000, `seed ${seed} hit the turn cap — something is looping`);
     // A run either ends in a body or in a descent. Nothing else is a valid stop.
     assert.ok(
       result.died || result.floor >= 5,
@@ -51,7 +54,7 @@ test("the difficulty curve is a curve, not a cliff or a ramp", async () => {
   const RUNS = 40;
   for (let i = 0; i < RUNS; i++) {
     const game = Game.create((550_000 + i * 5417) | 0, { ...PROFILES[i % PROFILES.length]!, name: `D${i}` });
-    const r = await autoPlay(game, { stopAtFloor: 5, maxTurns: 3000 });
+    const r = await autoPlay(game, { stopAtFloor: 5, maxTurns: 12_000 });
     for (let f = 1; f <= 4; f++) if (r.floor >= f) reached[f]!++;
   }
   // Each floor should thin the field without wiping it. These bounds are
@@ -119,7 +122,7 @@ test("intake actually differentiates people", () => {
   assert.ok(frail.crawler.stats.int > strong.crawler.stats.int, "the accountant is not cleverer than the scaffolder");
   assert.ok(strong.crawler.hpMax > frail.crawler.hpMax);
   // And the answers reach the skill sheet, not just the stat block.
-  assert.ok(Object.keys(strong.state?.skills ?? strong.skills).length >= 2);
+  assert.ok(Object.keys(strong.skills).length >= 2);
 });
 
 test("a hundred generated floors all hold together", () => {

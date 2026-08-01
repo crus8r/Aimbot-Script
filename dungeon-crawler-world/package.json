@@ -11,9 +11,15 @@
     "play": "node src/cli/main.ts",
     "test": "node --test 'test/*.test.ts'",
     "sim": "node tools/balance.ts",
+    "build:web": "node tools/build-web.ts",
+    "smoke": "node tools/build-web.ts && node tools/smoke-web.ts",
     "typecheck": "tsc --noEmit",
     "test:fast": "node --test test/core.test.ts test/sim.test.ts test/game.test.ts"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "esbuild": "^0.28.1",
+    "playwright": "^1.62.1",
+    "typescript": "^7.0.2"
+  }
 }

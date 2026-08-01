@@ -278,6 +278,8 @@ export interface AttackContext {
   extraDamage?: number;
   damageOverride?: string;
   label?: string;
+  /** Aimed at something specific: triples the weapon and ignores armour. */
+  calledShot?: { multiplier: number; ignoresArmour: boolean };
 }
 
 export function resolveAttack(
@@ -440,8 +442,10 @@ export function resolveAttack(
     damage += Math.round(damage * (0.5 + skillLevel(state, "first_strike") * 0.15));
   }
 
-  let soak = defender.armor;
-  if (defender.side === "crawler") {
+  if (ctx.calledShot) damage = Math.round(damage * ctx.calledShot.multiplier);
+
+  let soak = ctx.calledShot?.ignoresArmour ? 0 : defender.armor;
+  if (!ctx.calledShot && defender.side === "crawler") {
     soak += hookBonus(state, "armor", { melee: !isRanged, ranged: isRanged });
     if (hookCtx.fire) soak += hookResist(state, "fire");
   }
