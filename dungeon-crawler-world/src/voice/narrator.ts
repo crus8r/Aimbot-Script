@@ -152,6 +152,26 @@ export class ProceduralNarrator implements Narrator {
       case "prep":
         return `${e.note} ${fmtHours(e.minutes / 60)} gone.`;
 
+      case "harvest": {
+        const got = e.units > 0
+          ? `${e.units} of the ${e.material.toLowerCase()} out of ${e.zone}, and into the bag.`
+          : `${e.material} is still in the wall.`;
+        return `${fmtHours(e.minutes / 60)} of hard, boring, unglamorous work. ${got}${e.note ? ` ${e.note}` : ""}`;
+      }
+
+      case "collapse": {
+        const lines: RenderedLine[] = [{ channel: "bad", text: e.note }];
+        for (const h of e.hurt) {
+          lines.push({
+            channel: h.who === "you" ? "bad" : "good",
+            text: h.killed
+              ? `${cap(h.who)} did not get out from under it.`
+              : `${cap(h.who)} ${h.who === "you" ? "take" : "takes"} ${h.amount} off it.`,
+          });
+        }
+        return lines;
+      }
+
       case "xp":
         return null; // shown on the HUD; narrating it every kill is noise
 

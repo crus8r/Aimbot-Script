@@ -7,6 +7,7 @@ import type {
   MapNode,
   StatKey,
   Style,
+  Zone,
 } from "../core/types.ts";
 import { STAT_NAMES } from "../core/types.ts";
 import { EventLog, type GameEvent } from "../core/events.ts";
@@ -53,6 +54,7 @@ import { calledShotModifier, deliverDevice, describeTraits, traitsOf } from "./d
 import { checkMinting, generateClassOptions, hookBonus, hookFraction, notePractice, type ClassOption } from "./emergent.ts";
 import { castSpell, knownSpells, learnSpell, spellFromTome, tickCooldowns } from "./spells.ts";
 import { interpret, ruleOnClaim } from "./improvise.ts";
+import { depositsHere, harvest, strainNote, strainStage, type Deposit } from "./harvest.ts";
 import { generateSpell } from "../data/spells.ts";
 
 /**
@@ -80,6 +82,8 @@ export type Command =
   | { t: "descend" }
   // ------- setting up
   | { t: "prep"; what: "barricade" | "trap" | "ambush" | "breather"; zone?: string }
+  /** Take a substance out of the room it is part of. */
+  | { t: "harvest"; what?: string; qty?: number; zone?: string }
   | { t: "engage" }
   // ------- fighting
   | { t: "attack"; target: string; called?: boolean }
@@ -231,6 +235,7 @@ export class Game {
       cooldowns: {},
       claims: 0,
       recipes: [],
+      dug: {},
       space: { owned: false, stations: [], upgrades: [] },
       shop: null,
       restores: { room: true, floor: true },
@@ -246,6 +251,9 @@ export class Game {
   }
 
   static load(state: GameState, narrator?: Narrator): Game {
+    // A save written before the material layer existed has no record of what
+    // has been dug out of anything, which is correct: nothing had been.
+    state.dug ??= {};
     return new Game(state, narrator);
   }
 
@@ -361,6 +369,7 @@ export class Game {
       case "wait": return this.cmdWait(cmd.hours);
       case "descend": return this.cmdDescend();
       case "prep": return this.cmdPrep(cmd.what, cmd.zone);
+      case "harvest": return this.cmdHarvest(cmd.what, cmd.qty, cmd.zone);
       case "engage": return this.cmdEngage();
       case "use": return this.cmdUse(cmd.item, false);
       case "equip": return this.cmdEquip(cmd.item);
@@ -539,6 +548,22 @@ export class Game {
       if (z.hazard) material.add(`${z.hazard.kind}, active, right now`);
     }
     if (material.size) facts.push(`The room itself: ${commaList([...material])}.`);
+
+    // What it is BUILT OF, as opposed to what it is like to fight in. This is
+    // the sentence the whole material layer exists to be able to say, and
+    // saying it is what turns a wall from scenery into an offer.
+    const seams = depositsHere(this.state, node);
+    if (seams.length) {
+      facts.push(
+        `Made of: ${seams
+          .map(({ zone, deposits }) => `${zone.name} — ${commaList(deposits.map((d) => `${d.left} ${d.mat.name.toLowerCase()}`))}`)
+          .join("; ")}.`,
+      );
+      for (const { zone } of seams) {
+        const stage = strainStage(this.state, node, zone);
+        if (stage !== "sound" && stage !== "working") facts.push(`${capitalise(zone.name)}: ${strainNote(stage)}`);
+      }
+    }
 
     const chokes = node.zones.filter((z) => z.capacity <= 2);
     if (chokes.length) {
@@ -822,6 +847,99 @@ export class Game {
         this.startEncounter(node, false);
       }
     }
+  }
+
+  /**
+   * Taking a piece of the dungeon with you.
+   *
+   * The resolution ladder is the same one everything else in here uses: name a
+   * material and you get that material, name a position and you get the best
+   * thing in it, name nothing and you get the most useful thing in the room.
+   * A crawler who says "knock some limestone out of the wall" and a crawler who
+   * says "harvest" both end up somewhere sensible, because being made to guess
+   * the magic word is the thing this whole layer exists to stop.
+   */
+  private cmdHarvest(what?: string, qty?: number, zoneRef?: string): void {
+    const node = currentNode(this.state.floor);
+    const ref = (what ?? "").trim().toLowerCase();
+    const here = depositsHere(this.state, node);
+
+    if (!here.length) {
+      throw new Error(
+        "There is nothing in this room worth taking out of it — nothing loose, nothing seamed, nothing you could not find more easily somewhere else.",
+      );
+    }
+
+    // A named position is honoured or refused, never silently swapped. Digging
+    // somewhere else because the place you pointed at was empty is the exact
+    // species of helpfulness that makes a game feel like it is not listening.
+    let pool = here;
+    if (zoneRef) {
+      const named = node.zones.find(
+        (z) => z.id === zoneRef || z.name.toLowerCase().includes(zoneRef.toLowerCase()),
+      );
+      pool = here.filter(({ zone }) => zone === named);
+      if (!pool.length) {
+        throw new Error(
+          named
+            ? strainStage(this.state, node, named) === "down"
+              ? `${capitalise(named.name)} has already come down. Whatever was in that wall is under it.`
+              : `There is nothing left worth taking out of ${named.name}.`
+            : `There is no ${zoneRef} in this room.`,
+        );
+      }
+    }
+
+    // Name-matching is generous on purpose: "limestone", "the limestone",
+    // "some stone" and "lime" all reach the same block in the wall.
+    let found: { zone: Zone; deposit: Deposit } | null = null;
+    if (ref) {
+      for (const { zone, deposits } of pool) {
+        for (const deposit of deposits) {
+          const id = deposit.mat.id;
+          const name = deposit.mat.name.toLowerCase();
+          const words = name.split(/\s+/).filter((w) => w.length > 3);
+          if (ref === id || ref.includes(name) || name.includes(ref) || words.some((w) => ref.includes(w))) {
+            found = { zone, deposit };
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (!found) {
+        const menu = pool.flatMap(({ deposits }) => deposits.map((d) => d.mat.name.toLowerCase()));
+        throw new Error(
+          `There is no ${ref} in here. What there is: ${commaList([...new Set(menu)])}.`,
+        );
+      }
+    } else {
+      // Nothing named. Take the most valuable thing you can actually shift.
+      const all = pool.flatMap(({ zone, deposits }) => deposits.map((deposit) => ({ zone, deposit })));
+      all.sort((a, b) => b.deposit.mat.value * b.deposit.left - a.deposit.mat.value * a.deposit.left);
+      found = all[0]!;
+    }
+
+    const wanted = Math.max(1, Math.min(qty ?? 2, 12));
+    const before = this.state.crawler.hp;
+    const r = harvest(this.state, this.rng, this.log, node, found.zone, found.deposit.mat.id, wanted);
+    if (!r.ok) throw new Error(r.reason!);
+
+    if (r.minutes) {
+      this.advanceTime(r.minutes / 60, `working ${found.deposit.mat.name.toLowerCase()} out of the wall`);
+      if (!this.state.crawler.alive) return;
+    }
+
+    // Noise. An hour of hitting a wall with a bar is not a stealth operation,
+    // and a room that has something in it will eventually come and look.
+    if (this.state.flags.undetected && this.hostilePresence(node) && r.minutes) {
+      const heard = this.rng.d(20) + skillLevel(this.state, "stealth") < 8 + Math.round(r.minutes / 8);
+      if (heard) {
+        this.log.say("You have been hammering at a wall for a while now, and something in here has been listening to all of it.");
+        this.startEncounter(node, false);
+      }
+    }
+
+    if (this.state.crawler.hp < before && this.state.crawler.hp <= 0) this.die("brought a ceiling down on yourself");
   }
 
   private cmdEngage(): void {
@@ -2174,12 +2292,30 @@ export class Game {
     }
   }
 
-  /** Canon, and the best inventory rule in the source material: there is no
-   *  slot limit. The only question is whether you can get it off the ground
-   *  for the two seconds the interface needs. */
+  /**
+   * Canon, and the best inventory rule in the source material: there is no
+   * slot limit. The only question is whether you can get it off the ground for
+   * the two seconds the interface needs.
+   *
+   * Both halves of that are checked, which they were not. The single-item test
+   * was here from the start; the running total was computed, printed on the
+   * sheet in both clients, and then never consulted by anything — so the
+   * ceiling was a decoration and you could carry nine vending machines. It
+   * matters much more now that a wall can be turned into a bag of four-kilo
+   * blocks: a limit nobody enforces is a limit that makes the limestone free.
+   */
   private pickUp(item: Item): boolean {
     if (item.weight > carryCapacity(this.state)) {
       this.log.say(`${item.name} will not come off the ground. That is a Strength problem and there is no way around it but Strength.`);
+      return false;
+    }
+    const load = item.weight * item.qty;
+    const ceiling = carryCapacity(this.state);
+    if (carriedWeight(this.state) + load > ceiling) {
+      this.log.say(
+        `${item.name} is ${round1(load)} kg and you are already at ${carriedWeight(this.state)} of ${ceiling}. ` +
+        `Something has to go on the floor first — try dropping the junk.`,
+      );
       return false;
     }
     if (item.weight >= 20) notePractice(this.state, "heavy_haul");
@@ -2374,3 +2510,5 @@ function describeZone(z: { name: string; capacity: number; tags: string[]; barri
 }
 
 const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;

@@ -104,6 +104,26 @@ export type GameEvent =
   // ---- preparation
   | (BaseEvent & { kind: "prep"; what: string; zone: string; minutes: number; note: string })
   | (BaseEvent & { kind: "trap_sprung"; victim: string; trap: string; damage: number })
+  // ---- taking the place apart
+  | (BaseEvent & {
+      kind: "harvest";
+      material: string;
+      units: number;
+      zone: string;
+      minutes: number;
+      /** How the position is holding up now. */
+      strain: "sound" | "working" | "sagging" | "critical" | "down";
+      note: string;
+    })
+  | (BaseEvent & {
+      kind: "collapse";
+      zone: string;
+      /** Everyone the ceiling found, including the crawler. */
+      hurt: { who: string; amount: number; killed: boolean }[];
+      /** Deliberate or an accident. Both happen; only one is a plan. */
+      caused: "harvest" | "charge" | "feature";
+      note: string;
+    })
   // ---- progression
   | (BaseEvent & { kind: "xp"; amount: number; total: number })
   | (BaseEvent & { kind: "level_up"; level: number; points: number; banked: boolean })

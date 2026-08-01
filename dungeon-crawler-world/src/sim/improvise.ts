@@ -2,6 +2,8 @@ import type { GameState } from "../core/types.ts";
 import type { Command } from "./game.ts";
 import { crawlerOf, hostilesOf, living, zoneDistance, zoneOf } from "./tactics.ts";
 import { BREWS, RECIPES } from "../data/recipes.ts";
+import { depositsHere } from "./harvest.ts";
+import { MATERIALS } from "../data/materials.ts";
 
 /**
  * Plain English, taken in good faith.
@@ -82,6 +84,68 @@ const NEGATED = /\b(?:do not|don'?t|dont|won'?t|wont|never mind|nevermind|no nee
  */
 const DELIBERATIVE = /^(?:should|shall|would|ought)\b|^(?:is|would) it (?:worth|better|smart|wise)\b|^what if\b|\bdo you (?:think|reckon)\b|\bany (?:point|good)\b|\bworth (?:it|doing|trying)\b/i;
 
+/**
+ * Getting a piece of the building out of the building.
+ *
+ * Long lists because there is no standard word for it and everybody reaches for
+ * a different one. Somebody who says "chisel", somebody who says "prise off",
+ * and somebody who says "I'll just smash a bit of the wall out" are all asking
+ * for the same thing, and only one of those is a verb a parser would guess.
+ */
+const HARVEST_VERBS = [
+  "break", "smash", "chip", "chisel", "pry", "prise", "lever", "crowbar", "jemmy",
+  "knock", "dig", "quarr", "mine", "mining", "strip", "harvest", "gouge", "scrape",
+  "hack", "cut", "pull", "rip", "tear", "salvage", "claw", "wrench", "lift",
+];
+
+/** Words that mean "the room itself" rather than anything standing in it. */
+const FABRIC = [
+  "wall", "walls", "floor", "floors", "ceiling", "roof", "pillar", "pillars", "column", "columns",
+  "masonry", "brickwork", "stonework", "rubble", "seam", "seams", "vein", "veins",
+  "joist", "joists", "beam", "beams", "girder", "girders", "pipework", "pipes", "plasterwork", "render",
+];
+
+/**
+ * Taking something OUT OF the room's own fabric, which nothing else means.
+ *
+ * "take a pipe off the wall" needs no verb list to be unambiguous — the
+ * preposition and the noun do all the work between them.
+ */
+const OUT_OF_THE_FABRIC =
+  /\b(?:out of|off|from|outta)\s+(?:the|that|this|these|those|a|an|some)?\s*(?:wall|walls|floor|ceiling|roof|masonry|brickwork|stonework|pillar|column|rubble|ground|rock|stone|joint|joints|seam|render)\b/i;
+
+/**
+ * Does this line name that material?
+ *
+ * Generous in both directions on purpose. "pipe" has to reach Pipework and
+ * "iron scale" has to be reachable by somebody who typed "scale", because a
+ * player who describes the thing accurately and gets nothing has been told
+ * their accurate description was the wrong password.
+ */
+function nameMatches(text: string, matName: string): boolean {
+  const name = matName.toLowerCase();
+  if (text.includes(name)) return true;
+  return name
+    .split(/\s+/)
+    .filter((w) => w.length > 3)
+    .some((w) => new RegExp(`\\b${w.slice(0, Math.max(4, w.length - 4))}[a-z]*\\b`, "i").test(text));
+}
+
+/** "three blocks", "a couple of lengths", "as much as I can carry". */
+function numberIn(text: string): number | undefined {
+  const words: Record<string, number> = {
+    a: 1, an: 1, one: 1, two: 2, couple: 2, pair: 2, three: 3, four: 4, five: 5,
+    six: 6, seven: 7, eight: 8, nine: 9, ten: 10, dozen: 12,
+  };
+  if (/\b(?:as much as|all the|everything|as many as|load of|loads of|whole lot)\b/i.test(text)) return 12;
+  const digits = /\b(\d{1,2})\b/.exec(text);
+  if (digits) return Math.max(1, Math.min(12, parseInt(digits[1]!, 10)));
+  for (const [w, n] of Object.entries(words)) {
+    if (w.length > 2 && new RegExp(`\\b${w}\\b`, "i").test(text)) return n;
+  }
+  return undefined;
+}
+
 export function interpret(state: GameState, raw: string): Interpretation {
   const whole = normalise(raw);
   if (!whole) return { command: null, note: "You would have to say what." };
@@ -123,7 +187,8 @@ export function interpret(state: GameState, raw: string): Interpretation {
   if (
     word(text, "look", "examine", "inspect", "study", "survey", "observe", "scan", "peer", "describe", "read") ||
     has(text, "surroundings", "what do i see", "what does it", "what is this", "what's this", "what is it", "what's it",
-      "what is the", "what's the", "what are the", "made of", "how big", "how far", "tell me about", "size up", "get a look")
+      "what is the", "what's the", "what are the", "made of", "how big", "how far", "how high", "how deep", "how thick",
+      "how wide", "how long is", "how many", "what colour", "what color", "tell me about", "size up", "get a look")
   ) {
     // "look through the wreckage" is rummaging. "look around" is looking.
     if (has(text, "look through", "go through", "rummage", "ransack", "look in the", "search")) {
@@ -205,6 +270,50 @@ export function interpret(state: GameState, raw: string): Interpretation {
     }
     if (has(text, "wait", "kill time", "pass the time", "hang about", "sit tight")) {
       return out({ command: { t: "wait", hours: 1 }, note: "An hour, gone." });
+    }
+  }
+
+  /* --- taking the place apart -------------------------------------------- */
+  // Above the item block on purpose. "take the pipe off the wall" while you are
+  // already carrying a length of pipe must mean the one in the wall, and an
+  // item match would quietly turn it into a question about the one in your bag.
+  {
+    // Match against the whole catalogue rather than only what happens to be in
+    // this room. Naming limestone in a room with no limestone must reach the
+    // verb and be told so by name, not silently become "have some brick" —
+    // being quietly given something else is worse than being told no.
+    const named = MATERIALS.find((mat) => nameMatches(text, mat.name));
+    const here = named
+      ? depositsHere(state, node).flatMap(({ deposits }) => deposits).find((d) => d.mat.id === named.id)
+      : undefined;
+
+    const verb = has(text, ...HARVEST_VERBS);
+    const outOf = OUT_OF_THE_FABRIC.test(text);
+    const fabric = word(text, ...FABRIC);
+    const bare = /^(?:harvest|quarry|mine|salvage|dig)\b/.test(text);
+
+    // Mid-fight the bar is much higher. "break" and "cut" and "pull" are also
+    // how people describe hitting things, and a branch that eats those to
+    // refuse them politely has still eaten them — so in an encounter only the
+    // unmistakable phrasings come here and everything else falls through to
+    // the attack and feature readings below.
+    const explicit = bare || outOf;
+    if (explicit || (!enc && ((verb && (named || fabric)) || (here && has(text, "take", "get", "grab", "collect", "gather"))))) {
+      if (enc) {
+        return out({
+          command: null,
+          note: "Not with something in the room trying to kill you — it wants both hands and a long time. Nothing spent, nothing lost. Finish this first.",
+        });
+      }
+      return out({
+        command: { t: "harvest", what: named?.name.toLowerCase(), qty: numberIn(text) },
+        note: here
+          ? `Working ${here.mat.name.toLowerCase()} out of ${here.mat.tags.includes("metal") ? "the fixings" : "the fabric of the place"}.`
+          : named
+            ? `Looking for ${named.name.toLowerCase()} in here.`
+            : "Taking the most useful thing in here out of the wall it is part of.",
+        practice: "quarrying",
+      });
     }
   }
 
@@ -418,8 +527,14 @@ export function interpret(state: GameState, raw: string): Interpretation {
     const unarmed = word(text, "punch", "kick", "headbutt", "bite", "elbow", "knee", "stamp", "strangle", "tackle", "shove", "throttle", "claw") || has(text, "choke out", "bare hands", "with my hands");
     const anyViolence =
       unarmed ||
-      word(text, "attack", "hit", "strike", "stab", "slash", "swing", "shoot", "fight", "kill", "smash", "club", "cut", "finish", "stick") ||
-      has(text, "go for", "lay into", "keep fighting", "same again", "have another", "press the attack");
+      word(text, "attack", "hit", "strike", "stab", "slash", "swing", "shoot", "fight", "kill", "smash", "club", "cut", "finish", "stick",
+        // People do not say "attack". They say what they are doing to it, and a
+        // parser that only knows the word "attack" is a parser that refuses
+        // "break its legs" and then explains that it could have said "attack".
+        "break", "bash", "batter", "beat", "chop", "cleave", "crush", "gut", "hack", "hammer", "impale",
+        "jab", "lunge", "maim", "pierce", "rip", "run through", "skewer", "slam", "slice", "spear",
+        "stomp", "thrust", "wallop", "whack", "wreck", "brain", "behead", "decapitate", "disembowel") ||
+      has(text, "go for", "lay into", "keep fighting", "same again", "have another", "press the attack", "put it down", "take it down", "finish it");
 
     if (named || anyViolence) {
       const target = named ?? foes.filter((f) => zoneDistance(node, me.zone, f.zone) <= me.reach).sort((a, b) => a.hp - b.hp)[0] ?? foes[0];
@@ -436,7 +551,11 @@ export function interpret(state: GameState, raw: string): Interpretation {
           });
         }
       }
-      const called = has(text, "in the head", "to the head", "aimed shot", "called shot", "in the eye", "in the throat", "the neck", "between the eyes", "point blank");
+      // A called shot is somebody naming a PART. All of these are worse odds
+      // and ignore armour, and the list is long because anatomy is long.
+      const called =
+        has(text, "aimed shot", "called shot", "point blank", "between the eyes", "hamstring", "kneecap") ||
+        /\b(?:in|at|to|for|through)\s+(?:the|its|his|her|their)\s+\w+|\b(?:its|his|her|their)\s+(?:head|face|eye|eyes|throat|neck|leg|legs|knee|knees|arm|arms|hand|hands|wing|wings|tail|joint|joints|ankle|ankles|tendon|tendons|spine|back|gut|guts|belly|heart|mouth|jaw|skull|wound)\b/i.test(text);
       return out({
         command: { t: "attack", target: target.id, called },
         note: called

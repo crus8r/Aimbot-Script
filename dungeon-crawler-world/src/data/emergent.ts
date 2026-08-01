@@ -135,6 +135,22 @@ export const PRACTICE: readonly PracticeDef[] = [
     coveredBy: ["clean_lift"],
   },
   {
+    id: "quarrying", threshold: 14, group: "utility",
+    names: ["Winning the Face", "Quarry Work", "Reading the Grain", "Stripping Out", "The Extractive Trade"],
+    hooks: [{ k: "search", v: 2 }, { k: "carry", v: 8 }],
+    desc: "You have stopped seeing walls and started seeing what walls are made of.",
+    origin: "Fourteen units of the dungeon are now in your bag rather than in the dungeon.",
+    coveredBy: ["scavenging"],
+  },
+  {
+    id: "demolition_work", threshold: 4, group: "utility",
+    names: ["Controlled Demolition", "Load Path", "Bringing It Down", "Where It Wants to Fall"],
+    hooks: [{ k: "feature", v: 3 }, { k: "spectacle", v: 0.06 }],
+    desc: "You know which part of a room the rest of it is standing on, which is a much shorter list than people assume.",
+    origin: "You have put two ceilings on the floor. The system declines to ask whether either was on purpose.",
+    coveredBy: ["demolitions"],
+  },
+  {
     id: "scouting", threshold: 8, group: "survival",
     names: ["Reading a Room", "Threshold Sense", "The Long Look", "Advance Work"],
     hooks: [{ k: "stealth", v: 1 }, { k: "search", v: 2 }],

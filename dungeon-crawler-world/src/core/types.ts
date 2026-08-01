@@ -411,6 +411,16 @@ export interface GameState {
   claims: number;
   /** Recipes this crawler knows. Unbounded; most are worked out at a bench. */
   recipes: string[];
+  /**
+   * What has been dug out of the walls, and what the walls think about it.
+   *
+   * The only part of the material layer that is stored. What a room is MADE of
+   * is derived from the world seed on demand and never written down, so this is
+   * two integers per position that anybody has actually attacked — units taken
+   * under `d:floor:node:zone:material`, accumulated structural strain under
+   * `s:floor:node:zone` — rather than a geology table per floor.
+   */
+  dug: Record<string, number>;
   /** The room off every safe room that belongs to you, and what is in it. */
   space: { owned: boolean; stations: string[]; upgrades: string[] };
   /** Stock for the shop currently standing in front of you. */
