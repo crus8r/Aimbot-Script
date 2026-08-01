@@ -1,6 +1,7 @@
 import type {
   Combatant,
   Companion,
+  EncounterState,
   GameState,
   Item,
   MapNode,
@@ -23,7 +24,7 @@ import {
   useFeature,
 } from "./combat.ts";
 import { byId, crawlerOf, hostilesOf, living, stepToward, zoneDistance, zoneOf } from "./tactics.ts";
-import { carryCapacity, derive, grantXp, regenPerHour, skillLevel, trainSkill, xpForLevel } from "./character.ts";
+import { carriedWeight, carryCapacity, derive, grantXp, regenPerHour, skillLevel, trainSkill, xpForLevel } from "./character.ts";
 import { fromId, makeItem, openBox, usageTags } from "./loot.ts";
 import { BOSS_BY_ID, MOB_BY_ID, RANK_STAR } from "../data/mobs.ts";
 import { RANK_TIER, TIERS, BOX_BY_ID, type Tier } from "../data/boxes.ts";
@@ -67,6 +68,11 @@ import { generateSpell } from "../data/spells.ts";
 export type Command =
   // ------- exploring
   | { t: "look" }
+  /**
+   * Looking at something properly. Free, in and out of combat, and strictly a
+   * view over what standing here already tells you — never a reveal.
+   */
+  | { t: "examine"; what?: string }
   | { t: "go"; to: string }
   | { t: "search" }
   | { t: "scout"; node: string }
@@ -338,6 +344,7 @@ export class Game {
         case "cast": return this.cmdCast(cmd.spell, cmd.target);
         case "improvise": return this.cmdImprovise(cmd.text);
         case "look": return this.cmdLook();
+        case "examine": return this.cmdExamine(cmd.what);
         case "lock": return this.cmdLock(cmd.item);
         case "deploy": return this.cmdDeploy(cmd.item, cmd.target);
         default:
@@ -347,6 +354,7 @@ export class Game {
 
     switch (cmd.t) {
       case "look": return this.cmdLook();
+      case "examine": return this.cmdExamine(cmd.what);
       case "go": return this.cmdGo(cmd.to);
       case "search": return this.cmdSearch();
       case "scout": return this.cmdScout(cmd.node);
@@ -395,8 +403,200 @@ export class Game {
       channel: "narration",
       node: node.name,
       nodeKind: node.kind,
-      description: node.note || describeRoom(node),
+      // Join rather than choose. `||` meant that any room with an authored note
+      // — vaults, lairs, shrines, shops, stairwells, safe rooms, guild halls —
+      // never listed what was standing in it, which is precisely where the
+      // things you can drop on a boss live.
+      description: [node.note, describeRoom(node)].filter(Boolean).join(" "),
     });
+  }
+
+  /**
+   * Looking at something properly.
+   *
+   * Two rules hold this together. It is FREE — no minutes, no combat action,
+   * never a reason to be punished for asking a question mid-fight — and it is
+   * a VIEW OVER ALREADY-REVEALED STATE, never a reveal. Standing in a room
+   * tells you what is standing in it; it does not tell you what is in the
+   * cupboards, what is waiting in the next room, or who is holding their
+   * breath behind the shelving. Those cost `search`, `scout` and being wrong.
+   *
+   * Getting that boundary right is what stops "examine" becoming free scouting.
+   */
+  private cmdExamine(what?: string): void {
+    const node = currentNode(this.state.floor);
+    const enc = this.state.encounter && !this.state.encounter.finished ? this.state.encounter : null;
+    const ref = (what ?? "").trim().toLowerCase();
+
+    const say = (subject: string, scope: "room" | "zone" | "feature" | "item" | "target" | "self", facts: string[]) =>
+      this.log.push({ kind: "perceive", channel: scope === "self" ? "system" : "narration", subject, scope, facts });
+
+    if (!ref || /^(room|here|around|place|surroundings|it)$/.test(ref)) return this.examineRoom(node, enc, say);
+    if (/^(me|myself|self|my ?self)$/.test(ref)) return this.examineSelf(say);
+
+    // The same nearest-legal-reading ladder the interpreter uses: a position,
+    // then a thing in the room, then a thing in your hands, then a thing
+    // trying to kill you.
+    const zone = node.zones.find((z) => {
+      const words = z.name.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+      return z.id === ref || words.some((w) => ref.includes(w));
+    });
+    if (zone) {
+      const here = enc ? crawlerOf(enc).zone === zone.id : false;
+      const facts = [describeZone(zone)];
+      if (enc) {
+        const there = living(enc).filter((c) => c.zone === zone.id);
+        if (there.length) facts.push(`${commaList(there.map((c) => (c.side === "crawler" ? "you" : c.name)))} ${there.length === 1 ? "is" : "are"} in it.`);
+        const gap = zoneDistance(node, crawlerOf(enc).zone, zone.id);
+        facts.push(here ? "You are standing in it." : `${gap} ${gap === 1 ? "position" : "positions"} from you.`);
+      }
+      return say(zone.name.replace(/^the /, "The "), "zone", facts);
+    }
+
+    const feature = node.zones
+      .flatMap((z) => z.features.map((f) => ({ f, z })))
+      .find(({ f }) => {
+        const words = f.name.toLowerCase().split(/[\s,]+/).filter((w) => w.length > 3);
+        return f.id === ref || words.some((w) => ref.includes(w));
+      });
+    if (feature) {
+      const { f, z } = feature;
+      const facts = [f.note];
+      if (f.spent) facts.push("It has already been used. There is nothing left in it.");
+      else {
+        const need = f.check.stat
+          ? `${STAT_NAMES[f.check.stat]} — yours is ${derive(this.state).stats[f.check.stat]}`
+          : f.check.skill
+            ? `${SKILL_BY_ID[f.check.skill]?.name ?? f.check.skill} — yours is ${skillLevel(this.state, f.check.skill)}`
+            : "nothing but the nerve to try it";
+        facts.push(`Using it wants ${need}, against a difficulty of ${f.dc}.`);
+        if (f.primes?.length) {
+          facts.push(`It sets something up rather than finishing it: anything ${commaList(f.primes)} afterwards lands very differently.`);
+        }
+        facts.push(`It is in ${z.name}.`);
+      }
+      return say(f.name.replace(/^the /, "The "), "feature", facts);
+    }
+
+    const item = this.state.inventory.find((i) => {
+      const words = i.name.toLowerCase().split(/[\s,]+/).filter((w) => w.length > 3);
+      return i.iid === ref || i.name.toLowerCase() === ref || words.some((w) => ref.includes(w));
+    });
+    if (item) {
+      const facts = [item.desc];
+      if (item.damage) facts.push(`It does ${item.damage}.`);
+      if (item.mods?.length) facts.push(`It carries ${commaList(item.mods.map((m) => `${m.k}${typeof m.v === "number" ? ` ${m.v > 0 ? "+" : ""}${m.v}` : ""}`))}.`);
+      if (item.device) facts.push(`Built: ${item.device.note}${item.device.vital ? " It goes through things." : ""}`);
+      facts.push(`${item.weight} kg, worth about ${item.value} gold, ${item.rarity}${item.equipped ? ", and you are wearing it" : ""}.`);
+      return say(item.name, "item", facts);
+    }
+
+    if (enc) {
+      const foe = living(enc, "hostile").find((c) =>
+        c.id === ref || c.name.toLowerCase().split(/\s+/).some((w) => w.length > 3 && ref.includes(w)),
+      );
+      if (foe) {
+        const facts = [MOB_BY_ID[foe.sourceId]?.desc ?? BOSS_BY_ID[foe.sourceId]?.desc ?? ""];
+        facts.push(`Level ${foe.level}, ${Math.round(foe.hp)} of ${foe.hpMax} health left, armoured ${foe.armor}, reach ${foe.reach}.`);
+        const traits = describeTraits(foe);
+        if (traits) facts.push(`It is ${traits}.`);
+        const gap = zoneDistance(node, crawlerOf(enc).zone, foe.zone);
+        facts.push(gap === 0 ? "It is close enough to touch." : `${gap} ${gap === 1 ? "position" : "positions"} away, in ${zoneOf(node, foe.zone).name}.`);
+        return say(foe.name, "target", facts.filter(Boolean));
+      }
+    }
+
+    // Named something that is not here. Say so, and say what is — the one
+    // branch of the old interpreter that already got this right.
+    const present = node.zones.flatMap((z) => z.features.filter((f) => !f.spent).map((f) => f.name));
+    say(`You look for "${what}"`, "room", [
+      "There is nothing here by that name.",
+      present.length ? `What is actually in here: ${commaList(present)}.` : "This room is bare, which is its own kind of bad news.",
+    ]);
+  }
+
+  private examineRoom(
+    node: MapNode,
+    enc: EncounterState | null,
+    say: (s: string, scope: "room" | "zone" | "feature" | "item" | "target" | "self", f: string[]) => void,
+  ): void {
+    const facts: string[] = [];
+    if (node.note) facts.push(node.note);
+
+    const features = node.zones.flatMap((z) => z.features.filter((f) => !f.spent));
+    if (features.length) {
+      facts.push(`Worth knowing about: ${commaList(features.map((f) => f.name))}.`);
+    }
+
+    // What the place is made of, answered only from tags that the resolver
+    // actually reads. No inventing stone and iron.
+    const material = new Set<string>();
+    for (const z of node.zones) {
+      if (z.tags.includes("water")) material.add("standing water, which carries a current a great deal better than air does");
+      if (z.tags.includes("flammable")) material.add("something that will take a light and keep it");
+      if (z.tags.includes("rubble")) material.add("broken ground you cannot move quickly across");
+      if (z.tags.includes("dark")) material.add("dark enough that nothing at range is reliable");
+      if (z.hazard) material.add(`${z.hazard.kind}, active, right now`);
+    }
+    if (material.size) facts.push(`The room itself: ${commaList([...material])}.`);
+
+    const chokes = node.zones.filter((z) => z.capacity <= 2);
+    if (chokes.length) {
+      facts.push(
+        capitalise(
+          `${commaList(chokes.map((z) => `${z.name} takes ${z.capacity}`))} at a time — that is where being outnumbered stops mattering.`,
+        ),
+      );
+    }
+    const high = node.zones.filter((z) => z.tags.includes("high"));
+    if (high.length) facts.push(capitalise(`${commaList(high.map((z) => z.name))} is above the rest of it.`));
+
+    facts.push(node.searched ? "You have already been through this place properly." : "You have not searched it.");
+    if (node.hasStairs && this.state.floor.stairsAnnounced) facts.push("There is a way down from here.");
+
+    // Exits: only what walking in has already told you.
+    const known = node.links.filter((l) => l.known || this.state.floor.nodes[l.to]!.visited);
+    if (known.length) {
+      facts.push(
+        `Ways out: ${commaList(known.map((l) => {
+          const n = this.state.floor.nodes[l.to]!;
+          return `${n.visited ? n.name : "somewhere unvisited"} (${l.minutes} minutes)`;
+        }))}.`,
+      );
+    }
+    if (enc) {
+      const me = crawlerOf(enc);
+      facts.push(`You are in ${zoneOf(node, me.zone).name}.`);
+    }
+    say(node.name.replace(/^the /, "The "), "room", facts);
+  }
+
+  private examineSelf(
+    say: (s: string, scope: "room" | "zone" | "feature" | "item" | "target" | "self", f: string[]) => void,
+  ): void {
+    const s = this.state;
+    const c = s.crawler;
+    const d = derive(s);
+    const facts: string[] = [];
+
+    facts.push(`${Math.round(c.hp)} of ${d.hpMax} health.`);
+    facts.push(`${s.floor.hoursLeft.toFixed(1)} hours before this floor closes.`);
+    const left = [s.restores.room && "the room", s.restores.floor && "the floor"].filter(Boolean) as string[];
+    facts.push(left.length ? `Backloads left: ${commaList(left)}.` : "No backloads left. The next death is the run.");
+    facts.push(`Level ${c.level}. Accuracy +${d.accuracy}, defence ${d.defense}, armour ${d.armor}, ${d.weaponName} at ${d.weaponDamage}+${d.damageBonus}.`);
+    if (d.manaMax > 0) facts.push(`${Math.round(c.mana)} of ${d.manaMax} mana.`);
+
+    // Fatigue and hunger as what they cost you, not as integers nobody can price.
+    if (c.fatigue > 60) facts.push(`Fatigue ${Math.round(c.fatigue)}${c.fatigue > 85 ? " — past the line, and it is taking two off everything" : ", and climbing"}.`);
+    if (c.hunger > 60) facts.push(`Hunger ${Math.round(c.hunger)}${c.hunger > 85 ? " — starving, and it shows in every roll" : ""}.`);
+    if (c.statuses.length) facts.push(`${commaList(c.statuses.map((x) => x.name))}.`);
+    if (c.points > 0) facts.push(`${c.points} unspent points.`);
+    if (s.boxes.length) facts.push(`${s.boxes.length} unopened ${s.boxes.length === 1 ? "box" : "boxes"}, waiting for a safe room.`);
+    const heals = s.inventory.filter((i) => i.use?.effect === "heal").reduce((n, i) => n + i.qty, 0);
+    facts.push(heals ? `${heals} healing item${heals === 1 ? "" : "s"} in the bag.` : "Nothing in the bag that heals you.");
+    facts.push(`${carriedWeight(s)} kg carried against a ${carryCapacity(s)} kg ceiling.`);
+
+    say("You", "self", facts);
   }
 
   private cmdGo(to: string): void {
@@ -436,7 +636,7 @@ export class Game {
       channel: "narration",
       node: target.name,
       nodeKind: target.kind,
-      description: target.note || describeRoom(target),
+      description: [target.note, describeRoom(target)].filter(Boolean).join(" "),
     });
     if (target.hasStairs && floor.stairsAnnounced) {
       this.log.push({ kind: "stairs", channel: "good", found: true, node: target.name });
@@ -2150,3 +2350,27 @@ function describeRoom(node: MapNode): string {
 
 export { skillMilestone, SKILL_BY_ID };
 export type { Style };
+
+/** What a position is, in the terms the combat resolver actually reads. */
+function describeZone(z: { name: string; capacity: number; tags: string[]; barricaded?: boolean; traps?: unknown[]; hazard?: { kind: string } | null }): string {
+  const bits: string[] = [`${z.capacity} can reach you in there at once.`];
+  const meaning: Record<string, string> = {
+    choke: "narrow",
+    cover: "something to get behind",
+    high: "above the rest of the room",
+    water: "standing water",
+    flammable: "it will burn",
+    exposed: "open ground, nothing to hide behind",
+    confined: "tight",
+    dark: "dark",
+    rubble: "broken underfoot",
+  };
+  const said = z.tags.map((t) => meaning[t]).filter(Boolean);
+  if (said.length) bits.push(`${said.join(", ")}.`);
+  if (z.barricaded) bits.push("It has been barricaded.");
+  if (z.traps?.length) bits.push("Something is rigged in it.");
+  if (z.hazard) bits.push(`There is ${z.hazard.kind} in it right now.`);
+  return bits.join(" ");
+}
+
+const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);

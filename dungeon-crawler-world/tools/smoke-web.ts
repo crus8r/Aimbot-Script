@@ -135,6 +135,55 @@ if (await post.count()) {
   check((await page.locator("#feed .line").count()) > lines, "a restored run can still act");
 }
 
+/* ------------------------------------------------ the sheet has to be live */
+
+// Every button in a sheet changes state the sheet is drawing. Nothing used to
+// redraw it, so the pack looked identical after wearing something and the game
+// read as broken.
+await page.locator("#tab-inv").click();
+await page.waitForTimeout(200);
+// Lock, because it is the one pack action that always changes what the row
+// says (a padlock appears) whatever the run's random seed handed you.
+{
+  const lock = page.locator("#sheet-body .act", { hasText: /^lock$/ }).first();
+  if (await lock.count()) {
+    const before = await page.locator("#sheet-body").textContent();
+    await lock.click();
+    await page.waitForTimeout(600);
+    const after = await page.locator("#sheet-body").textContent();
+    check(before !== after, "the pack redraws after an action taken inside it");
+    check((after ?? "").includes("🔒"), "and the change is the one you asked for");
+  } else {
+    check(false, "no lockable item in the pack — the redraw check did not run");
+  }
+}
+// And it must be closable by more than one 33px button.
+await page.keyboard.press("Escape");
+check(!(await page.locator("#sheet.open").isVisible()), "Escape closes a sheet");
+
+/* --------------------------------------------- taking things in, for free */
+
+// The freeform box must answer a question rather than shrug at it, and asking
+// one must never cost a turn.
+{
+  const before = await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem("dcw:save:v2")!);
+    return { elapsed: s.elapsed, round: s.encounter?.round ?? null };
+  });
+  await page.locator("#input").fill("i'm gonna look around, see what the walls and floor are made of");
+  await page.locator("#send").click();
+  await page.waitForTimeout(600);
+  const feed = (await page.locator("#feed").textContent()) ?? "";
+  check(!/does not know how to resolve/i.test(feed), "looking around is not met with a shrug");
+  check(/Taking the room in|Doing the first part/i.test(feed), "it says what it understood");
+  const after = await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem("dcw:save:v2")!);
+    return { elapsed: s.elapsed, round: s.encounter?.round ?? null };
+  });
+  check(after.elapsed === before.elapsed, "asking a question costs no time");
+  check(after.round === before.round, "asking a question costs no combat round");
+}
+
 /* ------------------------------------------------------------ no layout */
 
 // Nothing may push the page sideways on a 390px phone.

@@ -63,11 +63,33 @@ function loadSaved(): GameState | null {
 function line(l: RenderedLine): void {
   const feed = $("#feed");
   const node = el("div", `line ${l.channel}`);
-  if (l.channel === "narration") node.textContent = l.text;
-  else node.textContent = l.text;
+  node.textContent = l.text;
   feed.appendChild(node);
   while (feed.childElementCount > 400) feed.removeChild(feed.firstChild!);
-  feed.scrollTop = feed.scrollHeight;
+  scrollToEnd();
+}
+
+/**
+ * Get the newest line actually on screen.
+ *
+ * Setting scrollTop synchronously does not work, because the action rail below
+ * the feed is about to be rebuilt at a different height and the feed will be
+ * resized out from under the scroll position. Measured: the last line of an
+ * Engage ended up 15px below the fold every single time. So this runs after
+ * layout has settled, and in flow mode it scrolls the page rather than a pane
+ * that no longer scrolls.
+ */
+function scrollToEnd(): void {
+  const go = () => {
+    const feed = $("#feed");
+    if (document.documentElement.classList.contains("framed")) {
+      const last = feed.lastElementChild as HTMLElement | null;
+      last?.scrollIntoView({ block: "end", behavior: "auto" });
+    } else {
+      feed.scrollTop = feed.scrollHeight;
+    }
+  };
+  requestAnimationFrame(() => requestAnimationFrame(go));
 }
 
 function say(text: string, channel: RenderedLine["channel"] = "system"): void {
@@ -87,7 +109,10 @@ async function run(cmd: Command): Promise<void> {
   if (!game || busy) return;
   if (!game.state.crawler.alive) return;
   busy = true;
-  $("#send").setAttribute("disabled", "1");
+  // Everything, not just Send — a second tap during an await was silently
+  // dropped, which reads as an unresponsive button rather than a busy one.
+  const live = [...document.querySelectorAll<HTMLButtonElement>("button:not([disabled])")];
+  for (const b of live) b.setAttribute("disabled", "1");
   try {
     const result = await game.execute(cmd);
     for (const l of result.lines) line(l);
@@ -96,8 +121,10 @@ async function run(cmd: Command): Promise<void> {
     say(err instanceof Error ? err.message : String(err), "bad");
   } finally {
     busy = false;
-    $("#send").removeAttribute("disabled");
+    for (const b of live) b.removeAttribute("disabled");
     draw();
+    // The sheet is drawing state the command just changed.
+    redrawSheet();
   }
 }
 
@@ -316,16 +343,34 @@ function sheetBtn(label: string, render: (body: HTMLElement) => void, cls = ""):
   return b;
 }
 
+/**
+ * The open sheet, remembered.
+ *
+ * Every button inside a sheet runs a command and every command changes the
+ * state the sheet is drawing — but nothing redrew it, so tapping "wear",
+ * "sell", "+1" or "build" left the identical list sitting there and the game
+ * looked broken. It was not broken; it just never said anything.
+ */
+let openPanel: { title: string; render: (body: HTMLElement) => void } | null = null;
+
 function openSheet(title: string, render: (body: HTMLElement) => void): void {
-  const sheet = $("#sheet");
-  $("#sheet-title").textContent = title;
+  openPanel = { title, render };
+  $("#sheet").classList.add("open");
+  redrawSheet();
+}
+
+function redrawSheet(): void {
+  if (!openPanel) return;
+  $("#sheet-title").textContent = openPanel.title;
   const body = $("#sheet-body");
+  const keep = body.scrollTop;
   body.replaceChildren();
-  render(body);
-  sheet.classList.add("open");
+  openPanel.render(body);
+  body.scrollTop = keep;
 }
 
 function closeSheet(): void {
+  openPanel = null;
   $("#sheet").classList.remove("open");
 }
 
@@ -731,6 +776,13 @@ function wire(): void {
     if ((e as KeyboardEvent).key === "Enter") submit();
   });
   $("#sheet-close").addEventListener("click", closeSheet);
+  // A 33px Close button was the only exit. Give it two more.
+  document.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Escape") closeSheet();
+  });
+  $("#sheet").addEventListener("click", (e) => {
+    if (e.target === $("#sheet")) closeSheet();
+  });
   $("#tab-inv").addEventListener("click", () => openSheet("Inventory", drawInventory));
   $("#tab-sheet").addEventListener("click", () => openSheet("Crawler", drawSheet));
   $("#tab-skills").addEventListener("click", () => openSheet("Skills", drawSkills));
@@ -755,8 +807,23 @@ function drawMenu(body: HTMLElement): void {
   body.appendChild(el("div", "hint", "The run saves after every action, on this device."));
   const exp = el("button", "act", "Copy save to clipboard");
   exp.addEventListener("click", () => {
-    void navigator.clipboard.writeText(JSON.stringify(game!.save()));
-    toast("Copied. Paste it somewhere safe.");
+    const text = JSON.stringify(game!.save());
+    // Never claim this worked without knowing it did. Somebody who believes
+    // they have a backup is one tap from "Abandon this crawler".
+    const fallback = () => {
+      body.appendChild(el("div", "hint", "The clipboard is not available here. Select the text below and copy it by hand."));
+      const area = el("textarea", "field") as HTMLTextAreaElement;
+      area.value = text;
+      area.readOnly = true;
+      body.appendChild(area);
+      area.focus();
+      area.select();
+    };
+    if (!navigator.clipboard?.writeText) return fallback();
+    navigator.clipboard.writeText(text).then(
+      () => toast("Copied. Paste it somewhere safe."),
+      () => fallback(),
+    );
   });
   body.appendChild(exp);
 
@@ -792,7 +859,47 @@ function drawMenu(body: HTMLElement): void {
   body.appendChild(nb);
 }
 
+/**
+ * Work out what kind of page this is before anything paints.
+ *
+ * Two things the document cannot assume when a host has wrapped it: that its
+ * `<meta name="viewport">` survived being moved into the body (it does not
+ * count there), and that it owns the window at all.
+ */
+function situate(): void {
+  const root = document.documentElement;
+
+  // A viewport meta only counts in the head. Without one iOS lays the page out
+  // at 980px and shows you the left half of it.
+  if (!document.querySelector("head meta[name=viewport]")) {
+    const m = document.createElement("meta");
+    m.name = "viewport";
+    m.content = "width=device-width, initial-scale=1, viewport-fit=cover";
+    document.head.appendChild(m);
+  }
+
+  let framed = false;
+  try {
+    framed = window.self !== window.top;
+  } catch {
+    framed = true; // cross-origin parent — framed by definition
+  }
+  root.classList.toggle("framed", framed);
+
+  if (framed) {
+    // Viewport units are useless here. A host that sizes its frame from our
+    // scrollHeight, while we size ourselves from the frame, is a fixed point
+    // at whatever height it opened with — measured: stuck at 300px forever,
+    // with a 155px feed. `screen` is the one height that is not part of that
+    // loop, because it describes the device rather than the box.
+    const device = window.screen?.availHeight || window.screen?.height || 800;
+    const h = Math.round(Math.max(560, Math.min(device, 1000)));
+    root.style.setProperty("--framed-height", `${h}px`);
+  }
+}
+
 export function boot(): void {
+  situate();
   wire();
   const saved = loadSaved();
   if (saved && saved.crawler) {

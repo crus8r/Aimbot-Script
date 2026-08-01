@@ -47,6 +47,13 @@ export class ProceduralNarrator implements Narrator {
       case "system":
         return e.text;
 
+      case "perceive":
+        // Already assembled as facts by the resolver, because what is true
+        // about a room is not the narrator's to invent.
+        return e.facts.length
+          ? `${e.subject}: ${e.facts.join(" ")}`
+          : `${e.subject}. Nothing about it you can tell from here.`;
+
       case "travel":
         return `You move on. ${fmtHours(e.minutes / 60)} of picking through what used to be a street.`;
 

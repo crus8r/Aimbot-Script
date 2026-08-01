@@ -34,13 +34,39 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/*
+ * Two layout modes, because this page does not always own the window.
+ *
+ * Standalone it is an app: a fixed-height column with its own scrolling feed.
+ * Embedded in a host that wraps it — an artifact frame, an iframe sized to its
+ * content — it must be a flow document instead. A page that pins itself to
+ * 100dvh inside a frame the parent sizes from `scrollHeight` reports back
+ * exactly the height it was given, so the frame never grows, the app is stuck
+ * in whatever box it started in, and the bottom of it is simply unreachable.
+ * That is what put the tab bar off the bottom of a real phone.
+ *
+ * `html.framed` is set by the client before first paint.
+ */
+html {
+  /* iOS inflates text in frames whose layout width does not match the window,
+     which overflows the HUD row and collapses the feed. Never wanted here. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* The host may declare itself light. This page is not. */
+  color-scheme: dark;
+}
+
 html, body {
   margin: 0;
-  height: 100%;
-  overflow: hidden;
   background: var(--bg);
   color: var(--ink);
   font: 16px/1.5 ui-serif, Georgia, "Times New Roman", serif;
+}
+
+/* App mode: we own the window, so nothing outside the feed scrolls. */
+html:not(.framed), html:not(.framed) body {
+  height: 100%;
+  overflow: hidden;
   overscroll-behavior: none;
 }
 
@@ -51,6 +77,35 @@ html, body {
   max-width: 720px;
   margin: 0 auto;
 }
+
+/*
+ * Flow mode. The app declares a real height so the host's auto-sizer has a
+ * number to grow to, and the host page does the scrolling.
+ */
+html.framed #app {
+  height: auto;
+  min-height: var(--framed-height, 720px);
+}
+html.framed #feed {
+  /* No independent scroll pane inside a page that is already scrolling. */
+  overflow-y: visible;
+  max-height: none;
+  min-height: calc(var(--framed-height, 720px) * 0.42);
+}
+html.framed #actions { max-height: none; overflow-y: visible; }
+html.framed #hud { position: sticky; top: 0; z-index: 5; }
+html.framed #bar { position: sticky; bottom: 0; z-index: 5; }
+
+/*
+ * Long unbroken text — a pasted URL, an item name, a crawler name somebody
+ * typed forty characters into — must never widen the page.
+ */
+#feed, .line, .hint, .sleft, .zname, .zwho, .foename, #name, #sheet-body, #intake-body {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+#hudtop > * { min-width: 0; }
+#name { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ hud */
 
@@ -118,6 +173,8 @@ html, body {
 
 #feed {
   flex: 1 1 auto;
+  /* A text RPG whose prose pane collapses to 90px is not a text RPG. */
+  min-height: 34dvh;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 14px 14px 4px;
@@ -152,7 +209,7 @@ html, body {
 }
 
 #actions {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   max-height: 42dvh;
   overflow-y: auto;
   padding: 8px 10px;
@@ -186,10 +243,13 @@ html, body {
 .act.small {
   display: inline-block;
   width: auto;
+  min-height: 44px;
   margin: 0 5px 5px 0;
-  padding: 8px 11px;
+  padding: 8px 12px;
   font-size: 13px;
 }
+/* The same class was 45.5px in a .gorow and 34.9px everywhere else. One size. */
+.gorow .act.small { align-self: auto; }
 
 .gorow { display: flex; gap: 6px; align-items: flex-start; }
 .gorow .act { margin-bottom: 6px; }
@@ -266,7 +326,8 @@ html, body {
   flex: 1;
   min-width: 0;
   padding: 12px 13px;
-  font: 15px/1.2 ui-sans-serif, system-ui, sans-serif;
+  /* Under 16px, iOS Safari zooms the page on focus. */
+  font: 16px/1.2 ui-sans-serif, system-ui, sans-serif;
   color: var(--ink);
   background: #0a0d11;
   border: 1px solid var(--edge);
@@ -295,6 +356,7 @@ html, body {
 }
 #tabs button {
   flex: 1;
+  min-height: 48px;
   padding: 10px 2px;
   font: 11px/1.2 ui-sans-serif, system-ui, sans-serif;
   letter-spacing: .3px;
@@ -328,7 +390,9 @@ html, body {
 }
 #sheet-title { flex: 1; font-weight: 600; font-size: 17px; }
 #sheet-close {
-  padding: 8px 14px;
+  min-height: 44px;
+  min-width: 76px;
+  padding: 10px 16px;
   font: 15px/1 ui-sans-serif, system-ui, sans-serif;
   color: var(--ink);
   background: var(--panel-2);
@@ -406,6 +470,23 @@ textarea.field { min-height: 110px; resize: vertical; }
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+:where(button, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #7fa8d8;
+  outline-offset: 2px;
+}
+
+/* The global tap-highlight kill left two controls with no press feedback. */
+#send:active { background: #7e93a6; }
+#sheet-close:active, #tabs button:active { background: #202832; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
 @media (min-width: 700px) {
   #actions { max-height: 34dvh; }
   .act.small { font-size: 14px; }
@@ -425,15 +506,15 @@ textarea.field { min-height: 110px; resize: vertical; }
     <div id="chips"></div>
   </header>
 
-  <main id="feed"></main>
+  <main id="feed" role="log" aria-live="polite" aria-label="What is happening"></main>
 
   <div id="where"></div>
   <div id="actions"></div>
 
   <div id="bar">
-    <input id="input" autocomplete="off" autocapitalize="sentences" autocorrect="off"
+    <input id="input" aria-label="Say what you actually do" autocomplete="off" autocapitalize="sentences" autocorrect="off"
            placeholder="or say what you actually do…">
-    <button id="send">Do</button>
+    <button id="send" aria-label="Do it">Do</button>
   </div>
 
   <nav id="tabs">

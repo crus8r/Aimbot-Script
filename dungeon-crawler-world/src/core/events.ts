@@ -138,6 +138,19 @@ export type GameEvent =
   | (BaseEvent & { kind: "death"; cause: string; floor: number; level: number })
   | (BaseEvent & { kind: "companion"; who: string; what: string; note: string })
   | (BaseEvent & { kind: "system"; text: string })
+  /**
+   * Somebody looked at something and the dungeon answered.
+   *
+   * Deliberately not an `arrive` — that one prefixes the room name and reads as
+   * walking back in, and it is the event both clients fire at boot. Looking at
+   * the pillar you are standing next to is a different act from entering.
+   */
+  | (BaseEvent & {
+      kind: "perceive";
+      subject: string;
+      scope: "room" | "zone" | "feature" | "item" | "target" | "self";
+      facts: string[];
+    })
   | (BaseEvent & { kind: "prose"; text: string });
 
 export type EventKind = GameEvent["kind"];
