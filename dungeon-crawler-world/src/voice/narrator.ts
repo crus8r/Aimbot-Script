@@ -87,8 +87,14 @@ export class ProceduralNarrator implements Narrator {
           part,
         };
         const mine = e.byCrawler;
-        if (!e.hit) return v.say(mine ? L.MISS : L.ENEMY_MISS, ctx, mine ? "miss" : "emiss");
-        if (!mine) return v.say(L.TAKE_HIT, ctx, "takehit");
+        const atMe = e.target === state.crawler.name;
+        if (!e.hit) {
+          if (mine) return v.say(L.MISS, ctx, "miss");
+          return atMe ? v.say(L.ENEMY_MISS, ctx, "emiss") : v.say(L.THIRD_MISS, ctx, "3miss");
+        }
+        if (!mine) {
+          return atMe ? v.say(L.TAKE_HIT, ctx, "takehit") : v.say(L.THIRD_HIT, ctx, "3hit");
+        }
         if (e.crit) return v.say(L.HIT_CRIT, ctx, "crit");
         const heavy = e.damage >= Math.max(6, e.targetHpMax * 0.2);
         return v.say(heavy ? L.HIT_SOLID : L.HIT_LIGHT, ctx, heavy ? "solid" : "light");

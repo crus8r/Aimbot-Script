@@ -2,6 +2,7 @@ import type { GameState, Item, Mod, StatKey, Stats } from "../core/types.ts";
 import { clamp } from "../core/util.ts";
 import { statusEffects } from "../data/statuses.ts";
 import { skillXpToNext } from "../data/skills.ts";
+import { hookBonus, hookFraction } from "./emergent.ts";
 
 /**
  * Everything derived. The rule here is that no number a player sees is
@@ -55,10 +56,7 @@ export function skillLevel(state: GameState, id: string): number {
 }
 
 export function carryCapacity(state: GameState): number {
-  const str = derive(state).stats.str;
-  const lift = skillLevel(state, "clean_lift");
-  const bonus = modSum(collectMods(equippedItems(state)), "carry");
-  return Math.round(30 * Math.pow(Math.max(1, str) / 4, 1.6) + lift * 8 + bonus);
+  return derive(state).carry;
 }
 
 export function carriedWeight(state: GameState): number {
@@ -127,14 +125,14 @@ export function derive(state: GameState): Derived {
     hpMax: Math.round(30 + stats.con * 8 + c.level * 6 + modSum(mods, "hp")),
     manaMax: Math.max(0, stats.int), // canon: the pool is Intelligence, one for one
     staminaMax: Math.round(40 + stats.con * 2 + stats.str * 2),
-    carry: Math.round(30 * Math.pow(Math.max(1, stats.str) / 4, 1.6) + skillLevel(state, "clean_lift") * 8 + modSum(mods, "carry")),
+    carry: Math.round(30 * Math.pow(Math.max(1, stats.str) / 4, 1.6) + skillLevel(state, "clean_lift") * 8 + modSum(mods, "carry") + hookBonus(state, "carry")),
     armor: Math.max(0, modSum(mods, "armor")),
     accuracy,
     defense,
-    initiative: stats.dex + modSum(mods, "initiative"),
+    initiative: stats.dex + modSum(mods, "initiative") + hookBonus(state, "initiative"),
     critRange: clamp(critRange, 14, 20),
     damageBonus,
-    spectacle: 1 + modSum(mods, "spectacle") + skillLevel(state, "performance") * 0.05,
+    spectacle: 1 + modSum(mods, "spectacle") + skillLevel(state, "performance") * 0.05 + hookFraction(state, "spectacle"),
     unstable: modSum(mods, "unstable"),
     reach: weapon?.reach ?? 1,
     weaponName: weapon?.name ?? "your bare hands",

@@ -26,7 +26,10 @@ import {
   rule,
   sheet,
   signal,
+  skillsView,
+  spellsView,
   wrap,
+  type InvSort,
 } from "./render.ts";
 
 /**
@@ -239,6 +242,9 @@ async function runIntake(): Promise<Partial<Intake>> {
 /* --------------------------------------------------------------- loop */
 
 async function loop(game: Game): Promise<void> {
+  let invFilter = "all";
+  let invSort: InvSort = "relevance";
+
   for (;;) {
     const s = game.state;
     if (!s.crawler.alive) {
@@ -284,8 +290,20 @@ async function loop(game: Game): Promise<void> {
       say(sheet(s));
       continue;
     }
-    if (["inv", "inventory", "i"].includes(v)) {
-      say(inventoryView(s));
+    if (["inv", "inventory", "i", "bag"].includes(v)) {
+      if (arg) invFilter = arg.toLowerCase();
+      say(inventoryView(s, invFilter, invSort));
+      continue;
+    }
+    if (v === "sort") {
+      const legal: InvSort[] = ["relevance", "value", "weight", "rarity", "name", "recent"];
+      const picked = legal.find((x) => x.startsWith(arg.toLowerCase()));
+      if (picked) invSort = picked;
+      say(inventoryView(s, invFilter, invSort));
+      continue;
+    }
+    if (["compare", "cmp"].includes(v) && arg) {
+      say(inventoryView(s, "all", invSort));
       continue;
     }
     if (["map", "m"].includes(v)) {
@@ -300,6 +318,14 @@ async function loop(game: Game): Promise<void> {
       say(roomView(s));
       continue;
     }
+    if (["spells", "book", "grimoire"].includes(v)) {
+      say(spellsView(s));
+      continue;
+    }
+    if (["skills", "sk"].includes(v)) {
+      say(skillsView(s));
+      continue;
+    }
     if (v === "races") {
       for (const r of RACES) {
         say(`  ${bone(r.name.padEnd(16))} ${dim(r.note)}`);
@@ -309,11 +335,19 @@ async function loop(game: Game): Promise<void> {
       continue;
     }
     if (v === "classes") {
-      for (const k of CLASSES) {
-        const req = Object.entries(k.req).map(([a, b]) => `${a} ${b}`).join(", ");
-        say(`  ${bone(k.name.padEnd(20))} ${dim(`requires ${req || "nothing"}`)}`);
-        say(`    ${dim(k.note)}`);
-        say(`    ${jade(k.pros)}  ${blood(k.cons)}`);
+      // Most of this menu did not exist before this crawler played.
+      const menu = game.classOptions();
+      say(rule("the menu"));
+      say(dim(wrap("Three the system recommends and the rest behind them. The ones marked ASSEMBLED were built out of your own record — they are not on anybody else's list and they are exactly as permanent as the ones that were written down in advance.", 2)));
+      for (const k of menu) {
+        const req = Object.entries(k.req).map(([a, b]) => `${a.toUpperCase()} ${b}`).join(", ");
+        const badge = k.recommended ? amber(" ★ recommended") : "";
+        const src = k.generated ? signal(" ASSEMBLED") : dim(" standard");
+        say(`  ${bone(k.name)}${src}${badge}  ${dim(`requires ${req || "nothing"}`)}`);
+        say(dim(wrap(k.note, 4)));
+        if (k.pros) say(jade(wrap(k.pros, 4)));
+        if (k.cons) say(blood(wrap(k.cons, 4)));
+        say(dim(`    select <race> ${k.id}`));
       }
       continue;
     }
@@ -329,11 +363,17 @@ async function loop(game: Game): Promise<void> {
       continue;
     }
 
-    const cmd = parse(v, arg, s);
-    if (!cmd) {
-      say(dim(`  "${raw}" is not something you can do. Try \`help\`.`));
-      continue;
-    }
+    // Two-word conveniences before the single-verb table.
+    const twoWord =
+      v === "equip" && /^best$/i.test(arg) ? ({ t: "equipBest" } as Command)
+      : v === "drop" && /^junk|rubbish|trash$/i.test(arg) ? ({ t: "dropJunk" } as Command)
+      : null;
+
+    // Anything the verb table does not recognise is handed to the interpreter
+    // rather than refused. Being argued with by a parser is a worse experience
+    // than losing, and "I shove it into the fire" is a perfectly clear
+    // instruction that no sensible verb list was ever going to contain.
+    const cmd = twoWord ?? parse(v, arg, s) ?? ({ t: "improvise", text: raw } as Command);
 
     const result = await game.execute(cmd);
     const text = renderLines(result.lines);
@@ -450,6 +490,35 @@ function parse(v: string, arg: string, s: GameState): Command | null {
     }
     case "sign":
       return arg ? { t: "sign", sponsor: arg } : null;
+
+    case "cast": {
+      const [spell, ...rest2] = arg.split(/\s+at\s+|\s+on\s+/);
+      return spell ? { t: "cast", spell: spell.trim(), target: rest2.join(" ").trim() || undefined } : null;
+    }
+    case "claim": {
+      // "claim a multi-tool because I am an electrician" — the reason is the
+      // whole ruling, so it is parsed generously and never demanded twice.
+      const m = /^(.*?)\s+(?:because|since|as|—|-)\s+(.*)$/i.exec(arg);
+      if (m) return { t: "claim", what: m[1]!.trim(), why: m[2]!.trim() };
+      return arg ? { t: "claim", what: arg, why: "" } : null;
+    }
+    case "do":
+    case "try":
+    case "say":
+      return arg ? { t: "improvise", text: arg } : null;
+    case "lock":
+    case "unlock":
+      return arg ? { t: "lock", item: arg } : null;
+    case "stance": {
+      const [who, st] = arg.split(/\s+/);
+      const legal = ["aggressive", "defensive", "support", "hide"] as const;
+      const found = legal.find((x) => x.startsWith((st ?? who ?? "").toLowerCase()));
+      return found ? { t: "stance", who: st ? who! : "", stance: found } : null;
+    }
+    case "equip_best":
+      return { t: "equipBest" };
+    case "drop_junk":
+      return { t: "dropJunk" };
     default:
       return null;
   }
@@ -466,6 +535,7 @@ function helpText(fighting: boolean): string {
     out.push(dim("    brace / aim       ") + "spend the turn on defence, or on three points of accuracy.");
     out.push(dim("    taunt             ") + "force a morale check. Broken things run.");
     out.push(dim("    talk              ") + "only works on things that negotiate.");
+    out.push(dim("    cast <spell> [at n]") + " mana is your Intelligence and it does not come back quickly.");
     out.push(dim("    use <item>        ") + "a potion, a bandage. Costs your action.");
     out.push(dim("    flee              ") + "you keep your life. You keep nothing else.");
     out.push(dim("    end               ") + "end the turn.");
@@ -487,10 +557,20 @@ function helpText(fighting: boolean): string {
     out.push(dim("    open              ") + "boxes, all of them, in tier order, safe rooms only.");
     out.push(dim("    spend <stat>      ") + "safe rooms only.");
     out.push(dim("    select <race> <class>") + dim("  at a guild hall from the third floor. Permanent."));
-    out.push(dim("    equip / use / drop <item>"));
+    out.push(dim("    equip / use / drop <item>") + dim("   — or the number the inventory prints"));
+    out.push(dim("    equip best        ") + "wear the best of what you are carrying, in one command.");
+    out.push(dim("    drop junk         ") + "everything worthless and unlocked, on the floor. Locked items stay.");
+    out.push(dim("    lock <n>          ") + "protect something from bulk operations.");
+    out.push(dim("    claim <thing> because <why>") + dim("   — something ordinary you had in your pockets all along."));
   }
   out.push("");
-  out.push(bone("  looking at things") + dim("   sheet · inv · map · room · memory · races · classes · offers"));
+  out.push("");
+  out.push(bone("  saying it in your own words"));
+  out.push(dim("    Anything the verb list does not recognise is read as an instruction rather than refused."));
+  out.push(dim("    \"shove the shelving onto them\" · \"back into the doorway\" · \"set the gas off\" · \"try to talk to it\""));
+  out.push(dim("    It always tells you what it understood, so a misreading costs a line and not a turn."));
+  out.push("");
+  out.push(bone("  looking at things") + dim("   sheet · inv [filter] · sort <by> · skills · spells · map · room · memory · races · classes · offers"));
   out.push(bone("  the machine") + dim("         save · quit · help"));
   return out.join("\n");
 }

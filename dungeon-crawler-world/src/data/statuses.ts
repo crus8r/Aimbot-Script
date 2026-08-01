@@ -69,6 +69,10 @@ export const STATUSES: readonly StatusDef[] = [
     desc: "Somebody has read your bounty, done the arithmetic, and started walking.",
   },
   {
+    id: "dying", name: "Dying", bad: true, defense: -2, damage: 3,
+    desc: "You should be on the floor. You are not, yet. Everything you do now you do at a discount you will be paying back shortly.",
+  },
+  {
     id: "adrenaline", name: "Adrenaline", bad: false, damage: 2, accuracy: 1,
     desc: "Damage up, pain suppressed. You will find out what you did to yourself later.",
   },

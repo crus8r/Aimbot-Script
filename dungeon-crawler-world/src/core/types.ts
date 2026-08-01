@@ -1,4 +1,5 @@
 import type { RngState } from "./rng.ts";
+import type { Hook, MintedSkill, SpellDef } from "./hooks.ts";
 
 /* ------------------------------------------------------------------ stats */
 
@@ -119,6 +120,8 @@ export interface Item {
   /** Consumables only. */
   use?: { effect: string; v: number };
   equipped?: boolean;
+  /** Protected from `drop junk` and other bulk operations. */
+  locked?: boolean;
   /** True for anything the item generator invented rather than the catalogue. */
   generated?: boolean;
 }
@@ -303,6 +306,10 @@ export interface Crawler {
   stars: string[];
   alive: boolean;
   death?: { cause: string; floor: number; at: number };
+  /** Hooks the chosen class contributes. Generated classes carry real ones. */
+  classHooks?: Hook[];
+  className?: string;
+
   /** How they walked in. Referenced forever. */
   origin: { job: string; hobby: string; dress: string; carried: string[] };
 }
@@ -376,6 +383,20 @@ export interface GameState {
   /** Live encounter, if one is running. */
   encounter: EncounterState | null;
   memory: RoomCard[];
+  /** What this crawler keeps doing. Crossing a threshold mints a skill that
+   *  did not exist when the run started. */
+  practice: Record<string, number>;
+  /** Skills the dungeon invented for this crawler. `null` marks a pattern it
+   *  noticed and decided an existing skill already covered. */
+  minted: Record<string, MintedSkill | null>;
+  /** Every spell this crawler knows, including ones nobody authored. */
+  spellbook: Record<string, SpellDef>;
+  /** Spell id to rounds remaining. */
+  cooldowns: Record<string, number>;
+  /** The third-floor menu, rolled once and then fixed so it cannot be rerolled. */
+  classMenu?: unknown;
+  /** Ordinary Earth objects claimed from pockets, capped per floor. */
+  claims: number;
   world: { crawlersLeft: number; feed: string[]; dead: string[] };
   flags: Record<string, number | string | boolean>;
   history: string[];
@@ -433,4 +454,8 @@ export interface EncounterState {
    *  it happens so that a fight lasting eight turns still pays out on the
    *  first round's flourish. */
   killLog: { name: string; level: number; styles: Style[]; byCrawler: boolean }[];
+  /** Last stands left. A blow that would kill you instead leaves you upright
+   *  for one more round — the difference between a death you saw coming and a
+   *  death that simply happened between two lines of text. */
+  lastStands: number;
 }

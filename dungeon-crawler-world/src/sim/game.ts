@@ -23,7 +23,7 @@ import {
   useFeature,
 } from "./combat.ts";
 import { byId, crawlerOf, hostilesOf, living, stepToward, zoneDistance, zoneOf } from "./tactics.ts";
-import { carryCapacity, derive, grantXp, regenPerHour, skillLevel, trainSkill } from "./character.ts";
+import { carryCapacity, derive, grantXp, regenPerHour, skillLevel, trainSkill, xpForLevel } from "./character.ts";
 import { fromId, makeItem, openBox, usageTags } from "./loot.ts";
 import { BOSS_BY_ID, MOB_BY_ID, RANK_STAR } from "../data/mobs.ts";
 import { RANK_TIER, TIERS, BOX_BY_ID, type Tier } from "../data/boxes.ts";
@@ -43,6 +43,10 @@ import {
   worldTick,
 } from "./show.ts";
 import { buildFromIntake, DEFAULT_INTAKE, type Intake } from "./intake.ts";
+import { checkMinting, generateClassOptions, hookBonus, hookFraction, notePractice, type ClassOption } from "./emergent.ts";
+import { castSpell, knownSpells, learnSpell, spellFromTome, tickCooldowns } from "./spells.ts";
+import { interpret, ruleOnClaim } from "./improvise.ts";
+import { generateSpell } from "../data/spells.ts";
 
 /**
  * The facade. One class, one state object, one method that takes a command
@@ -86,7 +90,16 @@ export type Command =
   | { t: "open" }
   | { t: "spend"; stat: StatKey }
   | { t: "select"; race: string; klass: string }
-  | { t: "sign"; sponsor: string };
+  | { t: "sign"; sponsor: string }
+  // ------- the parts that grow
+  | { t: "cast"; spell: string; target?: string }
+  | { t: "improvise"; text: string }
+  | { t: "claim"; what: string; why: string }
+  // ------- keeping a very large inventory usable
+  | { t: "equipBest" }
+  | { t: "dropJunk" }
+  | { t: "lock"; item: string }
+  | { t: "stance"; who: string; stance: "aggressive" | "defensive" | "support" | "hide" };
 
 export interface TurnResult {
   lines: RenderedLine[];
@@ -189,6 +202,11 @@ export class Game {
       world: { crawlersLeft: 12_800_000, feed: [], dead: [] },
       flags: {},
       history: [],
+      practice: {},
+      minted: {},
+      spellbook: {},
+      cooldowns: {},
+      claims: 0,
     };
 
     const game = new Game(state, narrator);
@@ -246,6 +264,8 @@ export class Game {
     }
 
     this.syncDerived();
+    // The dungeon works out whether what you keep doing deserves a name.
+    checkMinting(this.state, this.rng, this.log);
     this.checkAchievements();
     this.state.rng = this.rng.save();
     return this.finish();
@@ -290,7 +310,10 @@ export class Game {
         case "flee": return this.cmdFlee();
         case "endturn": return this.endTurn();
         case "use": return this.cmdUse(cmd.item, true);
+        case "cast": return this.cmdCast(cmd.spell, cmd.target);
+        case "improvise": return this.cmdImprovise(cmd.text);
         case "look": return this.cmdLook();
+        case "lock": return this.cmdLock(cmd.item);
         default:
           throw new Error("Not while something is trying to kill you.");
       }
@@ -315,6 +338,13 @@ export class Game {
       case "spend": return this.cmdSpend(cmd.stat);
       case "select": return this.cmdSelect(cmd.race, cmd.klass);
       case "sign": return this.cmdSign(cmd.sponsor);
+      case "cast": return this.cmdCast(cmd.spell, cmd.target);
+      case "improvise": return this.cmdImprovise(cmd.text);
+      case "claim": return this.cmdClaim(cmd.what, cmd.why);
+      case "equipBest": return this.cmdEquipBest();
+      case "dropJunk": return this.cmdDropJunk();
+      case "lock": return this.cmdLock(cmd.item);
+      case "stance": return this.cmdStance(cmd.who, cmd.stance);
       default:
         throw new Error("There is nothing to fight here.");
     }
@@ -429,6 +459,7 @@ export class Game {
         for (const f of z.features) if (!f.spent) revealed.push(`${f.name}, at ${z.name}`);
       }
       trainSkill(this.state, "stealth", 1);
+      notePractice(this.state, "scouting");
     }
     this.log.push({
       kind: "scout",
@@ -450,6 +481,20 @@ export class Game {
     if (!this.state.crawler.alive) return;
 
     node.searched = true;
+
+    // A shrine is the one place a spell is guaranteed rather than hoped for.
+    // Without it, a crawler who never sees a tome never casts anything, and a
+    // whole system sits behind a drop rate.
+    if (node.kind === "shrine" && !this.state.flags[`shrine_${node.id}`]) {
+      this.state.flags[`shrine_${node.id}`] = true;
+      const spell = spellFromTome(this.state, this.rng, usageTags(this.state.inventory.filter((i) => i.equipped), this.state.skills));
+      if (learnSpell(this.state, spell, this.log)) {
+        this.log.say(
+          `Something here was owed something, and you have paid it by turning up. ${spell.name} is yours — ${spell.mana} mana, and your pool is your Intelligence, so think about that before you rely on it.`,
+        );
+      }
+    }
+
     const scav = skillLevel(this.state, "scavenging");
     const extra = scav > 0 && this.rng.chance(clamp(scav * 0.09, 0, 0.6));
     if (extra) node.loot.push(makeItem(this.rng, { floor: this.state.floor.n, quality: 1 }));
@@ -500,6 +545,7 @@ export class Game {
         hidden: true,
       });
       this.state.counters.trapsSet++;
+      notePractice(this.state, "trap_kill");
       trainSkill(this.state, "engineering", 2);
     } else if (what === "barricade") {
       if (skillLevel(this.state, "engineering") < 1 && !node.zones.some((z) => z.features.some((f) => f.kind === "barricade_stock"))) {
@@ -609,10 +655,23 @@ export class Game {
     const enc = this.enc();
     if (enc.actions.act <= 0) throw new Error("You have already acted this round.");
     const node = this.node();
-    const match = node.zones
-      .flatMap((z) => z.features)
-      .find((f) => !f.spent && (f.id === id || f.name.toLowerCase().includes(id.toLowerCase())));
-    if (!match) throw new Error("There is nothing here by that name that you have not already used.");
+    // Word-based, because "topple the bus onto them" is a perfectly clear
+    // instruction and demanding the exact string "bus" is the parser being
+    // difficult for no reason anybody benefits from.
+    const live = node.zones.flatMap((z) => z.features).filter((f) => !f.spent);
+    const lower = id.toLowerCase();
+    const words = lower.split(/\s+/).filter((w) => w.length > 2);
+    const match =
+      live.find((f) => f.id === lower) ??
+      live.find((f) => f.name.toLowerCase().includes(lower)) ??
+      live.find((f) => words.some((w) => f.id === w || f.name.toLowerCase().includes(w)));
+    if (!match) {
+      throw new Error(
+        live.length
+          ? `Nothing here called "${id}". What is here: ${live.map((f) => f.name).join(", ")}.`
+          : "Everything in this room that could be used against somebody already has been.",
+      );
+    }
     useFeature(this.state, this.rng, this.log, enc, node, crawlerOf(enc), match.id);
     enc.actions.act--;
     if (match.check.skill) trainSkill(this.state, match.check.skill, 2);
@@ -755,6 +814,7 @@ export class Game {
       enc.finished = "parley";
       this.state.counters.parleys++;
       this.state.floorTally.parleys++;
+      notePractice(this.state, "parley");
       this.state.counters.spared += living(enc, "hostile").length;
       trainSkill(this.state, "negotiation", 3);
       const gold = this.rng.int(10, 40) * this.state.floor.n;
@@ -784,6 +844,7 @@ export class Game {
     const fled = attemptFlee(this.state, this.rng, this.log, enc, this.node());
     if (fled) {
       this.state.floorTally.fled++;
+      notePractice(this.state, "flee_ok");
       this.state.encounter = null;
       this.advanceTime(0.1, "getting out");
       return;
@@ -794,6 +855,7 @@ export class Game {
 
   private endTurn(): void {
     const enc = this.enc();
+    tickCooldowns(this.state);
     enc.actions.move = 0;
     enc.actions.act = 0;
     advanceToCrawler(this.state, this.rng, this.log, enc, this.node());
@@ -856,9 +918,16 @@ export class Game {
       const dead = enc.combatants.filter((c) => c.side === "hostile" && !c.alive);
       let xp = 0;
       const drops: string[] = [];
+      const me0 = crawlerOf(enc);
 
       for (const v of dead) {
-        xp += v.xp;
+        // Killing far above your level pays far above your level. There is no
+        // cap and there is not supposed to be one: doing something absurd and
+        // ending up ahead of the curve for it is the point of the format, and
+        // flattening that is how a progression system stops being a story.
+        const gap = v.level - this.state.crawler.level;
+        const mult = gap > 0 ? 1 + gap * 0.35 : 1;
+        xp += Math.round(v.xp * mult);
         this.state.counters.kills++;
         this.state.floorTally.kills++;
         if (v.tags.includes("npc")) {
@@ -891,6 +960,38 @@ export class Game {
         applyViews(this.state, this.log, scoreKill(this.state, k.level, k.styles));
       }
 
+      // A wipe is worth more than the sum of its bodies.
+      if (dead.length >= 4) xp = Math.round(xp * (1 + (dead.length - 3) * 0.12));
+      if (enc.killLog.some((k) => k.byCrawler && k.styles.includes("environmental")) && dead.length >= 3) {
+        xp = Math.round(xp * 1.25);
+        this.log.say("The room did most of that, and the room does not get experience. You do.");
+      }
+      const expected = xpForLevel(this.state.crawler.level);
+      if (xp > expected * 1.5) {
+        this.log.say(
+          `${xp} experience off one fight. That is not on the curve, and we would like it on record that nobody planned for it.`,
+        );
+      }
+
+      // What this run keeps teaching the crawler about itself.
+      const stylesSeen = new Set(enc.killLog.filter((k) => k.byCrawler).flatMap((k) => k.styles));
+      if (stylesSeen.has("chokepoint")) notePractice(this.state, "choke_fight");
+      if (stylesSeen.has("outnumbered")) notePractice(this.state, "outnumbered_win");
+      if (stylesSeen.has("wounded")) notePractice(this.state, "low_hp_win");
+      if (stylesSeen.has("punching_up")) notePractice(this.state, "punch_up");
+      if (stylesSeen.has("environmental")) notePractice(this.state, "env_kill");
+      if (stylesSeen.has("unarmed")) notePractice(this.state, "unarmed_kill");
+      if (stylesSeen.has("improvised")) notePractice(this.state, "improvised_kill");
+      if (stylesSeen.has("ranged")) notePractice(this.state, "ranged_kill");
+      if (stylesSeen.has("ambush")) notePractice(this.state, "ambush");
+      if (zoneOf(node, me0.zone).tags.includes("high")) notePractice(this.state, "high_ground");
+
+      // Whatever a minted skill or generated class promised on a kill.
+      const healBack = hookBonus(this.state, "onKill") * enc.killLog.filter((k) => k.byCrawler).length;
+      if (healBack > 0) {
+        this.state.crawler.hp = clamp(this.state.crawler.hp + healBack, 0, derive(this.state).hpMax);
+      }
+
       const me = crawlerOf(enc);
       if (me.hp / me.hpMax < 0.05) {
         this.state.counters.nearDeaths++;
@@ -916,6 +1017,7 @@ export class Game {
         const def = BOSS_BY_ID[node.boss]!;
         this.state.floor.bossesKilled.push(node.boss);
         this.state.counters.bossKills++;
+        notePractice(this.state, "boss_kill");
         this.state.floorTally.bossKills++;
         this.state.crawler.stars.push(def.rank);
         const tier = RANK_TIER[def.rank] ?? "Bronze";
@@ -938,6 +1040,9 @@ export class Game {
       this.remember(node, "Left in a hurry. Whatever was in here is still in here.");
     }
 
+    // You are off your knees. The status was for that fight only.
+    this.state.crawler.statuses = this.state.crawler.statuses.filter((x) => x.id !== "dying");
+    this.state.cooldowns = {};
     this.state.encounter = null;
     considerSponsorOffer(this.state, this.rng, this.log);
   }
@@ -1082,9 +1187,30 @@ export class Game {
     const tags = usageTags(this.state.inventory.filter((i) => i.equipped), this.state.skills);
 
     for (const box of sorted) {
-      const result = openBox(this.rng, box.type, box.tier as Tier, { floor: this.state.floor.n, usesTags: tags });
+      const minted = Object.values(this.state.minted).filter(Boolean)[0];
+      const result = openBox(this.rng, box.type, box.tier as Tier, {
+        floor: this.state.floor.n,
+        usesTags: tags,
+        tailor: {
+          name: this.state.crawler.name,
+          job: this.state.crawler.origin.job,
+          lastBoss: this.state.floor.bossesKilled.length
+            ? BOSS_BY_ID[this.state.floor.bossesKilled[this.state.floor.bossesKilled.length - 1]!]?.name
+            : undefined,
+          mintedSkill: minted?.name,
+          floor: this.state.floor.n,
+        },
+      });
       const got: string[] = [];
       for (const item of result.items) {
+        // A tome is not an item you carry around, it is a thing you read once.
+        if (item.kind === "book" || item.tags.includes("tome")) {
+          const spell = spellFromTome(this.state, this.rng, tags);
+          if (learnSpell(this.state, spell, this.log)) {
+            got.push(`${item.name} — and it taught you ${spell.name}`);
+            continue;
+          }
+        }
         if (this.pickUp(item)) got.push(`${item.name}${item.qty > 1 ? ` ×${item.qty}` : ""}`);
       }
       this.state.crawler.gold += result.gold;
@@ -1115,6 +1241,19 @@ export class Game {
     this.log.push({ kind: "stat_spent", channel: "good", stat: STAT_NAMES[stat], value: this.state.crawler.stats[stat] });
   }
 
+  /**
+   * Three the system recommends and seven behind them, most of which did not
+   * exist before this crawler played. Rolled once and then frozen on the save,
+   * so the menu cannot be rerolled by walking out and back in.
+   */
+  classOptions(): ClassOption[] {
+    if (!this.state.classMenu) {
+      this.state.classMenu = generateClassOptions(this.state, this.rng);
+      this.state.rng = this.rng.save();
+    }
+    return this.state.classMenu as ClassOption[];
+  }
+
   private cmdSelect(raceId: string, klassId: string): void {
     const node = currentNode(this.state.floor);
     if (node.kind !== "guild") throw new Error("Race and class are chosen at a Guild Hall, and nowhere else.");
@@ -1122,16 +1261,36 @@ export class Game {
     if (this.state.crawler.race) throw new Error("You have already chosen. It was permanent when we said it was permanent.");
 
     const race = RACE_BY_ID[raceId];
-    const klass = CLASS_BY_ID[klassId];
-    if (!race) throw new Error(`No such race: ${raceId}`);
-    if (!klass) throw new Error(`No such class: ${klassId}`);
-    if (klass.primalOnly && race.id !== "primal") {
-      throw new Error(`${klass.name} is Earth-flavoured. Only a Primal sees it on the menu.`);
+    if (!race) throw new Error(`No such race: ${raceId}. Try \`races\`.`);
+
+    // The menu holds authored classes and ones assembled for this crawler; a
+    // generated class is chosen exactly the same way and is exactly as real.
+    const menu = this.classOptions();
+    const lower = klassId.toLowerCase();
+    const option =
+      menu.find((o) => o.id === klassId) ??
+      menu.find((o) => o.name.toLowerCase() === lower) ??
+      menu.find((o) => o.name.toLowerCase().includes(lower));
+    if (!option) {
+      throw new Error(`No such class: ${klassId}. Try \`classes\` to see what is on offer for you specifically.`);
     }
+    const authored = CLASS_BY_ID[option.id];
+    if (authored?.primalOnly && race.id !== "primal") {
+      throw new Error(`${authored.name} is Earth-flavoured. Only a Primal sees it on the menu.`);
+    }
+    const klass = {
+      id: option.id,
+      name: option.name,
+      req: option.req,
+      skills: option.skills,
+      hooks: option.hooks,
+    };
 
     const c = this.state.crawler;
     c.race = race.id;
     c.klass = klass.id;
+    c.className = klass.name;
+    c.classHooks = klass.hooks;
     c.skillCap = race.skillCap;
     for (const [k, v] of Object.entries(race.stats)) c.stats[k as StatKey] += v as number;
     c.points = Math.max(0, c.banked + race.points);
@@ -1144,12 +1303,161 @@ export class Game {
     c.manaMax = derive(this.state).manaMax;
 
     this.log.push({ kind: "select", channel: "good", race: race.name, klass: klass.name, points: c.points });
+    if (option.generated) {
+      this.log.say(
+        `${klass.name} is not on anybody else's list. It was assembled out of your own record about ninety seconds ago, and it is exactly as permanent as the ones that were written down in advance.`,
+      );
+    }
     const unmet = Object.entries(klass.req).filter(([k, v]) => c.stats[k as StatKey] < (v as number));
     if (unmet.length) {
       this.log.say(
         `${klass.name} requires ${unmet.map(([k, v]) => `${STAT_NAMES[k as StatKey]} ${v}`).join(", ")}. You do not have it. You will be meeting that out of the points you just unlocked, and it is going to hurt.`,
       );
     }
+  }
+
+  private cmdCast(spellRef: string, target?: string): void {
+    const enc = this.state.encounter && !this.state.encounter.finished ? this.state.encounter : null;
+    if (enc && enc.actions.act <= 0) throw new Error("You have already acted this round.");
+
+    const lower = spellRef.toLowerCase();
+    const spell =
+      this.state.spellbook[spellRef] ??
+      knownSpells(this.state).find((sp) => sp.name.toLowerCase() === lower) ??
+      knownSpells(this.state).find((sp) => sp.name.toLowerCase().includes(lower));
+    if (!spell) {
+      const known = knownSpells(this.state);
+      throw new Error(
+        known.length
+          ? `You do not know anything called "${spellRef}". You know: ${known.map((k) => k.name).join(", ")}.`
+          : "You do not know any spells. They come out of tomes, and tomes come out of boxes.",
+      );
+    }
+
+    const node = enc ? this.state.floor.nodes[enc.nodeId]! : currentNode(this.state.floor);
+    const result = castSpell(this.state, this.rng, this.log, enc, node, spell.id, target);
+    if (!result.ok) throw new Error(result.reason ?? "It does not work.");
+
+    if (spell.tags.includes("fire")) notePractice(this.state, "fire");
+    if (enc) {
+      enc.actions.act--;
+      this.afterCombatStep();
+    } else {
+      this.advanceTime(0.05, "casting");
+    }
+  }
+
+  /**
+   * Plain English. The interpreter finds the nearest legal reading and says
+   * what it understood, so a misreading costs one line rather than a turn.
+   */
+  private cmdImprovise(text: string): void {
+    const reading = interpret(this.state, text);
+    // Labelled as a reading, not narrated as an outcome. If the action then
+    // fails, the player can see exactly where the misunderstanding was.
+    this.log.say(`Read as: ${reading.note}`);
+    if (reading.practice) notePractice(this.state, reading.practice);
+    if (!reading.command) return;
+    // Guard against an interpreter that talks itself into a loop.
+    if (reading.command.t === "improvise") return;
+    this.dispatch(reading.command);
+  }
+
+  private cmdClaim(what: string, why: string): void {
+    if (!what.trim()) throw new Error("Claim what?");
+    const ruling = ruleOnClaim(this.state, what, why);
+    if (!ruling.granted) {
+      this.log.say(ruling.note);
+      return;
+    }
+    const item = makeEarthObject(what.trim(), this.rng);
+    if (!this.pickUp(item)) return;
+    this.log.push({ kind: "loot", channel: "loot", items: [item.name], from: "Your own pockets" });
+    this.log.say(ruling.note);
+  }
+
+  /* -------------------------------------------- keeping a big bag usable */
+
+  private cmdEquipBest(): void {
+    let swaps = 0;
+    // Repeat, because equipping one thing can change what counts as better in
+    // another slot once its modifiers are live.
+    for (let pass = 0; pass < 4; pass++) {
+      let changed = false;
+      for (const item of this.state.inventory) {
+        if (item.equipped || !item.slot) continue;
+        const worn = this.state.inventory.find((i) => i.equipped && i.slot === item.slot);
+        if (worn && gearScore(this.state, worn) >= gearScore(this.state, item)) continue;
+        if (worn) worn.equipped = false;
+        item.equipped = true;
+        this.log.push({
+          kind: "equip",
+          channel: "good",
+          item: item.name,
+          slot: item.slot,
+          removed: worn?.name ?? null,
+        });
+        swaps++;
+        changed = true;
+      }
+      if (!changed) break;
+    }
+    this.syncDerived();
+    this.log.say(
+      swaps === 0
+        ? "Nothing in the bag beats what is already on you. Enjoy the moment."
+        : `${swaps} ${swaps === 1 ? "change" : "changes"}. You are wearing the best of what you are carrying, which is not the same as being well equipped.`,
+    );
+  }
+
+  private cmdDropJunk(): void {
+    const node = currentNode(this.state.floor);
+    const doomed = this.state.inventory.filter(
+      (i) => !i.equipped && !i.locked && i.rarity === "junk" && !i.use && !i.tags.includes("craft"),
+    );
+    if (!doomed.length) {
+      this.log.say("Nothing in there is junk, or everything that is is locked, or you are carrying useful rubbish. Either way, no.");
+      return;
+    }
+    for (const item of doomed) {
+      this.state.inventory = this.state.inventory.filter((i) => i.iid !== item.iid);
+      node.loot.push(item);
+    }
+    node.searched = false;
+    this.log.say(
+      `${doomed.length} things on the floor: ${doomed.slice(0, 6).map((d) => d.name).join(", ")}${doomed.length > 6 ? ", and more" : ""}. Locked items and anything drinkable were left alone.`,
+    );
+  }
+
+  private cmdLock(ref: string): void {
+    const item = this.findItem(ref);
+    item.locked = !item.locked;
+    this.log.say(
+      item.locked
+        ? `${item.name} is locked. Bulk operations will step around it.`
+        : `${item.name} unlocked.`,
+    );
+  }
+
+  private cmdStance(who: string, stance: "aggressive" | "defensive" | "support" | "hide"): void {
+    const lower = who.toLowerCase();
+    const comp =
+      this.state.companions.find((c) => c.alive && c.name.toLowerCase().includes(lower)) ??
+      this.state.companions.find((c) => c.alive);
+    if (!comp) throw new Error("There is nobody with you.");
+    comp.stance = stance;
+    this.log.push({
+      kind: "companion",
+      channel: "good",
+      who: comp.name,
+      what: `is now ${stance}`,
+      note: {
+        aggressive: "They go in first and they do not check whether you followed.",
+        defensive: "They stay near you and pick their moments.",
+        support: "They harass, distract, and keep out of reach.",
+        hide: "They stay out of it entirely, which is sometimes the whole plan.",
+      }[stance],
+    });
   }
 
   private cmdSign(sponsorId: string): void {
@@ -1334,6 +1642,7 @@ export class Game {
       this.log.say(`${item.name} will not come off the ground. That is a Strength problem and there is no way around it but Strength.`);
       return false;
     }
+    if (item.weight >= 20) notePractice(this.state, "heavy_haul");
     const stack = this.state.inventory.find(
       (i) => !i.equipped && i.id === item.id && ["potion", "food", "material", "explosive", "junk"].includes(i.kind),
     );
@@ -1354,13 +1663,32 @@ export class Game {
     else this.state.inventory = this.state.inventory.filter((i) => i.iid !== item.iid);
   }
 
+  /**
+   * Generous on purpose. An id, an index from the printed inventory, an exact
+   * name, a partial name, or any word from the name — after four floors of
+   * looting nobody should have to type "Reinforced Recurve of Bad Ideas" in
+   * full to drink a potion.
+   */
   private findItem(ref: string): Item {
-    const lower = ref.toLowerCase();
+    const lower = ref.trim().toLowerCase();
+    const index = parseInt(lower.replace(/^#/, ""), 10);
+    if (!Number.isNaN(index) && this.state.inventory[index - 1]) {
+      return this.state.inventory[index - 1]!;
+    }
+    const words = lower.split(/\s+/).filter(Boolean);
     const found =
       this.state.inventory.find((i) => i.iid === ref) ??
       this.state.inventory.find((i) => i.name.toLowerCase() === lower) ??
-      this.state.inventory.find((i) => i.name.toLowerCase().includes(lower));
-    if (!found) throw new Error(`You are not carrying anything called "${ref}".`);
+      this.state.inventory.find((i) => i.name.toLowerCase().includes(lower)) ??
+      this.state.inventory.find((i) => {
+        const name = i.name.toLowerCase();
+        return words.every((w) => name.includes(w));
+      }) ??
+      this.state.inventory.find((i) => words.some((w) => w.length > 3 && i.name.toLowerCase().includes(w)));
+    if (!found) {
+      const near = this.state.inventory.slice(0, 6).map((i, n) => `${n + 1}) ${i.name}`).join(", ");
+      throw new Error(`Nothing called "${ref}" in there.${near ? ` You have: ${near}${this.state.inventory.length > 6 ? ", and more — try \`inv\`" : ""}.` : ""}`);
+    }
     return found;
   }
 
@@ -1419,6 +1747,40 @@ export class Game {
 function lastAttacker(enc: { combatants: Combatant[] }): string | null {
   const alive = enc.combatants.filter((c) => c.side === "hostile" && c.alive);
   return alive.length ? alive.sort((a, b) => b.level - a.level)[0]!.name : null;
+}
+
+/** Rough worth of a piece of gear, for `equip best`. Deliberately simple: it
+ *  is a convenience, not an oracle, and a player who cares should compare. */
+function gearScore(state: GameState, item: Item): number {
+  const mods = (item.mods ?? []).reduce((n, m) => n + (typeof (m as { v?: number }).v === "number" ? (m as { v: number }).v : 0), 0);
+  const dice = item.damage ? avgOf(item.damage) : 0;
+  const rarity = ["junk", "common", "uncommon", "rare", "epic", "legendary", "celestial"].indexOf(item.rarity);
+  return mods + dice * 1.6 + rarity;
+}
+
+function avgOf(spec: string): number {
+  const m = /^(\d*)d(\d+)([+-]\d+)?$/i.exec(spec);
+  if (!m) return 0;
+  const n = m[1] ? parseInt(m[1], 10) : 1;
+  return n * ((parseInt(m[2]!, 10) + 1) / 2) + (m[3] ? parseInt(m[3], 10) : 0);
+}
+
+/** An ordinary object off a dead planet. No statistics, no rarity, no combat
+ *  value — what it is worth is whatever a clever crawler makes it do. */
+function makeEarthObject(name: string, rng: Rng): Item {
+  const clean = name.replace(/^(a|an|the|my|some)\s+/i, "").slice(0, 48);
+  return {
+    iid: `claim_${Math.floor(rng.next() * 0xffffffff).toString(36)}`,
+    id: `earth_${clean.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+    name: clean.charAt(0).toUpperCase() + clean.slice(1),
+    kind: "junk",
+    rarity: "junk",
+    weight: 0.3,
+    value: 1,
+    qty: 1,
+    tags: ["earth", "claimed"],
+    desc: "Yours, from before. It has no statistics and the system has logged it anyway, because the system logs everything.",
+  };
 }
 
 function blankTally() {

@@ -211,6 +211,46 @@ export interface BoxResult {
 }
 
 /**
+ * Enough about this specific crawler to make a piece of loot theirs.
+ *
+ * "Sometimes tailored" is the ask and it is the right one: a box that is
+ * always procedural feels like a slot machine, and a box that is always
+ * hand-authored runs out. So most lines come off the tables, some are
+ * generated, and a few — only at real rarities — are made *for you*, and say
+ * so in the description.
+ */
+export interface TailorCtx {
+  name: string;
+  job: string;
+  lastBoss?: string;
+  mintedSkill?: string;
+  floor: number;
+}
+
+const TAILORED = [
+  (t: TailorCtx) => `Stamped, in small letters, with your crawler number. Somebody in fabrication read your file and had opinions about it.`,
+  (t: TailorCtx) => `The grip has been rewrapped for a hand the size of yours. Nobody measured you. Nobody had to.`,
+  (t: TailorCtx) => `Sized for somebody who ${t.job.toLowerCase()} for a living, which the system finds funnier than you do.`,
+  (t: TailorCtx) => `Made from ${t.lastBoss ? `what was left of ${t.lastBoss}` : "something that died on this floor recently"}. It is still slightly warm and the system would like you to notice that.`,
+  (t: TailorCtx) => `Built around ${t.mintedSkill ? `the way you have been fighting — the thing they are calling ${t.mintedSkill}` : "the way you have been fighting"}. The audience voted on the shape.`,
+  (t: TailorCtx) => `There is a production note attached. It reads: "for the one who keeps doing that". It does not elaborate.`,
+];
+
+/** Some proportion of what a good box holds was made for the person opening
+ *  it. Never at low rarity — a tailored piece of junk is just a joke. */
+function tailor(rng: Rng, item: Item, ctx: TailorCtx): Item {
+  if (RARITIES.indexOf(item.rarity) < RARITIES.indexOf("rare")) return item;
+  if (!rng.chance(0.4)) return item;
+  const note = rng.pick(TAILORED)(ctx);
+  return {
+    ...item,
+    name: rng.chance(0.5) ? `${item.name}, Fitted` : item.name,
+    desc: `${item.desc} ${note}`,
+    tags: [...item.tags, "tailored"],
+  };
+}
+
+/**
  * Opening a box is two decisions, and the player makes neither. The engine
  * rolls the shape — how many lines, what rarity each is — and then fills each
  * line, biased toward what the crawler actually uses only once the tier is
@@ -221,7 +261,7 @@ export function openBox(
   rng: Rng,
   typeId: string,
   tier: Tier,
-  ctx: { floor: number; usesTags: string[] },
+  ctx: { floor: number; usesTags: string[]; tailor?: TailorCtx },
 ): BoxResult {
   const type = BOX_BY_ID[typeId] ?? BOX_BY_ID["adventurer"]!;
   const table = TIER_TABLE[tier];
@@ -234,11 +274,15 @@ export function openBox(
     const fillerLine =
       type.fillerHeavy && (tier === "Bronze" || tier === "Silver") && rng.chance(0.55);
 
+    // Bias has to NARROW, not widen. Appending the build tags to an already
+    // broad type pool changes almost nothing, which is how a Gold box ends up
+    // feeling identical for a brawler and an archer.
     let prefer = type.pool;
     if (fillerLine) prefer = ["filler", "heal", "food"];
-    else if (rng.chance(bias) && ctx.usesTags.length) prefer = [...type.pool, ...ctx.usesTags];
+    else if (rng.chance(bias) && ctx.usesTags.length) prefer = ctx.usesTags;
 
-    items.push(makeItem(rng, { floor: ctx.floor, rarity, prefer }));
+    const rolled = makeItem(rng, { floor: ctx.floor, rarity, prefer });
+    items.push(ctx.tailor ? tailor(rng, rolled, ctx.tailor) : rolled);
   }
 
   const [lo, hi] = table.gold;

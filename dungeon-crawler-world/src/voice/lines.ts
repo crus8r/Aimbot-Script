@@ -113,6 +113,22 @@ export const TAKE_HIT = [
   "That hurt in a specific, informative way. {damage}.",
 ];
 
+/** Somebody who is not you hitting somebody who is not you. Without this bank
+ *  a companion's swing gets narrated as a swing at the crawler, which reads as
+ *  the cat attacking you and is the single most confusing thing prose can do. */
+export const THIRD_MISS = [
+  "{attacker} goes for {target} and does not find it.",
+  "{attacker} misses {target}, and {target} does not appear grateful.",
+  "{attacker} commits to something that {target} simply steps out of.",
+];
+
+export const THIRD_HIT = [
+  "{attacker} gets into {target} for {damage}.",
+  "{attacker} lands on {target} — {damage} — and keeps going.",
+  "{damage} off {target}, courtesy of {attacker}, who is having a better round than you are.",
+  "{attacker} opens {target} up for {damage}.",
+];
+
 export const LOW_HEALTH = [
   "You are running on almost nothing. Everything is very loud and slightly to the left.",
   "There is not much left in the tank and the tank has a hole in it.",

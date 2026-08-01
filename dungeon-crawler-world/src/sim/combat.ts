@@ -6,6 +6,7 @@ import { BOSS_BY_ID, MOB_BY_ID, type BossDef } from "../data/mobs.ts";
 import { makeStatus, statusEffects } from "../data/statuses.ts";
 import { derive, skillLevel, trainSkill } from "./character.ts";
 import { chooseAiAction, type AiAction } from "./ai.ts";
+import { hookBonus, hookResist, type HookCtx } from "./emergent.ts";
 import {
   addToDice,
   byId,
@@ -243,6 +244,7 @@ export function beginEncounter(
     killsThisFight: 0,
     roundsTaken: 0,
     killLog: [],
+    lastStands: 1 + hookBonus(state, "lastStand"),
   };
 
   log.push({
@@ -344,8 +346,37 @@ export function resolveAttack(
 
   const dStatus = statusEffects(defender.statuses, defender.side === "crawler" ? skillLevel(state, "pain_tolerance") : 0);
   const aStatus = statusEffects(attacker.statuses, attacker.side === "crawler" ? skillLevel(state, "pain_tolerance") : 0);
-  const defence = defender.defense + dStatus.defense + (defender.braced ? 3 : 0);
+  let defence = defender.defense + dStatus.defense + (defender.braced ? 3 : 0);
   acc += aStatus.accuracy;
+
+  // Whatever this run has taught this crawler that the repo never knew about.
+  // Minted skills and generated classes both land here, on the same swing they
+  // were earned for.
+  const hookCtx: HookCtx = {
+    choke: aZone.capacity <= 2,
+    outnumbered: hostilesOf(enc, attacker).length >= 3,
+    hidden: attacker.hidden,
+    ranged: isRanged,
+    melee: !isRanged,
+    wounded: attacker.hp / attacker.hpMax < 0.34,
+    vs_higher: defender.level > attacker.level,
+    unarmed: (ctx.label ?? attacker.weapon) === "your bare hands",
+    improvised: ctx.improvised === true,
+    fire: /fire|burn|molotov|flame/i.test(ctx.label ?? attacker.weapon),
+    high_ground: aZone.tags.includes("high"),
+    vs_larger: defender.tags.includes("boss"),
+  };
+  if (attacker.side === "crawler") acc += hookBonus(state, "accuracy", hookCtx);
+  if (defender.side === "crawler") {
+    defence += hookBonus(state, "defense", {
+      choke: dZone.capacity <= 2,
+      outnumbered: hostilesOf(enc, defender).length >= 3,
+      melee: !isRanged,
+      ranged: isRanged,
+      wounded: defender.hp / defender.hpMax < 0.34,
+      vs_larger: attacker.tags.includes("boss"),
+    });
+  }
 
   // Unstable gear fails on its own schedule and does not care whose turn it is.
   const unstable = attacker.side === "crawler" ? derive(state).unstable : 0;
@@ -362,7 +393,8 @@ export function resolveAttack(
   const natural = rng.d(20);
   const total = natural + acc;
   const critRange = attacker.side === "crawler" ? derive(state).critRange : 20;
-  const crit = natural >= critRange;
+  const critWiden = attacker.side === "crawler" ? hookBonus(state, "crit", hookCtx) : 0;
+  const crit = natural >= critRange - critWiden;
   const hit = crit || (natural !== 1 && total >= defence);
   const graze = !hit && total >= defence - 2;
 
@@ -398,6 +430,7 @@ export function resolveAttack(
 
   const spec = ctx.damageOverride ?? attacker.damage;
   let damage = rng.roll(spec) + (ctx.extraDamage ?? 0) + aStatus.damage;
+  if (attacker.side === "crawler") damage += hookBonus(state, "damage", hookCtx);
   if (crit) damage += rng.roll(spec);
   if (grazed) damage = Math.ceil(damage / 2);
 
@@ -407,8 +440,29 @@ export function resolveAttack(
     damage += Math.round(damage * (0.5 + skillLevel(state, "first_strike") * 0.15));
   }
 
-  damage = Math.max(1, damage - defender.armor);
+  let soak = defender.armor;
+  if (defender.side === "crawler") {
+    soak += hookBonus(state, "armor", { melee: !isRanged, ranged: isRanged });
+    if (hookCtx.fire) soak += hookResist(state, "fire");
+  }
+  damage = Math.max(1, damage - soak);
   defender.hp = Math.max(0, defender.hp - damage);
+
+  // The last stand. A blow that would end the run instead leaves you upright
+  // with one round to change the situation, once per fight. It is not a free
+  // life — nothing is healed, the clock does not stop, and the next thing that
+  // lands finishes it. It exists because dying between two lines of text with
+  // no chance to answer is the worst thing a game like this can do to you.
+  if (defender.hp <= 0 && defender.side === "crawler" && enc.lastStands > 0) {
+    enc.lastStands--;
+    defender.hp = 1;
+    if (!defender.statuses.some((x) => x.id === "dying")) {
+      defender.statuses.push(makeStatus("dying", 99));
+    }
+    log.say(
+      "That should have been the end of it. It is not, quite. You are on one knee with a round in hand and every camera in the district swinging onto you — change something, or this was simply a longer way of dying.",
+    );
+  }
 
   const styles = collectStyles(state, enc, node, attacker, defender, ctx, { crit, ranged: isRanged });
 
@@ -627,6 +681,7 @@ export function useFeature(
   let bonus = 0;
   if (feature.check.stat) bonus += d.stats[feature.check.stat];
   if (feature.check.skill) bonus += skillLevel(state, feature.check.skill);
+  if (actor.side === "crawler") bonus += hookBonus(state, "feature");
   const roll = rng.d(20) + bonus;
   const success = roll >= feature.dc;
 
@@ -1063,7 +1118,7 @@ export function attemptFlee(
   const atEntry = crawler.zone === node.entry;
   const sprint = skillLevel(state, "sprint");
   const hardest = Math.max(0, ...living(enc, "hostile").map((h) => h.accuracy));
-  const roll = rng.d(20) + derive(state).stats.dex + sprint + (atEntry ? 4 : 0);
+  const roll = rng.d(20) + derive(state).stats.dex + sprint + (atEntry ? 4 : 0) + hookBonus(state, "flee");
   const dc = 11 + hardest;
 
   if (roll < dc) {

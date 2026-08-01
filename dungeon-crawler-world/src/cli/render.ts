@@ -1,4 +1,4 @@
-import type { GameState, MapNode } from "../core/types.ts";
+import type { GameState, Item, MapNode } from "../core/types.ts";
 import { SLOT_LABEL, SLOTS } from "../core/types.ts";
 import type { RenderedLine } from "../voice/narrator.ts";
 import { derive, carryCapacity, carriedWeight } from "../sim/character.ts";
@@ -6,6 +6,8 @@ import { currentNode } from "../sim/map.ts";
 import { crawlerOf, living, zoneDistance, zoneOf } from "../sim/tactics.ts";
 import { bar, hours as fmtHours } from "../core/util.ts";
 import { SKILL_BY_ID } from "../data/skills.ts";
+import { PRACTICE_BY_ID } from "../data/emergent.ts";
+import { HOOK_LABEL } from "../core/hooks.ts";
 import { BOX_BY_ID } from "../data/boxes.ts";
 import { MOB_BY_ID, BOSS_BY_ID } from "../data/mobs.ts";
 
@@ -361,7 +363,9 @@ export function sheet(state: GameState): string {
 const pad = (n: number) => String(n).padStart(2);
 const sign = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
 
-export function inventoryView(state: GameState): string {
+export type InvSort = "relevance" | "value" | "weight" | "rarity" | "name" | "recent";
+
+export function inventoryView(state: GameState, filter = "all", sort: InvSort = "relevance"): string {
   const out: string[] = [rule("inventory")];
   const worn = SLOTS.map((slot) => {
     const item = state.inventory.find((i) => i.equipped && i.slot === slot);
@@ -370,16 +374,27 @@ export function inventoryView(state: GameState): string {
   out.push(dim("  worn"));
   out.push(...worn);
   out.push("");
-  out.push(dim("  carried"));
-  const carried = state.inventory.filter((i) => !i.equipped);
-  if (!carried.length) out.push(dim("    nothing"));
-  for (const i of carried) {
+  // Numbers are the crawler-facing handle: `use 4`, `equip 11`, `lock 2`.
+  // After four floors of looting, nobody should be typing full item names.
+  const numbered = state.inventory.map((item, n) => ({ item, n: n + 1 }));
+  const matching = numbered.filter(({ item }) => !item.equipped && matchesFilter(item, filter));
+  const ordered = sortItems(state, matching, sort);
+
+  out.push(
+    dim(`  carried — ${matching.length} of ${numbered.filter((x) => !x.item.equipped).length} shown`) +
+      dim(`  [filter: ${filter} · sort: ${sort}]`),
+  );
+  if (!ordered.length) out.push(dim("    nothing here matches"));
+  for (const { item: i, n } of ordered) {
     const colour = RARITY_COLOUR[i.rarity] ?? bone;
+    const better = comparison(state, i);
     out.push(
-      `    ${colour(i.name)}${i.qty > 1 ? amber(` ×${i.qty}`) : ""} ` +
-        dim(`${i.rarity} ${i.kind} · ${i.weight}kg · ${i.value}g`),
+      `  ${dim(String(n).padStart(3) + ")")} ${colour(i.name)}${i.qty > 1 ? amber(` ×${i.qty}`) : ""}` +
+        (i.locked ? amber(" 🔒") : "") +
+        dim(`  ${i.rarity} ${i.kind} · ${i.weight}kg · ${i.value}g`) +
+        (better ? "  " + better : ""),
     );
-    out.push(dim(wrap(i.desc, 6)));
+    out.push(dim(wrap(i.desc, 8)));
   }
   if (state.boxes.length) {
     out.push("");
@@ -390,7 +405,165 @@ export function inventoryView(state: GameState): string {
   }
   out.push("");
   out.push(dim(`  ${carriedWeight(state)} kg carried · lift ceiling ${carryCapacity(state)} kg`));
+  out.push(dim("  inv <weapons|armour|consumables|materials|junk|new|all> · sort <value|weight|rarity|name|recent> · equip best · drop junk · lock <n>"));
   return out.join("\n");
+}
+
+function matchesFilter(item: Item, filter: string): boolean {
+  switch (filter) {
+    case "weapons":
+      return item.kind === "weapon" || item.kind === "explosive";
+    case "armour":
+    case "armor":
+      return item.kind === "armor" || item.kind === "jewelry";
+    case "consumables":
+      return item.kind === "potion" || item.kind === "food" || !!item.use;
+    case "materials":
+      return item.kind === "material" || item.tags.includes("craft");
+    case "junk":
+      return item.rarity === "junk" && !item.use;
+    case "new":
+      return item.rarity !== "junk";
+    default:
+      return true;
+  }
+}
+
+function sortItems(
+  state: GameState,
+  rows: { item: Item; n: number }[],
+  sort: InvSort,
+): { item: Item; n: number }[] {
+  const rarityRank = (i: Item) =>
+    ["junk", "common", "uncommon", "rare", "epic", "legendary", "celestial"].indexOf(i.rarity);
+  const copy = rows.slice();
+  switch (sort) {
+    case "value":
+      return copy.sort((a, b) => b.item.value - a.item.value);
+    case "weight":
+      return copy.sort((a, b) => b.item.weight - a.item.weight);
+    case "rarity":
+      return copy.sort((a, b) => rarityRank(b.item) - rarityRank(a.item));
+    case "name":
+      return copy.sort((a, b) => a.item.name.localeCompare(b.item.name));
+    case "recent":
+      return copy.reverse();
+    default: {
+      // Relevance: things you could wear right now, then healing when hurt,
+      // then rarity. Built for a bag with two hundred things in it.
+      const hurt = state.crawler.hp / Math.max(1, state.crawler.hpMax) < 0.7;
+      const score = (i: Item) => {
+        let v = rarityRank(i) * 10;
+        if (i.slot && !state.inventory.some((x) => x.equipped && x.slot === i.slot)) v += 60;
+        if (hurt && i.use?.effect === "heal") v += 80;
+        if (i.use) v += 20;
+        if (i.rarity === "junk") v -= 40;
+        return v;
+      };
+      return copy.sort((a, b) => score(b.item) - score(a.item));
+    }
+  }
+}
+
+/** A one-glance answer to "is this better than what I have on?". */
+function comparison(state: GameState, item: Item): string {
+  if (!item.slot) return "";
+  const worn = state.inventory.find((i) => i.equipped && i.slot === item.slot);
+  if (!worn) return jade("empty slot");
+  const score = (i: Item) => {
+    const mods = (i.mods ?? []).reduce((n, m) => n + (typeof (m as { v?: number }).v === "number" ? (m as { v: number }).v : 0), 0);
+    const dice = i.damage ? (parseInt(i.damage.split("d")[0] || "1", 10) * (parseInt(i.damage.split("d")[1] || "4", 10) + 1)) / 2 : 0;
+    return mods + dice * 1.6;
+  };
+  const delta = score(item) - score(worn);
+  if (Math.abs(delta) < 0.5) return dim(`≈ ${worn.name}`);
+  return delta > 0 ? jade(`▲ better than ${worn.name}`) : dim(`▼ worse than ${worn.name}`);
+}
+
+/** Skills, with the minted ones called out — they are the record of what this
+ *  run turned this person into and they should read like it. */
+export function skillsView(state: GameState): string {
+  const out: string[] = [rule("what you can do")];
+  const rows = Object.entries(state.skills).sort((a, b) => b[1].level - a[1].level);
+  if (!rows.length) out.push(dim("  Nothing yet."));
+
+  for (const [id, k] of rows) {
+    const minted = state.minted[id];
+    const def = SKILL_BY_ID[id];
+    const name = minted?.name ?? def?.name ?? id;
+    const cap = k.level >= state.crawler.skillCap ? blood(" at cap") : "";
+    out.push(
+      `  ${(minted ? signal : bone)(name.padEnd(22))} ${amber(String(k.level).padStart(2))}${cap}` +
+        (minted ? signal("   ← this run made this one") : ""),
+    );
+    out.push(dim(wrap(minted?.desc ?? def?.desc ?? "", 6)));
+    if (minted) {
+      out.push(dim(wrap(minted.origin, 6)));
+      out.push(jade(wrap(minted.hooks.map(HOOK_LABEL).join("; "), 6)));
+    }
+  }
+
+  // What the dungeon is currently watching but has not committed to yet.
+  const watching = Object.entries(state.practice)
+    .filter(([id, n]) => n >= 2 && !state.minted[id])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+  if (watching.length) {
+    out.push("");
+    out.push(dim("  the system is keeping a count of a few things and has not decided yet"));
+    for (const [id, n] of watching) {
+      const def = PRACTICE_BY_ID[id];
+      if (!def) continue;
+      out.push(dim(`    ${String(n).padStart(2)}/${def.threshold}  ${def.origin}`));
+    }
+  }
+  return out.join("\n");
+}
+
+export function spellsView(state: GameState): string {
+  const out: string[] = [rule("what you know")];
+  const spells = Object.values(state.spellbook);
+  const d = derive(state);
+  out.push(
+    dim(`  ${Math.round(state.crawler.mana)}/${d.manaMax} mana. The pool is your Intelligence, one for one, and it comes back at about ${Math.max(1, Math.round(d.stats.int * 3.6))} an hour — so a spell is a decision about the day, not about the round.`),
+  );
+  if (!spells.length) {
+    out.push(dim("  Nothing. Spells come out of tomes, and tomes come out of boxes."));
+    return out.join("\n");
+  }
+  for (const sp of spells) {
+    const cd = state.cooldowns[sp.id];
+    const afford = state.crawler.mana >= sp.mana;
+    out.push(
+      `  ${(sp.minted ? signal : bone)(sp.name.padEnd(30))} ${(afford ? amber : dim)(`${sp.mana} mana`)}` +
+        (cd ? blood(`  ${cd} rounds`) : "") +
+        (sp.minted ? signal("  ← nobody wrote this one down") : ""),
+    );
+    out.push(dim(wrap(sp.desc, 6)));
+    out.push(dim(wrap(sp.effects.map(describeEffect).join("; "), 6)));
+  }
+  return out.join("\n");
+}
+
+function describeEffect(e: { k: string } & Record<string, unknown>): string {
+  switch (e.k) {
+    case "damage":
+      return `${e.dice} ${e.tag ?? "force"} damage to ${e.scope === "zone" ? "everything in one position" : "one target"}`;
+    case "heal":
+      return `${e.dice} health back`;
+    case "status":
+      return `${e.id} on ${e.scope === "zone" ? "everything in a position" : "one target"} for ${e.turns} rounds`;
+    case "buff":
+      return `a hold-for-${e.turns}-rounds edge`;
+    case "blink":
+      return `move ${e.zones} positions instantly`;
+    case "ward":
+      return `+${e.v} defence for ${e.turns} rounds`;
+    case "reveal":
+      return "light, and the room stops keeping things back";
+    default:
+      return e.k as string;
+  }
 }
 
 export function mapView(state: GameState): string {

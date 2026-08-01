@@ -264,6 +264,23 @@ export const ITEMS: readonly ItemTemplate[] = [
     desc: "Gauze, tape, shears, and a card explaining the recovery position to somebody who will never need it again.",
   },
 
+  /* ---------------------------------------------------------------- tomes */
+  {
+    id: "tome", name: "Spell Tome", kind: "book", rarity: "uncommon", weight: 0.9, value: 380,
+    tags: ["caster", "tome"],
+    desc: "Teaches one spell, once, and then it is a heavy book. The dungeon picks the spell and it does not take requests.",
+  },
+  {
+    id: "tome_water", name: "Water-Damaged Tome", kind: "book", rarity: "common", weight: 1.1, value: 90,
+    tags: ["caster", "tome"],
+    desc: "Most of it has run. What is left still works, which raises questions about the rest of it that nobody is answering.",
+  },
+  {
+    id: "tome_field", name: "Field Grimoire", kind: "book", rarity: "rare", weight: 0.6, value: 1400,
+    tags: ["caster", "tome"],
+    desc: "Annotated in three hands, the last of which stops mid-sentence.",
+  },
+
   /* -------------------------------------------------------------- materials */
   { id: "scrap", name: "Scrap Metal", kind: "material", rarity: "junk", weight: 1.4, value: 3, tags: ["craft"],
     desc: "The planet was demolished into this floor. There is an unhelpful amount of it." },

@@ -83,7 +83,7 @@ export async function autoPlay(game: Game, opts: BotOptions = {}): Promise<BotRe
           : ({ t: "wait", hours: 1 } as const)
         : fighting
           ? fightPlan(s)
-          : explorePlan(s);
+          : explorePlan(s, game);
     await run(cmd);
   }
 
@@ -127,6 +127,20 @@ function fightPlan(s: GameState): Command {
   const potion = s.inventory.find((i) => i.use?.effect === "heal");
   if (hpFrac < 0.3 && potion && enc.actions.act > 0) return { t: "use", item: potion.iid };
   if (hpFrac < 0.18 && !potion) return { t: "flee" };
+
+  // Mana is scarce enough that a spell is worth a whole turn or it is not
+  // worth casting. Spend it when the fight is actually going badly.
+  if (enc.actions.act > 0 && (hpFrac < 0.5 || foes.length >= 3)) {
+    const castable = Object.values(s.spellbook).filter(
+      (sp) => sp.mana <= s.crawler.mana && !(s.cooldowns[sp.id] > 0),
+    );
+    const healer = castable.find((sp) => sp.effects.some((e) => e.k === "heal"));
+    const blast = castable
+      .filter((sp) => sp.effects.some((e) => e.k === "damage" && e.scope === "zone"))
+      .sort((a, b) => b.mana - a.mana)[0];
+    if (hpFrac < 0.35 && healer) return { t: "cast", spell: healer.id };
+    if (foes.length >= 3 && blast) return { t: "cast", spell: blast.id };
+  }
 
   // A feature that catches two or more is almost always better than a swing.
   if (enc.actions.act > 0) {
@@ -218,7 +232,7 @@ function clusterZone(
 
 /* ------------------------------------------------------------ exploring */
 
-function explorePlan(s: GameState): Command {
+function explorePlan(s: GameState, game: Game): Command {
   const floor = s.floor;
   const node = floor.nodes[floor.at]!;
   const d = derive(s);
@@ -236,7 +250,14 @@ function explorePlan(s: GameState): Command {
     if (s.crawler.hunger > 40 && (canBuyMeal || hasFood)) return { t: "eat" };
     if ((s.crawler.fatigue > 70 || hpFrac < 0.55) && !timePressure) return { t: "rest" };
     if (node.kind === "guild" && floor.n >= 3 && !s.crawler.race) {
-      return { t: "select", race: "human", klass: "gravedigger" };
+      // Take a recommendation — which is usually one the run assembled — and
+      // fall back to whatever is cheapest to qualify for.
+      const menu = game.classOptions();
+      const affordable = menu
+        .slice()
+        .sort((a, b) => reqGap(s, a.req) - reqGap(s, b.req));
+      const pick = affordable.find((o) => o.recommended) ?? affordable[0]!;
+      return { t: "select", race: "human", klass: pick.id };
     }
   }
 
@@ -373,6 +394,13 @@ function outclassed(s: GameState, node: MapNode): boolean {
 function knownDeathtrap(s: GameState, node: MapNode): boolean {
   const known = s.flags[`scouted_${node.id}`] === true || node.visited;
   return known && outclassed(s, node);
+}
+
+function reqGap(s: GameState, req: Partial<Record<string, number>>): number {
+  return Object.entries(req).reduce(
+    (n, [k, v]) => n + Math.max(0, (v as number) - (s.crawler.stats as Record<string, number>)[k]!),
+    0,
+  );
 }
 
 function hasHostiles(s: GameState, node: MapNode): boolean {
