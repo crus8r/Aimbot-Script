@@ -116,6 +116,18 @@ export type GameEvent =
       note: string;
     })
   | (BaseEvent & {
+      kind: "transform";
+      rule: string;
+      input: string;
+      product: string;
+      /** Zero when the batch was ruined, which costs the materials either way. */
+      units: number;
+      minutes: number;
+      worked: boolean;
+      /** Why it works, in plain terms. Shown; never parsed. */
+      because: string;
+    })
+  | (BaseEvent & {
       kind: "collapse";
       zone: string;
       /** Everyone the ceiling found, including the crawler. */

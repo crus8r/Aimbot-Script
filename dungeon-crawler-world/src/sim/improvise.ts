@@ -4,6 +4,7 @@ import { crawlerOf, hostilesOf, living, zoneDistance, zoneOf } from "./tactics.t
 import { BREWS, RECIPES } from "../data/recipes.ts";
 import { depositsHere } from "./harvest.ts";
 import { MATERIALS } from "../data/materials.ts";
+import { looksLikeTransform, readTransform } from "./transform.ts";
 
 /**
  * Plain English, taken in good faith.
@@ -270,6 +271,26 @@ export function interpret(state: GameState, raw: string): Interpretation {
     }
     if (has(text, "wait", "kill time", "pass the time", "hang about", "sit tight")) {
       return out({ command: { t: "wait", hours: 1 }, note: "An hour, gone." });
+    }
+  }
+
+  /* --- turning one substance into another -------------------------------- */
+  // Above harvesting, because "burn the limestone" is a process and not a
+  // request for more limestone, and above the item block, because the input is
+  // in your pack and naming it must not turn into a question about it.
+  if (!enc) {
+    const read = readTransform(state, text);
+    if (read) {
+      return out({
+        command: { t: "transform", rule: read.rule.id, input: read.input.id, batches: numberIn(text), said: text },
+        note: `${read.rule.name} the ${read.input.name.toLowerCase()}.`,
+        practice: "transmuting",
+      });
+    }
+    // Said something process-shaped with nothing to do it to. Still an answer:
+    // the command lists what the pack could actually become.
+    if (looksLikeTransform(text) && !word(text, ...FABRIC)) {
+      return out({ command: { t: "transform", said: text }, note: "Working out what that would take." });
     }
   }
 

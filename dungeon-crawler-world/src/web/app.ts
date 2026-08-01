@@ -12,6 +12,8 @@ import { BOX_BY_ID } from "../data/boxes.ts";
 import { MOB_BY_ID, BOSS_BY_ID } from "../data/mobs.ts";
 import { RACES } from "../data/paths.ts";
 import { STATIONS, UPGRADES, SPACE_COST, RECIPES, BREWS } from "../data/recipes.ts";
+import { transformMenu } from "../sim/transform.ts";
+import { depositsHere, strainNote, strainStage } from "../sim/harvest.ts";
 import type { Intake } from "../sim/intake.ts";
 
 /**
@@ -209,6 +211,11 @@ function drawActions(): void {
     if (node.hasStairs && s.floor.stairsAnnounced) {
       box.appendChild(actionBtn("Descend", { t: "descend" }, "good"));
     }
+    // The walls, as an offer. Nobody would guess this was possible from a
+    // freeform box, and a system you have to already know about is a system
+    // most people never find.
+    const seams = depositsHere(s, node);
+    if (seams.length) box.appendChild(sheetBtn("Take the room apart", drawSeams));
   }
 
   if (safe) {
@@ -469,6 +476,58 @@ function drawWorkshop(body: HTMLElement): void {
     rr.appendChild(actionBtn("brew", { t: "brew", what: b.id }, "small"));
     body.appendChild(rr);
     body.appendChild(el("div", "hint", `${b.materials.map((m) => `${m.qty}× ${m.id}`).join(", ")} · needs ${b.station}`));
+  }
+
+  // What the substances in your pack could become. Listed even when they are
+  // out of reach, because knowing that limestone becomes quicklime given nine
+  // hundred degrees is the interesting half — the rest is shopping.
+  const processes = transformMenu(s);
+  if (processes.length) {
+    body.appendChild(el("div", "sep", "what you are carrying could become"));
+    for (const p of processes.slice(0, 12)) {
+      const r = el("div", "srow");
+      r.appendChild(el("span", "sleft", `${p.product.name} — ${p.rule.name.toLowerCase()} the ${p.input.name.toLowerCase()}`));
+      if (p.ok) {
+        r.appendChild(actionBtn("do it", { t: "transform", rule: p.rule.id, input: p.input.id }, "small good"));
+      } else {
+        r.appendChild(el("span", "sright", "not here"));
+      }
+      body.appendChild(r);
+      body.appendChild(el("div", "hint", p.ok ? p.rule.because : `Wants ${p.missing.join("; ")}.`));
+    }
+  }
+}
+
+/**
+ * What this room is physically made of, position by position, with the state
+ * of the structure you have been attacking printed next to it. The warning is
+ * the interesting part: a crawler who reads "the next thing out of this wall is
+ * going to be an event" and keeps going has made a decision rather than an
+ * error, and both are allowed.
+ */
+function drawSeams(body: HTMLElement): void {
+  const s = game!.state;
+  const node = currentNode(s.floor);
+  const seams = depositsHere(s, node);
+  if (!seams.length) {
+    body.appendChild(el("div", "hint", "Nothing here is worth the hours it would take."));
+    return;
+  }
+  for (const { zone, deposits } of seams) {
+    body.appendChild(el("div", "sep", zone.name));
+    const stage = strainStage(s, node, zone);
+    if (stage !== "sound") {
+      body.appendChild(el("div", `hint${stage === "critical" ? " bad" : ""}`, strainNote(stage)));
+    }
+    for (const d of deposits) {
+      const r = el("div", "srow");
+      r.appendChild(el("span", "sleft", `${d.left} × ${d.mat.name}`));
+      r.appendChild(actionBtn("dig", { t: "harvest", what: d.mat.name.toLowerCase(), qty: 2, zone: zone.id }, "small"));
+      body.appendChild(r);
+      const wants = d.mat.tool ? `needs ${d.mat.tool === "percussion" ? "something heavy" : d.mat.tool === "lever" ? "a bar" : d.mat.tool === "cutting" ? "metal cutters" : d.mat.tool === "fine" ? "fine tools" : "an edge"}` : "bare hands";
+      body.appendChild(el("div", "hint",
+        `${d.mat.kg} kg each · ${d.mat.minutes ?? 8} min · ${wants}${d.mat.structural ? " · load-bearing" : ""} — ${d.mat.desc}`));
+    }
   }
 }
 

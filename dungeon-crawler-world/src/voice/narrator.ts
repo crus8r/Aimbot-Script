@@ -159,6 +159,14 @@ export class ProceduralNarrator implements Narrator {
         return `${fmtHours(e.minutes / 60)} of hard, boring, unglamorous work. ${got}${e.note ? ` ${e.note}` : ""}`;
       }
 
+      case "transform":
+        return e.worked
+          ? [
+              { channel: "loot", text: `${fmtHours(e.minutes / 60)} at it. ${e.units} × ${e.product}.` },
+              { channel: "system", text: e.because },
+            ]
+          : `${fmtHours(e.minutes / 60)} at it, and then not. ${e.because}`;
+
       case "collapse": {
         const lines: RenderedLine[] = [{ channel: "bad", text: e.note }];
         for (const h of e.hurt) {

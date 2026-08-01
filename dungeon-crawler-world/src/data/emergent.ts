@@ -135,6 +135,14 @@ export const PRACTICE: readonly PracticeDef[] = [
     coveredBy: ["clean_lift"],
   },
   {
+    id: "transmuting", threshold: 6, group: "craft",
+    names: ["Applied Chemistry", "Changing Its Mind", "The Second Substance", "Process Work", "Reagent Sense"],
+    hooks: [{ k: "feature", v: 1 }, { k: "search", v: 1 }, { k: "spectacle", v: 0.05 }],
+    desc: "You have stopped seeing what a thing is and started seeing what it could be made into.",
+    origin: "Six times now you have put one substance in and taken a different one out. That is not luck twice.",
+    coveredBy: ["alchemy"],
+  },
+  {
     id: "quarrying", threshold: 14, group: "utility",
     names: ["Winning the Face", "Quarry Work", "Reading the Grain", "Stripping Out", "The Extractive Trade"],
     hooks: [{ k: "search", v: 2 }, { k: "carry", v: 8 }],

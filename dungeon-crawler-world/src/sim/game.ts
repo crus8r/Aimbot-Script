@@ -54,7 +54,9 @@ import { calledShotModifier, deliverDevice, describeTraits, traitsOf } from "./d
 import { checkMinting, generateClassOptions, hookBonus, hookFraction, notePractice, type ClassOption } from "./emergent.ts";
 import { castSpell, knownSpells, learnSpell, spellFromTome, tickCooldowns } from "./spells.ts";
 import { interpret, ruleOnClaim } from "./improvise.ts";
-import { depositsHere, harvest, strainNote, strainStage, type Deposit } from "./harvest.ts";
+import { depositsHere, harvest, materialOf, strainNote, strainStage, type Deposit } from "./harvest.ts";
+import { checkTransform, readTransform, runTransform, transformMenu } from "./transform.ts";
+import { TRANSFORM_BY_ID } from "../data/transforms.ts";
 import { generateSpell } from "../data/spells.ts";
 
 /**
@@ -84,6 +86,8 @@ export type Command =
   | { t: "prep"; what: "barricade" | "trap" | "ambush" | "breather"; zone?: string }
   /** Take a substance out of the room it is part of. */
   | { t: "harvest"; what?: string; qty?: number; zone?: string }
+  /** Do something to a substance until it is a different substance. */
+  | { t: "transform"; rule?: string; input?: string; batches?: number; said?: string }
   | { t: "engage" }
   // ------- fighting
   | { t: "attack"; target: string; called?: boolean }
@@ -370,6 +374,7 @@ export class Game {
       case "descend": return this.cmdDescend();
       case "prep": return this.cmdPrep(cmd.what, cmd.zone);
       case "harvest": return this.cmdHarvest(cmd.what, cmd.qty, cmd.zone);
+      case "transform": return this.cmdTransform(cmd);
       case "engage": return this.cmdEngage();
       case "use": return this.cmdUse(cmd.item, false);
       case "equip": return this.cmdEquip(cmd.item);
@@ -940,6 +945,65 @@ export class Game {
     }
 
     if (this.state.crawler.hp < before && this.state.crawler.hp <= 0) this.die("brought a ceiling down on yourself");
+  }
+
+  /**
+   * Doing something to a substance until it is a different substance.
+   *
+   * The refusal path matters more than the success path here. Somebody who has
+   * worked out that burning limestone gives them quicklime is RIGHT, and being
+   * told "you can't do that" when the only thing missing is four hundred
+   * degrees is the exact failure this whole layer was built to stop. So a
+   * refusal always names the physical thing that is missing, and it never
+   * argues about whether the idea was any good.
+   */
+  private cmdTransform(cmd: { rule?: string; input?: string; batches?: number; said?: string }): void {
+    const node = currentNode(this.state.floor);
+
+    let rule = cmd.rule ? TRANSFORM_BY_ID[cmd.rule] : undefined;
+    let input = cmd.input
+      ? this.state.inventory.map(materialOf).find((m) => m?.id === cmd.input || m?.name.toLowerCase() === cmd.input!.toLowerCase())
+      : undefined;
+
+    if ((!rule || !input) && cmd.said) {
+      const read = readTransform(this.state, cmd.said);
+      rule ??= read?.rule;
+      input ??= read?.input;
+    }
+
+    if (!rule || !input) {
+      const menu = transformMenu(this.state).slice(0, 6);
+      if (!menu.length) {
+        throw new Error(
+          "There is nothing in your pack that can be turned into anything else. That changes the moment you start taking rooms apart — say what the walls are made of and go from there.",
+        );
+      }
+      throw new Error(
+        `Not sure which process you meant. What you are carrying could become: ${commaList(
+          menu.map((m) => `${m.product.name} (${m.rule.name.toLowerCase()} the ${m.input.name.toLowerCase()}${m.ok ? "" : " — not here"})`),
+        )}.`,
+      );
+    }
+
+    const batches = Math.max(1, Math.min(cmd.batches ?? 1, 6));
+    const check = checkTransform(this.state, node, rule, input, batches);
+    if (!check.ok) {
+      // Say what it WOULD make, so the refusal is a shopping list rather than
+      // a dead end. Being told what you are missing is being helped.
+      // Semicolons rather than a comma list: half of these phrases contain
+      // their own "and", and a shopping list you have to parse twice is a
+      // worse answer than a short one.
+      throw new Error(
+        `${rule.name} the ${input.name.toLowerCase()} would give you ${check.product.name}. ` +
+        `It wants ${check.missing.join("; ")}. ${rule.because}`,
+      );
+    }
+
+    const r = runTransform(this.state, this.rng, this.log, node, rule.id, input.id, batches);
+    if (!r.ok) throw new Error(r.reason!);
+    if (r.minutes) {
+      this.advanceTime(r.minutes / 60, `${rule.name.toLowerCase()} ${input.name.toLowerCase()}`);
+    }
   }
 
   private cmdEngage(): void {

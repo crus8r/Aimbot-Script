@@ -29,9 +29,15 @@ const check = (ok: boolean, what: string) => {
   if (!ok) failures.push(what);
 };
 
-const browser = await chromium.launch(
-  process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
-);
+// Playwright's bundled download is often absent in a sandbox while a perfectly
+// good Chromium is sitting where the image put it. Look there before failing.
+const chromePath =
+  process.env.CHROMIUM_PATH ??
+  (process.env.PLAYWRIGHT_BROWSERS_PATH && existsSync(join(process.env.PLAYWRIGHT_BROWSERS_PATH, "chromium"))
+    ? join(process.env.PLAYWRIGHT_BROWSERS_PATH, "chromium")
+    : undefined);
+
+const browser = await chromium.launch(chromePath ? { executablePath: chromePath } : {});
 // A small phone, because that is the target and the target is unforgiving.
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 const page = await ctx.newPage();
@@ -182,6 +188,31 @@ check(!(await page.locator("#sheet.open").isVisible()), "Escape closes a sheet")
   });
   check(after.elapsed === before.elapsed, "asking a question costs no time");
   check(after.round === before.round, "asking a question costs no combat round");
+}
+
+/* --------------------------------------------- the room as a substance */
+
+// Typing about the walls has to reach the walls. This is the promise the whole
+// material layer exists to keep, and it is only kept if it works on a phone.
+{
+  // The previous block leaves a sheet open over the send button.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  await page.locator("#input").fill("what are the walls made of");
+  await page.locator("#send").click();
+  await page.waitForTimeout(500);
+  const feed = (await page.locator("#feed").textContent()) ?? "";
+  check(/Made of:|room itself|not searched/i.test(feed), "asking what a room is made of gets an answer");
+
+  await page.locator("#input").fill("break some of the wall out and take it with me");
+  await page.locator("#send").click();
+  await page.waitForTimeout(600);
+  const after = (await page.locator("#feed").textContent()) ?? "";
+  check(
+    /minutes of hard|nothing here|nothing in this room|still in the wall|will not come|carrying/i.test(after),
+    "digging at a wall is answered rather than shrugged at",
+  );
+  check(!/does not know how to resolve/i.test(after), "and it is not a shrug");
 }
 
 /* ------------------------------------------------------------ no layout */

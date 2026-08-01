@@ -3,7 +3,7 @@ import type { Rng } from "../core/rng.ts";
 import { derived } from "../core/rng.ts";
 import type { EventLog } from "../core/events.ts";
 import {
-  MATERIAL_BY_ID, RAW_MATERIALS, TOOL_ITEMS, TOOL_TAGS,
+  isMatTag, MATERIAL_BY_ID, RAW_MATERIALS, TOOL_ITEMS, TOOL_TAGS,
   type MaterialDef, type ToolClass,
 } from "../data/materials.ts";
 import { canLift, carriedWeight, carryCapacity, skillLevel, trainSkill } from "./character.ts";
@@ -386,9 +386,24 @@ export function materialItem(mat: MaterialDef, qty: number): Item {
   };
 }
 
-/** The material an inventory item is, if it is one. */
+/**
+ * The material an inventory item is, if it is one.
+ *
+ * Reconstructed from the item rather than looked up, because a product of a
+ * transformation is a real substance that no catalogue contains — and it has to
+ * be a legal input to the NEXT transformation, or the chain stops at one link
+ * and the whole layer is a novelty. An item carries its own properties, so
+ * burnt bone can be slaked exactly like burnt limestone without either of them
+ * being registered anywhere.
+ */
 export function materialOf(item: Item): MaterialDef | undefined {
-  return item.id.startsWith("mat_") ? MATERIAL_BY_ID[item.id.slice(4)] : undefined;
+  if (!item.id.startsWith("mat_")) return undefined;
+  const id = item.id.slice(4);
+  const known = MATERIAL_BY_ID[id];
+  if (known) return known;
+  const tags = item.tags.filter(isMatTag);
+  if (!tags.length) return undefined;
+  return { id, name: item.name, unit: "measure", tags, kg: item.weight, value: item.value, desc: item.desc };
 }
 
 /** How many units of a material are in the pack. */
