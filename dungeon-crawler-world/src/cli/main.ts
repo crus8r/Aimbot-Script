@@ -5,6 +5,7 @@ import { Game, type Command } from "../sim/game.ts";
 import type { GameState, StatKey } from "../core/types.ts";
 import { ProceduralNarrator } from "../voice/narrator.ts";
 import { LlmNarrator } from "../voice/llm.ts";
+import { LlmProposer, NoProposer, type Proposer } from "../voice/proposer.ts";
 import { Rng } from "../core/rng.ts";
 import { RACES, CLASSES } from "../data/paths.ts";
 import { SPONSOR_BY_ID } from "../data/sponsors.ts";
@@ -90,11 +91,13 @@ async function main(): Promise<void> {
       return;
     }
     game = Game.load(JSON.parse(raw) as GameState, makeNarrator(JSON.parse(raw).seed));
+    game.proposer = makeProposer();
     say(amber(`Resumed. ${game.state.crawler.name}, floor ${game.state.floor.n}.`));
   } else {
     const seed = Number(argOf("seed") ?? (Date.now() & 0x7fffffff));
     const intake = args.includes("--quick") ? quickIntake() : await runIntake();
     game = Game.create(seed, intake, makeNarrator(seed));
+    game.proposer = makeProposer();
     say(dim(`\n  seed ${seed} — the whole run replays from this number.\n`));
   }
 
@@ -103,6 +106,25 @@ async function main(): Promise<void> {
 
   await loop(game);
   rl.close();
+}
+
+/**
+ * The Dungeon Master seat, filled only when asked for.
+ *
+ * `--dm` is separate from `--llm` on purpose. The narrator is a camera and runs
+ * after everything is decided; this runs BEFORE resolution on text the player
+ * controls, which is a different thing to consent to even though the safety
+ * argument holds either way. Somebody should be able to have one without the
+ * other.
+ */
+function makeProposer(): Proposer {
+  if (!args.includes("--dm")) return new NoProposer();
+  if (!process.env.ANTHROPIC_API_KEY) {
+    say(dim("  --dm requested but ANTHROPIC_API_KEY is not set. The keyword parser is on its own, which it is built to be."));
+    return new NoProposer();
+  }
+  say(dim("  Dungeon Master on. It reads sentences the parser cannot and proposes what they mean; every number it leads to is still the engine's."));
+  return new LlmProposer();
 }
 
 function makeNarrator(seed: number) {

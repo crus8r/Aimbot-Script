@@ -57,6 +57,9 @@ import { interpret, ruleOnClaim } from "./improvise.ts";
 import { depositsHere, harvest, materialOf, strainNote, strainStage, type Deposit } from "./harvest.ts";
 import { checkTransform, readTransform, runTransform, transformMenu } from "./transform.ts";
 import { TRANSFORM_BY_ID } from "../data/transforms.ts";
+import { mint } from "./propose.ts";
+import { NoProposer, type Proposer } from "../voice/proposer.ts";
+import type { Proposal } from "../core/proposal.ts";
 import { generateSpell } from "../data/spells.ts";
 
 /**
@@ -144,12 +147,22 @@ export class Game {
   private rng: Rng;
   private log: EventLog;
   narrator: Narrator;
+  /**
+   * The Dungeon Master seat, empty by default.
+   *
+   * Every path it opens is reachable without it. Assigning one widens the range
+   * of sentences the game can read; it cannot widen the range of things the
+   * game can do, because everything mechanical downstream is derived by
+   * `src/sim/propose.ts` from quantities the engine already owns.
+   */
+  proposer: Proposer;
 
-  private constructor(state: GameState, narrator?: Narrator) {
+  private constructor(state: GameState, narrator?: Narrator, proposer?: Proposer) {
     this.state = state;
     this.rng = new Rng(state.rng);
     this.log = new EventLog(() => this.state.elapsed);
     this.narrator = narrator ?? new ProceduralNarrator(Rng.fromSeed(state.seed ^ 0x5f3759df));
+    this.proposer = proposer ?? new NoProposer();
   }
 
   static create(seed: number, intake: Partial<Intake> = {}, narrator?: Narrator): Game {
@@ -300,7 +313,12 @@ export class Game {
     }
 
     try {
-      this.dispatch(cmd);
+      // Freeform text is resolved before dispatch because the Dungeon Master
+      // seat is asynchronous and everything downstream of it is not. The
+      // deterministic interpreter always runs first and is always enough on
+      // its own; the model is only consulted when it came back empty-handed.
+      const resolved = cmd.t === "improvise" ? await this.readFreeform(cmd.text) : cmd;
+      if (resolved) this.dispatch(resolved);
     } catch (err) {
       // A bad command should cost the player a sentence, never the run.
       this.log.say(err instanceof Error ? err.message : String(err));
@@ -1782,15 +1800,85 @@ export class Game {
    * Plain English. The interpreter finds the nearest legal reading and says
    * what it understood, so a misreading costs one line rather than a turn.
    */
-  private cmdImprovise(text: string): void {
+  /**
+   * Whatever somebody typed, turned into something the engine can resolve.
+   *
+   * The keyword interpreter goes first, always, and its answer stands whenever
+   * it has one. A Dungeon Master is consulted only for the sentences it could
+   * not read — which is the whole design in one line: the model widens the
+   * range of SENTENCES understood, never the range of THINGS possible. Pull the
+   * network out and the only thing that changes is how many ways you can phrase
+   * the same instruction.
+   */
+  private async readFreeform(text: string): Promise<Command | null> {
     const reading = interpret(this.state, text);
-    // Labelled as a reading, not narrated as an outcome. If the action then
-    // fails, the player can see exactly where the misunderstanding was.
+
+    if (reading.command && reading.command.t !== "improvise" && !reading.weak) {
+      this.log.say(`Read as: ${reading.note}`);
+      if (reading.practice) notePractice(this.state, reading.practice);
+      return reading.command;
+    }
+
+    // Nothing legal came back. This is the seat.
+    if (this.proposer.available) {
+      const node = currentNode(this.state.floor);
+      const proposal = await this.proposer.propose({ said: text, state: this.state, node });
+      if (proposal) {
+        const command = this.applyProposal(proposal, node);
+        if (command !== undefined) return command;
+      }
+    }
+
     this.log.say(`Read as: ${reading.note}`);
     if (reading.practice) notePractice(this.state, reading.practice);
-    if (!reading.command) return;
-    // Guard against an interpreter that talks itself into a loop.
-    if (reading.command.t === "improvise") return;
+    return reading.command && reading.command.t !== "improvise" ? reading.command : null;
+  }
+
+  /**
+   * What a proposal is allowed to become.
+   *
+   * Three outcomes and no fourth. A reading turns into an engine command that
+   * has to survive the same validation as one that was typed. A transformation
+   * turns into a priced device — priced by the engine, from the bill of
+   * materials, never by the proposer. A decline turns into a sentence.
+   *
+   * Returns `undefined` to mean "not handled, fall back", which is different
+   * from `null` — "handled, and the answer was that nothing happens".
+   */
+  private applyProposal(p: Proposal, node: MapNode): Command | null | undefined {
+    if (p.kind === "decline") {
+      this.log.say(`${p.note} Nothing spent.`);
+      return null;
+    }
+
+    if (p.kind === "reading") {
+      // A verb the model named is still only a verb. It goes through the same
+      // dispatch, the same checks, and the same refusals as one somebody typed.
+      const command = commandFromIntent(p.intent, p.argument);
+      if (!command) return undefined;
+      this.log.say(`Read as: ${p.note}`);
+      return command;
+    }
+
+    const r = mint(this.state, this.rng, this.log, node, p);
+    if (!r.ok) {
+      this.log.say(r.reason!);
+      return null;
+    }
+    if (r.priced?.minutes) {
+      this.advanceTime(r.priced.minutes / 60, `building ${p.name.toLowerCase()}`);
+    }
+    return null;
+  }
+
+  private cmdImprovise(text: string): void {
+    // Reached only when something inside the engine dispatches `improvise`
+    // rather than a player typing it — the async path above handles that case
+    // and this one must never recurse into it.
+    const reading = interpret(this.state, text);
+    this.log.say(`Read as: ${reading.note}`);
+    if (reading.practice) notePractice(this.state, reading.practice);
+    if (!reading.command || reading.command.t === "improvise") return;
     this.dispatch(reading.command);
   }
 
@@ -2571,6 +2659,66 @@ function describeZone(z: { name: string; capacity: number; tags: string[]; barri
   if (z.traps?.length) bits.push("Something is rigged in it.");
   if (z.hazard) bits.push(`There is ${z.hazard.kind} in it right now.`);
   return bits.join(" ");
+}
+
+/**
+ * An engine verb named by a Dungeon Master, turned into a command.
+ *
+ * Deliberately a hand-written table rather than a cast. A `Reading` arrives as
+ * an arbitrary string and this is the only door it comes through, so the door
+ * lists every verb it opens and nothing else gets in — no `improvise` (which
+ * would recurse), no `select` or `sign` or `spend` (which are irreversible
+ * character decisions and are not a Dungeon Master's to make), and nothing at
+ * all that was not written here on purpose.
+ */
+export function commandFromIntent(intent: string, arg?: string): Command | null {
+  const a = (arg ?? "").trim();
+  switch (intent) {
+    case "look": return { t: "look" };
+    case "examine": return { t: "examine", what: a || undefined };
+    case "search": return { t: "search" };
+    case "scout": return a ? { t: "scout", node: a } : null;
+    case "go": return a ? { t: "go", to: a } : null;
+    case "descend": return { t: "descend" };
+    case "wait": return { t: "wait", hours: 1 };
+    case "rest": return { t: "rest" };
+    case "eat": return { t: "eat" };
+    case "engage": return { t: "engage" };
+    case "attack": return { t: "attack", target: a, called: false };
+    case "move": return a ? { t: "move", zone: a } : null;
+    case "feature": return a ? { t: "feature", id: a } : null;
+    case "throw": return a ? { t: "throw", item: a } : null;
+    case "brace": return { t: "brace" };
+    case "aim": return { t: "aim" };
+    case "intimidate": return { t: "intimidate" };
+    case "parley": return { t: "parley" };
+    case "flee": return { t: "flee" };
+    case "endturn": return { t: "endturn" };
+    case "use": return a ? { t: "use", item: a } : null;
+    case "equip": return a ? { t: "equip", item: a } : null;
+    case "unequip": return a ? { t: "unequip", item: a } : null;
+    case "drop": return a ? { t: "drop", item: a } : null;
+    case "lock": return a ? { t: "lock", item: a } : null;
+    case "cast": return a ? { t: "cast", spell: a } : null;
+    case "craft": return a ? { t: "craft", what: a } : null;
+    case "brew": return { t: "brew", what: a || "brew_health" };
+    case "experiment": return { t: "experiment" };
+    case "harvest": return { t: "harvest", what: a || undefined };
+    case "transform": return { t: "transform", said: a || undefined };
+    case "deploy": return a ? { t: "deploy", item: a } : null;
+    case "shop": return { t: "shop" };
+    case "buy": return a ? { t: "buy", what: a } : null;
+    case "sell": return { t: "sell", what: a || "junk" };
+    case "open": return { t: "open" };
+    case "equipBest": return { t: "equipBest" };
+    case "dropJunk": return { t: "dropJunk" };
+    case "prep":
+      return ["barricade", "trap", "ambush", "breather"].includes(a)
+        ? { t: "prep", what: a as "barricade" | "trap" | "ambush" | "breather" }
+        : { t: "prep", what: "breather" };
+    default:
+      return null;
+  }
 }
 
 const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);

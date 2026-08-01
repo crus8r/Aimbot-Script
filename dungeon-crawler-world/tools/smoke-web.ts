@@ -215,6 +215,23 @@ check(!(await page.locator("#sheet.open").isVisible()), "Escape closes a sheet")
   check(!/does not know how to resolve/i.test(after), "and it is not a shrug");
 }
 
+/* ------------------------------------------------- the optional DM seat */
+
+// The seat has to be offerable without being required, and the offer lives in
+// a sheet nothing else opens. A sanitiser regex once killed the whole page at
+// boot and only this file noticed, so the menu gets walked properly.
+{
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  await page.locator("#tab-menu").click();
+  await page.waitForTimeout(250);
+  const menu = (await page.locator("#sheet-body").textContent()) ?? "";
+  check(/dungeon master/i.test(menu), "the Dungeon Master seat is offered");
+  check(/optional/i.test(menu), "and it says it is optional");
+  check(/this device only|blocks outbound/i.test(menu), "and it is honest about where a key goes");
+  await page.keyboard.press("Escape");
+}
+
 /* ------------------------------------------------------------ no layout */
 
 // Nothing may push the page sideways on a 390px phone.

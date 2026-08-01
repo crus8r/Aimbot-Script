@@ -29,6 +29,16 @@ export interface Interpretation {
   note: string;
   /** A signature to credit, so improvising is itself a thing you get better at. */
   practice?: string;
+  /**
+   * True when this is a shrug wearing a command.
+   *
+   * The out-of-combat fallback returns `examine` because describing the room is
+   * a better answer than nothing — but it is NOT a reading of what was said,
+   * and treating it as one meant the Dungeon Master seat was unreachable: every
+   * sentence came back with a command, so nothing was ever passed on. A weak
+   * reading is used only when there is nobody better to ask.
+   */
+  weak?: boolean;
 }
 
 /**
@@ -608,6 +618,7 @@ export function interpret(state: GameState, raw: string): Interpretation {
     ].filter(Boolean);
     return out({
       command: null,
+      weak: true,
       note: `Not something that can be done to ${foes.map((f) => f.name).join(" or ")}. Nothing spent, and the round is still yours — you can ${opts.join(", ")}.`,
     });
   }
@@ -631,6 +642,7 @@ export function interpret(state: GameState, raw: string): Interpretation {
     .map((l) => state.floor.nodes[l.to]!.name);
   return out({
     command: { t: "examine" },
+    weak: true,
     note: `Not sure what you meant, so here is the room again — free, and no time gone. ${
       present.length ? `In here: ${present.join(", ")}.` : "Nothing loose in here."
     }${ways.length ? ` Ways out: ${ways.join(", ")}.` : ""}`,

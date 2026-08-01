@@ -236,8 +236,20 @@ export type Proposal = Transform | Reading | Decline;
  */
 const FORBIDDEN_NAME = /\b(?:system|dungeon\s*ai|admin|debug|cheat|god\s*mode|instruction|ignore\s+(?:all|previous)|prompt)\b/i;
 
+/**
+ * Control characters, and the punctuation that starts markup.
+ *
+ * Written as escapes rather than as the literal bytes they match. The literal
+ * form worked in Node and produced `Invalid regular expression: Range out of
+ * order in character class` the moment the file went through the web bundler —
+ * a boot failure of the entire page, caused by a sanitiser, which is a poor
+ * trade for four saved keystrokes.
+ */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
+const CONTROL_OR_MARKUP = /[\u0000-\u001f\u007f-\u009f<>{}[\]\\|]/g;
+
 export function sanitiseName(raw: string, fallback: string): string {
-  const name = raw.replace(/[ -<>{}[\]\\|]/g, "").trim().slice(0, 48);
+  const name = raw.replace(CONTROL_OR_MARKUP, "").trim().slice(0, 48);
   if (!name || FORBIDDEN_NAME.test(name)) return fallback;
   return name;
 }
@@ -245,7 +257,7 @@ export function sanitiseName(raw: string, fallback: string): string {
 /** Prose the model wrote, on its way to being stored and re-shown. */
 export function sanitiseProse(raw: string, limit = 320): string {
   return raw
-    .replace(/[ -]/g, " ")
+    .replace(CONTROL, " ")
     .replace(/<\/?[a-z][^>]*>/gi, "")
     .replace(/\s+/g, " ")
     .trim()

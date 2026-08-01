@@ -11,7 +11,8 @@ cd dungeon-crawler-world
 npm run play          # start a run in the terminal
 npm run play -- --seed 4242   # start a specific run
 npm run play -- --load        # resume
-npm test              # 105 tests
+npm run play -- --dm          # add a Dungeon Master (optional; needs ANTHROPIC_API_KEY)
+npm test              # 198 tests
 npm run sim -- --runs 200     # play 200 runs and print the balance
 npm run build:web     # one self-contained HTML file you can host anywhere
 npm run smoke         # build it, then play it in a real browser
@@ -193,6 +194,119 @@ them were itemised at intake. The test is whether the justification describes
 your **life** or your **predicament**: a life gets a yes, and a crowbar
 requested in the exact minute you met a stuck door does not.
 
+## The dungeon is made of things
+
+A room is not only a set of tactical properties any more. It is made of
+substances, and a substance is a bag of **properties** rather than a name.
+
+```
+› what are the walls made of
+│ The middle of the run: Made of: the mouth of the corridor — 6 fired brick and
+  4 pipework; the middle of the run — 9 limestone and 4 raw fibre.
+
+› knock four blocks of limestone out of the wall
+│ 48 minutes of hard, boring, unglamorous work. 4 of the limestone out of the
+  middle of the run, and into the bag.
+
+› i want to make quicklime out of the limestone
+│ Calcining the limestone would give you Quicklime. It wants 850°C, held. The
+  best you have here is no fire at all. A carbonate held above about eight
+  hundred and fifty degrees gives up its carbon dioxide and what is left is the
+  oxide. That is the whole of it, and people have been doing it in pits since
+  before anybody wrote anything down.
+```
+
+Nothing anywhere keys on `limestone`. Things key on `carbonate`, `brittle`,
+`refractory`, `oxidiser` — so one rule about roasting carbonates covers
+limestone, mortar, chalk and bone without any of them being written down, and a
+player's chemistry works because it is chemistry rather than because somebody
+anticipated them. Burnt bone slakes exactly like burnt limestone, because a
+product is a real substance rather than a catalogue entry.
+
+Two rules make it cheap and two make it safe:
+
+- **Tags are a closed union.** Nothing can carry a property the rules have never
+  heard of — the same discipline applied to a language model below, for the same
+  reason.
+- **Deposits are derived, never stored.** What is in a wall is a pure function
+  of the world seed and the room's own tags. Only what you have *taken* and the
+  *strain* you left behind persist, so a floor of geology costs a few integers.
+- **Rooms are structures.** Take three times a position's capacity out of it and
+  it sags; five times and it comes down, on whoever is standing there, burying
+  what you had not reached. Narrow places go first. That is physics, it is the
+  anti-farming measure, and a crawler who works it out can arrange it on purpose.
+- **The refusal is the interesting part.** Somebody who has worked out that
+  burning limestone gives them quicklime is *right*, and being told "you can't do
+  that" when the only thing missing is four hundred degrees is the failure this
+  whole layer exists to stop. So a refusal says what it *would* have made and
+  names the physical thing missing — and fixing that thing visibly changes the
+  answer.
+
+Twenty processes ship: calcining, charring, smelting, glassmaking, slaking,
+leaching, brining, milling, atomising, distilling, rendering, saponifying,
+electrolysing, tempering, firing, and the mixes. All of it works with nothing
+attached to the game at all.
+
+## The optional Dungeon Master
+
+The language model in `src/voice/llm.ts` is a **camera**: it sees a turn that
+already happened and rewrites the prose. `src/voice/proposer.ts` is a different
+seat and a more dangerous one — it runs *before* resolution, on a sentence the
+keyword parser could not read, and it is allowed to answer.
+
+What makes it safe is not that it is watched. It is that **its vocabulary has no
+dangerous words in it.**
+
+A proposal is a *classification* and a *bill of materials* — "this is a caustic
+burn, it wants sustained heat, it eats three units of limestone" — and never a
+description of an outcome:
+
+- It **cannot write a damage number**, because there is no field for one. Power
+  is derived from four quantities the engine already owns: how hard the
+  requirements are, what the inputs are worth, how many hours it takes, and the
+  skill it sits under. Every one is debited against something that must actually
+  exist, and the total is capped at the strongest thing anybody authored.
+- It **cannot invent a property.** `vitalMultiplier` resolves defence by string
+  equality against `immune:<tag>`, so a device carrying a made-up tag would match
+  no mob's immunity anywhere in the game. Mechanical tags therefore come only
+  from a closed engine-owned table. What the model calls the thing is flavour and
+  never reaches the resolver.
+- It **cannot conjure materials.** The bill is checked against the pack. Naming a
+  thing is not having it.
+- A **reading** — "they meant `descend`" — is still only a verb, and goes through
+  the same dispatch, the same checks and the same refusals as one somebody typed.
+  The door it comes through lists every verb it opens and nothing else gets in.
+
+And the engine never asks whether a proposal is *true*. It **prices** it. Claim
+something needs nothing and you get something that does nothing; claim it needs
+eleven hours at nine hundred degrees and you have to produce eleven hours at nine
+hundred degrees. There is no truth check to lose an argument about, which is why
+there is no validator, no tier authoriser and no appeals process.
+
+Every number it leads to is shown with its derivation, because a number you
+cannot check is one you have to take on trust and nothing else here asks that.
+
+```
+› rig up something that will go through the door
+│ Cutting Wedge. 1.4 hours, and 3 × Milled Powder, 2 × Pipework.
+│ A shaped charge sends its force one direction instead of everywhere.
+│ power 3 of 4 — requirements 4.3, materials 2.1, time 1.2, skill 0.7. It goes
+  through things.
+```
+
+Turn it on with `--dm` and `ANTHROPIC_API_KEY` in the terminal, or by pasting a
+key into the menu on a self-hosted page. **Every path it opens is reachable
+without it** — the transformation table already turns limestone into quicklime
+and the keyword parser already reads most sentences. A model here widens the
+range of *sentences* the game understands. It does not widen the range of
+*things* the game can do, and that line is drawn in the type system rather than
+in a policy document.
+
+(A *published artifact* runs under `connect-src 'self'` and cannot reach any
+external host at all, so the seat stays empty there. `PasteProposer` exists for
+that case: the page hands you a prompt, you paste it into a chat, you paste the
+answer back.)
+
 ## Nobody dies between two lines of text
 
 The first blow in a fight that would kill you instead leaves you upright, on one
@@ -361,7 +475,9 @@ for the third floor. You still grow. You simply do not get a say in it yet.
 There is no slot limit. There never was. The only question is whether you can
 get the thing off the ground for the two seconds the interface needs — which
 makes **Strength the storage stat**, and means yes, eventually, the vending
-machine.
+machine. Both halves of that are enforced: the single heaviest thing *and* the
+running total, which matters a great deal now that a wall can be turned into a
+bag of four-kilo blocks.
 
 Which means the bag gets enormous, so it comes with tools:
 
@@ -391,11 +507,14 @@ and above — are **tailored**: made for you, and they say so.
 
 ```
 src/core/     rng, events, types, and hooks — the vocabulary generated content is built from
-src/data/     content: items, mobs, floors, skills, boxes, sponsors, statuses, recipes
+src/data/     content: items, mobs, floors, skills, boxes, sponsors, statuses,
+              recipes, materials, transformations
 src/sim/      map generation, tactics, combat, enemy AI, loot, spells, the show,
               emergent (minted skills and assembled classes), crafting, devices,
-              improvise, the facade
-src/voice/    the System AI's procedural voice, and the optional LLM camera
+              harvest (what rooms are made of), transform (chemistry),
+              propose (pricing what a Dungeon Master says), improvise, the facade
+src/voice/    the System AI's procedural voice, the optional LLM camera, and the
+              optional Dungeon Master seat
 src/cli/      the terminal client — thin, and it cannot reach past Game.execute
 src/web/      the browser client, and the HTML shell it gets inlined into
 tools/        the auto-player, the balance harness, the web build, the browser smoke test
@@ -481,6 +600,26 @@ loot tables and the codex.
   check: { skill: "engineering" }, requires: [], primes: ["fire"],
   verb: "open up",
   note: "You can hear it. Everyone in this room can hear it." }
+```
+
+```ts
+// src/data/materials.ts — a substance. `tags` is a closed union, so a rule
+// written about `carbonate` will find this without naming it.
+{ id: "limestone", name: "Limestone", unit: "block",
+  tags: ["carbonate", "brittle", "dense"],
+  kg: 4.0, value: 1, structural: true, tool: "percussion", minutes: 12, dc: 8,
+  occurs: { zones: ["rubble", "confined"], chance: 0.55, units: [3, 9] },
+  desc: "Roast it hard enough for long enough and it stops being stone." }
+
+// src/data/transforms.ts — a process. Keyed on properties; it must never
+// mention a material id outside `prefer`.
+{ id: "calcine", name: "Calcining", wants: ["carbonate"],
+  needs: [{ k: "heat", minC: 850, holdHours: 3 }, { k: "vessel", kind: "open" }],
+  ratio: { in: 3, out: 2 }, prefer: { limestone: "quicklime" },
+  makes: { prefix: "Burnt", add: ["oxide", "alkaline", "caustic", "calcined"],
+           drop: ["carbonate", "brittle"], mass: 0.56, worth: 20 },
+  under: "alchemy", minutes: 200,
+  because: "A carbonate held above about eight hundred and fifty degrees gives up its carbon dioxide." }
 ```
 
 ```ts

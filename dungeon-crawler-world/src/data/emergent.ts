@@ -135,6 +135,14 @@ export const PRACTICE: readonly PracticeDef[] = [
     coveredBy: ["clean_lift"],
   },
   {
+    id: "improvising", threshold: 4, group: "craft",
+    names: ["Field Expedient", "Making Do", "The Wrong Tool Correctly", "Bodge Work", "First Principles"],
+    hooks: [{ k: "damage", when: "improvised", v: 2 }, { k: "feature", v: 1 }],
+    desc: "You keep building things nobody wrote down, out of things nobody meant for it.",
+    origin: "Four devices now that were not on any list, assembled from whatever the room had.",
+    coveredBy: ["engineering", "demolitions"],
+  },
+  {
     id: "transmuting", threshold: 6, group: "craft",
     names: ["Applied Chemistry", "Changing Its Mind", "The Second Substance", "Process Work", "Reagent Sense"],
     hooks: [{ k: "feature", v: 1 }, { k: "search", v: 1 }, { k: "spectacle", v: 0.05 }],

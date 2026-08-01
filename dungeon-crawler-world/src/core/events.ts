@@ -116,6 +116,20 @@ export type GameEvent =
       note: string;
     })
   | (BaseEvent & {
+      kind: "mint";
+      name: string;
+      family: string;
+      /** Derived by the engine. The proposer never wrote this number. */
+      power: number;
+      vital: boolean;
+      from: string[];
+      minutes: number;
+      /** How the power was arrived at, term by term. A minted device that
+       *  cannot be audited is a minted device nobody should trust. */
+      working: string;
+      because: string;
+    })
+  | (BaseEvent & {
       kind: "transform";
       rule: string;
       input: string;

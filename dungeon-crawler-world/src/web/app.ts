@@ -13,6 +13,7 @@ import { MOB_BY_ID, BOSS_BY_ID } from "../data/mobs.ts";
 import { RACES } from "../data/paths.ts";
 import { STATIONS, UPGRADES, SPACE_COST, RECIPES, BREWS } from "../data/recipes.ts";
 import { transformMenu } from "../sim/transform.ts";
+import { LlmProposer, NoProposer } from "../voice/proposer.ts";
 import { depositsHere, strainNote, strainStage } from "../sim/harvest.ts";
 import type { Intake } from "../sim/intake.ts";
 
@@ -29,6 +30,37 @@ import type { Intake } from "../sim/intake.ts";
  */
 
 const SAVE_KEY = "dcw:save:v2";
+/** Kept out of the save on purpose: a shared run must not carry somebody's key. */
+const DM_KEY = "dcw:dm-key";
+
+/**
+ * Whether this page can talk to anything at all.
+ *
+ * A published artifact runs under `connect-src 'self'`, which blocks every
+ * external host outright — so offering to store an API key there would be
+ * offering something that cannot work. Detected rather than assumed, because
+ * the same build is meant to run in both places.
+ */
+function canReachTheNetwork(): boolean {
+  try {
+    // The artifact host frames the page; a standalone build does not. This is
+    // a heuristic and it is allowed to be — being wrong costs a failed request
+    // and a message saying so, which is what would have happened anyway.
+    return window.top === window.self || location.protocol === "file:";
+  } catch {
+    return false;
+  }
+}
+
+/** Restore the DM seat on boot if a key was left on this device. */
+function restoreProposer(g: Game): void {
+  try {
+    const key = localStorage.getItem(DM_KEY);
+    if (key && canReachTheNetwork()) g.proposer = new LlmProposer({ apiKey: key, browser: true });
+  } catch {
+    // Storage disabled. The game is complete without it.
+  }
+}
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => document.querySelector(sel)!;
 const el = (tag: string, cls?: string, text?: string): HTMLElement => {
   const n = document.createElement(tag);
@@ -821,6 +853,7 @@ function startIntake(): void {
 
 async function begin(seed: number, intake: Partial<Intake>): Promise<void> {
   game = Game.create(seed, intake);
+  restoreProposer(game);
   $("#feed").replaceChildren();
   const first = await game.execute({ t: "look" });
   for (const l of first.lines) line(l);
@@ -895,6 +928,7 @@ function drawMenu(body: HTMLElement): void {
     go.addEventListener("click", () => {
       try {
         game = Game.load(JSON.parse(area.value) as GameState);
+        restoreProposer(game);
         save();
         closeSheet();
         $("#feed").replaceChildren();
@@ -907,6 +941,55 @@ function drawMenu(body: HTMLElement): void {
     body.appendChild(go);
   });
   body.appendChild(imp);
+
+  /* ---------------------------------------------------- the DM seat */
+
+  body.appendChild(el("div", "sep", "dungeon master"));
+  body.appendChild(el("div", "hint",
+    "Optional. The game reads plain English on its own and every process it knows works with nothing attached — " +
+    "this only widens the range of SENTENCES it can read. Whatever a model proposes, the engine still prices: " +
+    "it cannot write a damage number, invent a property, or bill you for something you are not carrying.",
+  ));
+
+  if (!canReachTheNetwork()) {
+    body.appendChild(el("div", "hint",
+      "This page is embedded somewhere that blocks outbound requests entirely, so a key would not reach anything. " +
+      "Open the standalone build if you want this.",
+    ));
+  } else {
+    const stored = localStorage.getItem(DM_KEY) ?? "";
+    body.appendChild(el("div", "hint", stored
+      ? "A key is stored on this device only. It is never sent anywhere but Anthropic."
+      : "Paste an Anthropic API key. Stored on this device only, in this browser, and sent nowhere else."));
+
+    const key = el("input", "field") as HTMLInputElement;
+    key.type = "password";
+    key.placeholder = stored ? "•••• stored — paste a new one to replace it" : "sk-ant-...";
+    key.autocomplete = "off";
+    body.appendChild(key);
+
+    const on = el("button", "act good", stored ? "Replace the key" : "Turn it on");
+    on.addEventListener("click", () => {
+      const v = key.value.trim();
+      if (!v) return toast("Nothing pasted.");
+      localStorage.setItem(DM_KEY, v);
+      if (game) game.proposer = new LlmProposer({ apiKey: v, browser: true });
+      key.value = "";
+      toast("Dungeon Master on.");
+    });
+    body.appendChild(on);
+
+    if (stored) {
+      const off = el("button", "act", "Forget the key");
+      off.addEventListener("click", () => {
+        localStorage.removeItem(DM_KEY);
+        if (game) game.proposer = new NoProposer();
+        closeSheet();
+        toast("Key deleted from this device.");
+      });
+      body.appendChild(off);
+    }
+  }
 
   body.appendChild(el("div", "sep", ""));
   const nb = el("button", "act danger", "Abandon this crawler");
@@ -963,6 +1046,7 @@ export function boot(): void {
   const saved = loadSaved();
   if (saved && saved.crawler) {
     game = Game.load(saved);
+    restoreProposer(game);
     say(`Resumed. ${saved.crawler.name}, floor ${saved.floor.n}.`, "good");
     draw();
   } else {

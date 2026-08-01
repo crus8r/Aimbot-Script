@@ -159,6 +159,16 @@ export class ProceduralNarrator implements Narrator {
         return `${fmtHours(e.minutes / 60)} of hard, boring, unglamorous work. ${got}${e.note ? ` ${e.note}` : ""}`;
       }
 
+      case "mint":
+        return [
+          { channel: "loot", text: `${e.name}. ${fmtHours(e.minutes / 60)}, and ${e.from.join(", ")}.` },
+          { channel: "system", text: e.because },
+          // The derivation, always. A number the player cannot check is a
+          // number they have to take on trust, and nothing else in this game
+          // asks them to.
+          { channel: "system", text: e.working },
+        ];
+
       case "transform":
         return e.worked
           ? [
