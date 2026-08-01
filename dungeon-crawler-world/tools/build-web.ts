@@ -18,6 +18,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SHELL = join(root, "src/web/shell.html");
 const OUT_DIR = join(root, "web");
 const OUT = join(OUT_DIR, "index.html");
+const FRAGMENT = join(OUT_DIR, "embed.html");
 const MARKER = "/*BUNDLE*/";
 
 const result = await build({
@@ -47,5 +48,22 @@ const html = shell.replace(MARKER, () => safe);
 await mkdir(OUT_DIR, { recursive: true });
 await writeFile(OUT, html, "utf8");
 
+/**
+ * The same page with the document wrapper taken off.
+ *
+ * Some hosts supply their own `<!doctype>`, `<html>`, `<head>` and `<body>` and
+ * paste your file inside them; handing those a whole document nests one
+ * document inside another. So this is the identical page — same styles, same
+ * markup, same inlined engine — as a fragment. The `<title>` is dropped with
+ * the head it lived in, because a title in the body does nothing; the host
+ * names the page instead.
+ */
+const head = /<head>([\s\S]*?)<\/head>/i.exec(html);
+const body = /<body>([\s\S]*?)<\/body>/i.exec(html);
+if (!head || !body) throw new Error("shell.html is no longer a document with a head and a body");
+const fragment = `${head[1]!.replace(/\s*<title>[\s\S]*?<\/title>/i, "").trim()}\n${body[1]!.trim()}\n`;
+await writeFile(FRAGMENT, fragment, "utf8");
+
 const kb = (n: number) => `${(n / 1024).toFixed(1)} kB`;
-console.log(`web/index.html — ${kb(Buffer.byteLength(html))} total, ${kb(Buffer.byteLength(js))} of it engine`);
+console.log(`web/index.html   — ${kb(Buffer.byteLength(html))} total, ${kb(Buffer.byteLength(js))} of it engine`);
+console.log(`web/embed.html   — ${kb(Buffer.byteLength(fragment))}, the same page without the document wrapper`);
