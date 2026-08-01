@@ -1,0 +1,25 @@
+{
+  "name": "dungeon-crawler-world",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A deterministic tactical text-RPG engine. Season: Earth.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "play": "node src/cli/main.ts",
+    "test": "node --test 'test/*.test.ts'",
+    "sim": "node tools/balance.ts",
+    "build:web": "node tools/build-web.ts",
+    "smoke": "node tools/build-web.ts && node tools/smoke-web.ts",
+    "typecheck": "tsc --noEmit",
+    "test:fast": "node --test test/core.test.ts test/sim.test.ts test/game.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "esbuild": "^0.28.1",
+    "playwright": "^1.62.1",
+    "typescript": "^7.0.2"
+  }
+}
