@@ -2,17 +2,600 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VANGUARD</title>
-<meta http-equiv="refresh" content="0; url=./superhero-sim/">
-<link rel="canonical" href="./superhero-sim/">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VANGUARD — Superhero Squad Simulator</title>
+<meta name="description" content="A browser-based superhero action game. Five heroes, one open city, a tier-6 arch nemesis, and a side-on versus mode. Runs on your phone, installs to your home screen, plays offline.">
+<meta name="theme-color" content="#05070c">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="VANGUARD">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="VANGUARD — Superhero Squad Simulator">
+<meta property="og:description" content="Five heroes, one open city, a tier-6 arch nemesis, and a side-on versus mode. Plays in your browser, offline.">
+<meta property="og:image" content="./site/img/p-savior.webp">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./site/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./site/icon-180.png">
+<link rel="preload" as="image" href="./site/img/p-savior.webp">
+
 <style>
-  body { background:#05070c; color:#dbe6f5; font-family: ui-sans-serif, system-ui, sans-serif;
-         display:grid; place-items:center; height:100vh; margin:0; }
-  a { color:#7dffb5; }
+  *, *::before, *::after { box-sizing: border-box; }
+
+  :root {
+    --bg: #05070c;
+    --card: #0b1119;
+    --line: #1b2432;
+    --ink: #e6edf8;
+    --dim: #8492a8;
+    --dimmer: #5b697d;
+    --green: #3ef08a;
+    --orange: #ff7a12;
+    --safeL: env(safe-area-inset-left, 0px);
+    --safeR: env(safe-area-inset-right, 0px);
+    --pad: clamp(18px, 5vw, 44px);
+  }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    padding-left: var(--safeL);
+    padding-right: var(--safeR);
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 var(--pad); }
+  .wrap.wide { max-width: 1260px; }
+
+  h1, h2, h3 { line-height: 1.12; margin: 0; letter-spacing: -0.01em; }
+
+  .eyebrow {
+    font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--dimmer);
+    margin: 0;
+  }
+
+  a { color: var(--green); }
+
+  /* ---------------------------------------------------------------- hero */
+  .hero {
+    position: relative;
+    padding: clamp(44px, 12vw, 100px) 0 clamp(38px, 9vw, 74px);
+    overflow: hidden;
+  }
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: -30% -20% auto;
+    height: 130%;
+    background:
+      radial-gradient(46% 40% at 22% 18%, rgba(62,240,138,.14), transparent 70%),
+      radial-gradient(44% 42% at 82% 34%, rgba(139,92,246,.15), transparent 70%),
+      radial-gradient(52% 36% at 56% 84%, rgba(255,122,18,.09), transparent 72%);
+    pointer-events: none;
+  }
+  .hero > * { position: relative; }
+
+  .wordmark {
+    font: 800 clamp(50px, 16.5vw, 128px)/0.92 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: -0.045em;
+    margin: 14px 0 0;
+    background-image: linear-gradient(96deg, #ffffff 6%, #b8f5d3 34%, #7dffb5 52%, #cfa6ff 82%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .tagline {
+    margin: 18px 0 0;
+    font-size: clamp(16px, 4.1vw, 21px);
+    color: var(--dim);
+    max-width: 34ch;
+  }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin: 30px 0 22px; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 54px;
+    padding: 0 26px;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: #0e141d;
+    color: var(--ink);
+    font: 700 15px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform .12s ease, border-color .2s ease, background .2s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: translateY(1px) scale(.985); }
+
+  .btn.play {
+    border-color: transparent;
+    background: linear-gradient(180deg, #4bffa0, #21c96e);
+    color: #04180d;
+    box-shadow: 0 10px 34px -14px rgba(62,240,138,.85);
+    flex: 1 1 240px;
+  }
+  .btn.ghost { flex: 1 1 180px; }
+  .btn.ghost:hover { border-color: #33445c; background: #121a25; }
+
+  .meta {
+    margin: 22px 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    font: 500 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+    color: var(--dimmer);
+  }
+  .meta span { display: inline-flex; align-items: center; gap: 7px; }
+  .meta span::before {
+    content: "";
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--green);
+    opacity: .8;
+  }
+
+  /* ------------------------------------------------------------- install */
+  #install {
+    display: none;
+    padding: 16px 18px;
+    border: 1px solid #24405f;
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(45,120,200,.13), rgba(45,120,200,.05));
+    font-size: 14px;
+    color: #bcd2ea;
+  }
+  #install.show { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  #install p { margin: 0; flex: 1 1 220px; }
+  #install .btn { min-height: 44px; padding: 0 18px; font-size: 13px; }
+
+  /* -------------------------------------------------------------- layout */
+  section { padding: clamp(44px, 10vw, 90px) 0; border-top: 1px solid var(--line); }
+  .head { margin-bottom: clamp(24px, 5vw, 40px); }
+  .head h2 { font-size: clamp(26px, 6.4vw, 40px); margin-top: 10px; }
+  .head p { color: var(--dim); margin: 12px 0 0; max-width: 62ch; }
+
+  /* --------------------------------------------------------------- squad */
+  .roster {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(216px, 1fr));
+  }
+  /* five heroes, five columns — no lone card stranded on a second row */
+  @media (min-width: 1040px) { .roster { grid-template-columns: repeat(5, 1fr); } }
+
+  .hcard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    padding: 0 18px 20px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--card), #070b11);
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .hcard::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 62%;
+    background: radial-gradient(70% 62% at 50% 12%, var(--tint), transparent 72%);
+    z-index: -1;
+  }
+  .hcard img {
+    display: block;
+    width: 100%;
+    max-width: 210px;
+    height: auto;
+    margin: -4px auto 0;
+    filter: drop-shadow(0 18px 26px rgba(0,0,0,.55));
+  }
+  /* on a phone the cards stack, so keep each one short enough to scan */
+  @media (max-width: 560px) {
+    .hcard img { max-width: 152px; }
+    .kit { font-size: 13px; }
+  }
+  .hname {
+    font: 800 21px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+  }
+  .htitle { color: var(--dim); font-size: 14px; margin: 4px 0 0; font-style: italic; }
+  .hrole {
+    margin: 12px 0 0;
+    font: 600 10px/1 ui-monospace, Menlo, monospace;
+    letter-spacing: 0.16em;
+    color: var(--dimmer);
+  }
+  .kit { list-style: none; margin: 14px 0 0; padding: 0; font-size: 13.5px; color: #b3c1d4; }
+  .kit li { padding: 5px 0; border-top: 1px solid rgba(255,255,255,.05); }
+  .kit li:first-child { border-top: 0; }
+  .form {
+    margin: 14px 0 0;
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--accent);
+    background: var(--tint);
+    font: 700 11px/1.35 ui-monospace, Menlo, monospace;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+  }
+  .form small { display: block; letter-spacing: .06em; opacity: .72; font-weight: 500; margin-top: 3px; }
+
+  /* ------------------------------------------------------------- nemesis */
+  .nemesis {
+    display: grid;
+    gap: clamp(18px, 5vw, 46px);
+    align-items: center;
+    grid-template-columns: 1fr;
+    padding: clamp(22px, 5vw, 38px);
+    border: 1px solid #3a2412;
+    border-radius: 20px;
+    background:
+      radial-gradient(64% 90% at 84% 50%, rgba(255,122,18,.16), transparent 70%),
+      linear-gradient(180deg, #100a06, #070505);
+  }
+  .nemesis img { display: block; width: 100%; max-width: 250px; margin: 0 auto; height: auto; }
+  .nemesis h3 { font: 800 clamp(24px, 6vw, 34px)/1 ui-monospace, Menlo, monospace; color: var(--orange); }
+  .nemesis p { color: #c2ab98; }
+  .nemesis ul { margin: 16px 0 0; padding-left: 18px; color: #a8917e; font-size: 14.5px; }
+  .nemesis li { margin: 5px 0; }
+  @media (min-width: 760px) { .nemesis { grid-template-columns: 250px 1fr; } }
+
+  /* --------------------------------------------------------------- modes */
+  .modes { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .mode {
+    padding: 24px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--card), #070b11);
+  }
+  .mode h3 { font: 800 18px/1 ui-monospace, Menlo, monospace; letter-spacing: .08em; }
+  .mode p { color: var(--dim); font-size: 15px; margin: 12px 0 0; }
+
+  /* ------------------------------------------------------------ controls */
+  .ctrls { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+  .panel {
+    padding: 22px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: #090e15;
+  }
+  .panel h3 {
+    font: 700 12px/1 ui-monospace, Menlo, monospace;
+    letter-spacing: .18em;
+    color: var(--dimmer);
+    text-transform: uppercase;
+  }
+  .rows { margin: 14px 0 0; display: grid; gap: 2px; }
+  .row {
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    padding: 7px 0;
+    border-top: 1px solid rgba(255,255,255,.05);
+    font-size: 14.5px;
+  }
+  .row:first-child { border-top: 0; }
+  .row dt { flex: 0 0 42%; color: var(--ink); font-weight: 600; }
+  .row dd { flex: 1; margin: 0; color: var(--dim); }
+  kbd {
+    display: inline-block;
+    padding: 1px 6px;
+    border: 1px solid #2b3646;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    background: #131b26;
+    font: 600 12px/1.5 ui-monospace, Menlo, monospace;
+    color: #cddcef;
+  }
+
+  .note {
+    margin: 18px 0 0;
+    padding: 14px 16px;
+    border-left: 2px solid var(--green);
+    background: rgba(62,240,138,.06);
+    border-radius: 0 10px 10px 0;
+    font-size: 14px;
+    color: #a9c5b6;
+  }
+
+  /* -------------------------------------------------------------- footer */
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 36px 0 40px;
+    color: var(--dimmer);
+    font-size: 13.5px;
+  }
+  footer p { margin: 6px 0; }
+
+  .bottom-cta {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    padding: 10px var(--pad) calc(10px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(180deg, rgba(5,7,12,0), rgba(5,7,12,.93) 42%);
+    display: none;
+  }
+  .bottom-cta .btn { width: 100%; }
+
+  @media (max-width: 720px) {
+    .bottom-cta { display: block; }
+    .row dt { flex-basis: 46%; }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .hcard { transition: transform .18s ease, border-color .18s ease; }
+    .hcard:hover { transform: translateY(-3px); border-color: var(--accent); }
+  }
 </style>
 </head>
 <body>
-  <p>Loading <a href="./superhero-sim/">VANGUARD</a>…</p>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Browser game · nothing to install</p>
+    <h1 class="wordmark">VANGUARD</h1>
+    <p class="tagline">Five heroes. One fractured city. Swap freely, break your Surge, hold the line.</p>
+
+    <div class="cta">
+      <a class="btn play" href="./superhero-sim/">▶ Play now</a>
+      <a class="btn ghost" href="./superhero-sim/?mode=versus">Versus mode</a>
+    </div>
+
+    <div id="install">
+      <p><strong>Add it to your home screen</strong> — it opens full-screen with no browser bars, and works with no signal.</p>
+      <button class="btn ghost" id="installbtn" type="button">Install</button>
+    </div>
+
+    <p class="meta">
+      <span>Phone, tablet and desktop</span>
+      <span>Plays offline once loaded</span>
+      <span>Free — no accounts, no ads</span>
+    </p>
+  </div>
+</header>
+
+<section>
+  <div class="wrap wide">
+    <div class="head">
+      <p class="eyebrow">The squad</p>
+      <h2>Five heroes, all seventeen</h2>
+      <p>You control one at a time. The other four recover health on the bench, so swapping is both a tactic and a heal. Dealing damage fills your <strong>Surge</strong> bar and unlocks a temporary greater form — or hit <strong>FORCE</strong> to trigger it on demand.</p>
+    </div>
+
+    <div class="roster">
+
+      <article class="hcard" style="--accent:#3ef08a; --tint:rgba(62,240,138,.12)">
+        <img src="./site/img/p-savior.webp" width="340" height="470" alt="Savior, a white-armoured knight with green crystal accents and a shortsword">
+        <h3 class="hname">SAVIOR</h3>
+        <p class="htitle">The Crystal Blade</p>
+        <p class="hrole">BALANCED / ABSORBER</p>
+        <ul class="kit">
+          <li>Crystal Edge — three-hit sword combo</li>
+          <li>Absorb — eats damage <em>and</em> enemy shots, stores it as energy</li>
+          <li>Release — spends it as fire, ice or lightning</li>
+        </ul>
+        <p class="form">RADIANT ASCENSION<small>Invulnerable, floating, sustained beam · 15s</small></p>
+      </article>
+
+      <article class="hcard" style="--accent:#5cf07a; --tint:rgba(57,224,92,.12)">
+        <img src="./site/img/p-exodus.webp" width="340" height="470" loading="lazy" alt="Exodus, a lean speedster in black tech-weave with green goggles and coiled energy whips">
+        <h3 class="hname">EXODUS</h3>
+        <p class="htitle">The Green Streak</p>
+        <p class="hrole">SPEEDSTER / SKIRMISHER</p>
+        <ul class="kit">
+          <li>Whip Lash — twin whips that arc lightning to a second target</li>
+          <li>Blitz — phase through a crowd at speed, damaging everything</li>
+          <li>Charge — a mote of energy that sticks, then detonates</li>
+        </ul>
+        <p class="form">CRYO OVERDRIVE<small>Green burns to blue; charges flash-freeze · 15s</small></p>
+      </article>
+
+      <article class="hcard" style="--accent:#ffd76a; --tint:rgba(255,215,106,.11)">
+        <img src="./site/img/p-paragon.webp" width="340" height="470" loading="lazy" alt="Paragon, in blue and gold plate armour with a domino mask and a war hammer">
+        <h3 class="hname">PARAGON</h3>
+        <p class="htitle">The Gilded Fist</p>
+        <p class="hrole">BRUISER / AERIAL</p>
+        <ul class="kit">
+          <li>Hammer — slow, heavy, ends in gold light</li>
+          <li>Leap / Glide — clear buildings, land like a shockwave</li>
+          <li>Judgment — overhead smash into a radiant cone</li>
+        </ul>
+        <p class="form">ASCENDED HOST<small>Wings, true flight, hammer becomes a spear · 16s</small></p>
+      </article>
+
+      <article class="hcard" style="--accent:#a78bfa; --tint:rgba(139,92,246,.14)">
+        <img src="./site/img/p-dominus.webp" width="340" height="470" loading="lazy" alt="Dominus, a hooded figure with no visible face and glowing violet eyes">
+        <h3 class="hname">DOMINUS</h3>
+        <p class="htitle">The Hollow Hood</p>
+        <p class="hrole">ASSASSIN / CONTROL</p>
+        <ul class="kit">
+          <li>Shadow Blades — twin daggers, heavy bonus from behind</li>
+          <li>Umbral Step — short teleport, leaves a decoy that detonates</li>
+          <li>Shadow Armory — summoned blades orbit, then fire at once</li>
+        </ul>
+        <p class="form">TEMPEST OF THE VOID<small>A storm follows him; every blink calls a bolt · 15s</small></p>
+      </article>
+
+      <article class="hcard" style="--accent:#ffb43a; --tint:rgba(255,180,58,.12)">
+        <img src="./site/img/p-vitality.webp" width="340" height="470" loading="lazy" alt="Vitality, in dark armour with amber crystal growth and an amber face plate">
+        <h3 class="hname">VITALITY</h3>
+        <p class="htitle">The Amber Warden</p>
+        <p class="hrole">SUPPORT / SUSTAIN</p>
+        <ul class="kit">
+          <li>Amber Shards — ranged crystal that chills; her strikes leech life</li>
+          <li>Spires — a wall of amber that damages and blocks</li>
+          <li>Mend — burst heal, healing field, and tops up the bench</li>
+        </ul>
+        <p class="form">AMBER ETERNAL<small>Massive regeneration — and it lasts 26s</small></p>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Tier 6</p>
+      <h2>Then there's Deathbringer</h2>
+    </div>
+
+    <div class="nemesis">
+      <img src="./site/img/p-deathbringer.webp" width="340" height="470" loading="lazy" alt="Deathbringer, a pitch-black ent with burning orange eyes and dripping black mucus">
+      <div>
+        <h3>DEATHBRINGER</h3>
+        <p>A pitch-black ent the size of a house, sheeted in living mucus that drips off him constantly, with two burning eyes set in a hollow face. He manipulates darkness and kills by touch. He is the arch nemesis of all five.</p>
+        <p>Deliberately <strong>not</strong> a health sponge — a challenge, not a slog. He hits far harder than anything else in the city, and dies sooner.</p>
+        <ul>
+          <li><strong>Death Touch</strong> — heavy damage plus Wither, which cuts all your healing to 30%</li>
+          <li><strong>Grasp of the Grove</strong> — tendrils erupt in a ring and root you in place</li>
+          <li><strong>Root Surge</strong> — black spears burst from the ground beneath you</li>
+          <li><strong>Darkness</strong> — he blinds the arena and shadow orbs hunt you through it</li>
+          <li>At half health the grove wakes: faster, harder, permanently dimmed</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Two ways to play</p>
+      <h2>An open city, or a side-on duel</h2>
+    </div>
+
+    <div class="modes">
+      <div class="mode">
+        <h3>CAMPAIGN</h3>
+        <p>Top-down, 6400×4800 of procedural city. Threat rises the further you get from the central plaza — level 1 in the middle, level 4 at the edges. Six marked arenas hold a level-5 Colossus, and the grove on the east edge holds Deathbringer. Every tier has its own trick: swarms, ranged bolts, front-facing shields you have to flank, blink-stalkers that dodge.</p>
+      </div>
+      <div class="mode">
+        <h3>VERSUS</h3>
+        <p>Side-on, best of three, framed like a fighting game — so you can actually see the character designs and what their powers look like. Pick your fighter, pick your opponent (Deathbringer by default, or any teammate), pick a difficulty. These fighters are real 3D models, lit and casting shadows on the arena floor. Same kits, same damage, same forms as the campaign.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="head">
+      <p class="eyebrow">Controls</p>
+      <h2>Thumbs or keyboard</h2>
+      <p>Best on a phone in landscape, but portrait and desktop both work.</p>
+    </div>
+
+    <div class="ctrls">
+      <div class="panel">
+        <h3>Touch</h3>
+        <dl class="rows">
+          <div class="row"><dt>Left half of screen</dt><dd>Drag anywhere to move — the stick appears under your thumb</dd></div>
+          <div class="row"><dt>Big button, bottom right</dt><dd>Attack — hold to keep swinging</dd></div>
+          <div class="row"><dt>Two round buttons</dt><dd>Your abilities — some are hold-to-use</dd></div>
+          <div class="row"><dt>Drag off a button</dt><dd>Aim it manually; release without dragging and it auto-targets</dd></div>
+          <div class="row"><dt>Portrait chips</dt><dd>Swap hero instantly, any time</dd></div>
+          <div class="row"><dt>★ and ⚡ FORCE</dt><dd>Surge Form when the bar is full — or FORCE it right now</dd></div>
+          <div class="row"><dt>Stick up / down</dt><dd>Jump and guard, in Versus</dd></div>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h3>Keyboard</h3>
+        <dl class="rows">
+          <div class="row"><dt><kbd>WASD</kbd> / arrows</dt><dd>Move</dd></div>
+          <div class="row"><dt><kbd>J</kbd> or <kbd>Space</kbd></dt><dd>Attack</dd></div>
+          <div class="row"><dt><kbd>K</kbd> · <kbd>L</kbd></dt><dd>Ability 1 and 2</dd></div>
+          <div class="row"><dt><kbd>Shift</kbd></dt><dd>Dash</dd></div>
+          <div class="row"><dt><kbd>Q</kbd> / <kbd>E</kbd> · <kbd>F</kbd></dt><dd>Surge Form · force it</dd></div>
+          <div class="row"><dt><kbd>1</kbd>–<kbd>5</kbd> / <kbd>Tab</kbd></dt><dd>Swap hero</dd></div>
+          <div class="row"><dt><kbd>C</kbd> · <kbd>Esc</kbd></dt><dd>Extra action · pause</dd></div>
+        </dl>
+        <p class="note">In Versus, <kbd>W</kbd> jumps and <kbd>S</kbd> guards. Guarding soaks about 78% of a hit <em>and</em> feeds your Surge, so it's worth using rather than just backing off.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><strong style="color:#cddcef">VANGUARD</strong> — a test build.</p>
+    <p>No engine and no art files: the city, the characters, the effects and the sound are all generated procedurally in plain JavaScript. The only dependency is three.js, for the Versus fighters.</p>
+    <p style="margin-top:14px"><a href="https://github.com/crus8r/Aimbot-Script">Source on GitHub</a></p>
+  </div>
+</footer>
+
+<div class="bottom-cta"><a class="btn play" href="./superhero-sim/">▶ Play now</a></div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* Offline play. Only over http(s) — registering from a file:// page throws,
+     and the game is meant to keep working opened straight off the filesystem. */
+  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('./sw.js').catch(function () {});
+    });
+  }
+
+  /* Android and desktop Chrome fire beforeinstallprompt; iOS has no such API,
+     so it gets instructions instead. Neither shows once already installed. */
+  var box = document.getElementById('install');
+  var btn = document.getElementById('installbtn');
+  var deferred = null;
+  var standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+                   navigator.standalone === true;
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferred = e;
+    if (!standalone) box.classList.add('show');
+  });
+
+  btn.addEventListener('click', function () {
+    if (!deferred) return;
+    deferred.prompt();
+    deferred.userChoice.then(function () {
+      deferred = null;
+      box.classList.remove('show');
+    });
+  });
+
+  window.addEventListener('appinstalled', function () { box.classList.remove('show'); });
+
+  var iOS = /iP(hone|ad|od)/.test(navigator.platform || '') ||
+            ((navigator.platform === 'MacIntel') && navigator.maxTouchPoints > 1);
+  if (iOS && !standalone) {
+    box.querySelector('p').innerHTML =
+      '<strong>Add it to your home screen</strong> — tap Share, then <em>Add to Home Screen</em>. ' +
+      'It opens full-screen with no browser bars, and works with no signal.';
+    btn.parentNode.removeChild(btn);
+    box.classList.add('show');
+  }
+})();
+</script>
+
 </body>
 </html>

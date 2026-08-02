@@ -1,0 +1,56 @@
+{
+  "id": "./",
+  "name": "VANGUARD — Superhero Squad Simulator",
+  "short_name": "VANGUARD",
+  "description": "Five heroes, one open city, a tier-6 arch nemesis, and a side-on versus mode. Plays in your browser, offline.",
+  "start_url": "./superhero-sim/",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#05070c",
+  "theme_color": "#05070c",
+  "categories": ["games", "entertainment"],
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "./site/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./site/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./site/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./site/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Campaign",
+      "short_name": "Campaign",
+      "url": "./superhero-sim/?mode=campaign",
+      "icons": [{ "src": "./site/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Versus",
+      "short_name": "Versus",
+      "url": "./superhero-sim/?mode=versus",
+      "icons": [{ "src": "./site/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

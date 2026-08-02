@@ -1,0 +1,38 @@
+# Publishes the repository root to GitHub Pages, which serves the landing page
+# at / and the game at /superhero-sim/.
+#
+# To use this: Settings -> Pages -> Source: "GitHub Actions".
+# (If you'd rather not use Actions at all, pick "Deploy from a branch" instead
+# and point it at this branch, folder "/ (root)" — that works with no workflow.)
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

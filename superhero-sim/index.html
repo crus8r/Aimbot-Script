@@ -9,7 +9,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>VANGUARD — Superhero Squad Simulator</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🛡️</text></svg>">
+<link rel="manifest" href="../manifest.webmanifest">
+<link rel="icon" href="../site/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../site/icon-180.png">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -241,5 +243,14 @@
 <script src="src/versus.js"></script>
 <script src="src/hud.js"></script>
 <script src="src/game.js"></script>
+<script>
+/* Offline play. http(s) only — registering from file:// throws, and the game
+   is meant to keep working opened straight off the filesystem. */
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('../sw.js', { scope: '../' }).catch(function () {});
+  });
+}
+</script>
 </body>
 </html>

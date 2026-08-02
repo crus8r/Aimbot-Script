@@ -44,6 +44,14 @@
     SH.hud.showMenu(false);
     SH.render.follow(G.player(), 0, true);
 
+    /* Deep links from the landing page and the installed app's shortcuts:
+       ?mode=versus opens the versus setup straight away. */
+    var mode = /[?&]mode=([a-z]+)/.exec(location.search || '');
+    if (mode && mode[1] === 'versus') {
+      SH.hud.hideMenu();
+      SH.hud.showVersusSetup(true);
+    }
+
     last = performance.now();
     requestAnimationFrame(frame);
   };

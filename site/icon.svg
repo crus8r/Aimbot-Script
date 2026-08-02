@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="VANGUARD">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b111a"/>
+      <stop offset="1" stop-color="#04060a"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#d8ffe9"/>
+      <stop offset="0.45" stop-color="#7dffb5"/>
+      <stop offset="1" stop-color="#20c96e"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.46" r="0.5">
+      <stop offset="0" stop-color="#3ef08a" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#3ef08a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#tile)"/>
+  <circle cx="256" cy="236" r="188" fill="url(#halo)"/>
+
+  <!-- crystal: Savior's chest sigil -->
+  <g>
+    <path d="M256 78 L360 236 L256 434 L152 236 Z" fill="url(#face)"/>
+    <path d="M256 78 L360 236 L256 434 Z" fill="#0a2b1a" opacity="0.26"/>
+    <path d="M256 78 L256 434" stroke="#04180d" stroke-opacity="0.34" stroke-width="6"/>
+    <path d="M152 236 L360 236" stroke="#04180d" stroke-opacity="0.28" stroke-width="6"/>
+  </g>
+
+  <!-- guard chevron under the crystal -->
+  <path d="M120 300 L256 470 L392 300" fill="none" stroke="#3ef08a" stroke-opacity="0.5"
+        stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

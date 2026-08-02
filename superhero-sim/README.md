@@ -16,15 +16,23 @@ powers, and pits you against **Deathbringer** or one of your own squad.
 
 ## Play it
 
-**Online:** enable GitHub Pages for this repository (Settings → Pages → deploy
-from branch), then open:
+**Online:** the repository root is a landing page for the game. Turn on GitHub
+Pages (Settings → Pages → *Deploy from a branch*, folder `/ (root)` — or
+*GitHub Actions*, which `.github/workflows/pages.yml` already handles) and it
+is live at:
 
 ```
-https://<your-username>.github.io/Aimbot-Script/superhero-sim/
+https://<your-username>.github.io/Aimbot-Script/
 ```
+
+**On a phone:** open that URL and add it to your home screen. It installs as a
+full-screen app with no browser bars, and a service worker caches the whole
+game, so after the first visit it plays with no signal at all. `?mode=versus`
+on the game URL jumps straight to versus setup.
 
 **Locally:** just open `superhero-sim/index.html` in a browser — it runs
-straight off the filesystem, offline, with no server and no install.
+straight off the filesystem, offline, with no server and no install. (The
+service worker registers only over http(s), so nothing here breaks `file://`.)
 
 Best on a phone in landscape, but portrait and desktop both work.
 
@@ -177,6 +185,9 @@ teammate from the overlay, or revive the whole squad.
 ## Project layout
 
 ```
+index.html          landing page for the game (the site root)
+manifest.webmanifest, sw.js   installable app + offline cache
+site/               landing-page icons and character portraits
 superhero-sim/
   index.html        markup, HUD, menus
   css/style.css     HUD, touch controls, responsive layout

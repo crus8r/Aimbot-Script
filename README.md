@@ -1,3 +1,19 @@
+# VANGUARD — Superhero Squad Simulator
+
+This repository also hosts **VANGUARD**, a browser-based superhero action game:
+five heroes, one open procedural city, a tier-6 arch nemesis, and a side-on
+versus mode with 3D fighters. It runs on a phone, installs to the home screen,
+and plays offline.
+
+- **Play / landing page** — [`index.html`](./index.html) (the site root)
+- **The game itself** — [`superhero-sim/`](./superhero-sim/)
+- **Docs** — [`superhero-sim/README.md`](./superhero-sim/README.md)
+
+Once GitHub Pages is enabled for this repository it is live at
+`https://crus8r.github.io/Aimbot-Script/`.
+
+---
+
 # Aimbot Script
 
 ## New Version
