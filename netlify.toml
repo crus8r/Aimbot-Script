@@ -1,0 +1,17 @@
+# Netlify reads this automatically, so there is nothing to configure in the UI:
+# connect the repo, press Deploy, done. The site is the single-file build in
+# dcc/play — regenerate it with `node dcc/app/build.js` after editing
+# dcc/app/lore.js or dcc/app/rules.js.
+
+[build]
+  publish = "dcc/play"
+  command = ""
+
+# One small HTML file, and you want edits to show up immediately rather than
+# being served from a stale cache.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "no-cache"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
