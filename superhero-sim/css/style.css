@@ -520,6 +520,17 @@ button:hover { filter: brightness(1.25); }
 }
 .vpips i.on { background: #ffd76a; border-color: #ffd76a; box-shadow: 0 0 8px #ffd76a; }
 
+.vrow { display: flex; align-items: center; gap: 7px; }
+.vbars { flex: 1; min-width: 0; }
+.vface {
+  width: 38px; height: 38px;
+  flex: none;
+  border: 2px solid rgba(180, 215, 255, .35);
+  border-radius: 8px;
+  background: rgba(4, 8, 14, .8);
+}
+@media (max-width: 620px) { .vface { width: 30px; height: 30px; } }
+
 .vbar {
   height: 15px;
   background: rgba(4, 8, 14, .82);

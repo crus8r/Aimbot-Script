@@ -57,8 +57,13 @@
   <div id="vhud" class="hidden">
     <div class="vside left">
       <div class="vtop"><span class="vname" id="vnameL">YOU</span><span class="vpips" id="vpipsL"></span></div>
-      <div class="vbar"><i id="vhpL"></i></div>
-      <div class="vsg"><i id="vsgL"></i></div>
+      <div class="vrow">
+        <canvas class="vface" id="vfaceL" width="72" height="72"></canvas>
+        <div class="vbars">
+          <div class="vbar"><i id="vhpL"></i></div>
+          <div class="vsg"><i id="vsgL"></i></div>
+        </div>
+      </div>
     </div>
     <div class="vmid">
       <div class="vtimer" id="vtimer">99</div>
@@ -66,8 +71,13 @@
     </div>
     <div class="vside right">
       <div class="vtop"><span class="vpips" id="vpipsR"></span><span class="vname" id="vnameR">FOE</span></div>
-      <div class="vbar"><i id="vhpR"></i></div>
-      <div class="vsg"><i id="vsgR"></i></div>
+      <div class="vrow">
+        <div class="vbars">
+          <div class="vbar"><i id="vhpR"></i></div>
+          <div class="vsg"><i id="vsgR"></i></div>
+        </div>
+        <canvas class="vface" id="vfaceR" width="72" height="72"></canvas>
+      </div>
     </div>
   </div>
 
@@ -218,6 +228,8 @@
 <script src="src/heroes.js"></script>
 <script src="src/enemies.js"></script>
 <script src="src/render.js"></script>
+<script src="src/gfx3d.js"></script>
+<script src="src/models3d.js"></script>
 <script src="src/sideview.js"></script>
 <script src="src/versus.js"></script>
 <script src="src/hud.js"></script>

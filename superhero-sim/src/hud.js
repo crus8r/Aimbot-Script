@@ -53,6 +53,8 @@
     el.vround = $('vround');
     el.vL = { name: $('vnameL'), hp: $('vhpL'), sg: $('vsgL'), pips: $('vpipsL') };
     el.vR = { name: $('vnameR'), hp: $('vhpR'), sg: $('vsgR'), pips: $('vpipsR') };
+    el.faceL = $('vfaceL');
+    el.faceR = $('vfaceR');
     el.prevYou = $('prevyou');
     el.prevFoe = $('prevfoe');
 
@@ -521,6 +523,16 @@
     el.hud.classList.toggle('versus', !!on);
     el.vhud.classList.toggle('hidden', !on);
     if (on) {
+      var vs = SH.versus;
+      if (vs.you) {
+        SH.render.drawPortrait(el.faceL.getContext('2d'), vs.you.kitId, 72);
+        el.faceL.style.borderColor = vs.you.kit.colors.accent;
+      }
+      if (vs.foe) {
+        var fid = vs.foe.isHero ? vs.foe.kitId : 'deathbringer';
+        SH.render.drawPortrait(el.faceR.getContext('2d'), fid, 72);
+        el.faceR.style.borderColor = vs.foe.accent || '#fff';
+      }
       el.vL.name.textContent = SH.versus.you ? SH.versus.you.kit.name : '';
       el.vR.name.textContent = SH.versus.foe ? (SH.versus.foe.displayName || '') : '';
       el.vL.name.style.color = SH.versus.you ? SH.versus.you.kit.colors.accent : '#fff';

@@ -36,8 +36,9 @@ Best on a phone in landscape, but portrait and desktop both work.
 
 **VERSUS** — side-on 1v1, best of three rounds, MK-style. Pick your fighter,
 pick your opponent (Deathbringer by default, or any teammate), pick a
-difficulty. Both fighters are drawn full-body from the side, so every costume,
-weapon and Surge Form reads at a glance.
+difficulty. The fighters here are **real 3D models** — built from primitives,
+lit per face, depth-sorted and rendered through a small polygon renderer
+written for this mode. The character select shows them on a live turntable.
 
 The two modes share one engine. Entities already carried `x / y / z` and drew at
 `(x, y − z)`; Versus pins both fighters to a single `y` lane, which turns that
@@ -186,7 +187,9 @@ superhero-sim/
   src/heroes.js     the five kits, abilities and Surge Forms
   src/enemies.js    the five enemy tiers and their AI
   src/render.js     camera, 2.5D city, procedural character art, VFX
-  src/sideview.js   side-on stage art + the full-body fighter rig
+  src/gfx3d.js      the 3D renderer: matrix stack, primitives, lighting
+  src/models3d.js   the six fighters, built from primitives
+  src/sideview.js   side-on stage art + camera
   src/versus.js     1v1 rounds, difficulty, and the opponent AI
   src/hud.js        DOM HUD, roster, minimap, menus, versus HUD
   src/game.js       main loop, squad, spawn director
@@ -195,6 +198,21 @@ superhero-sim/
 Plain `<script>` tags in dependency order, everything under a single `SH`
 namespace — no bundler, no dependencies. Performance is adaptive: the spawn cap
 lowers itself if the frame rate drops.
+
+## How the 3D works
+
+Versus needed more presence than flat vector art could give, so it renders
+actual geometry. `gfx3d.js` is a compact immediate-mode renderer — a matrix
+stack, tapered prisms / boxes / spheres, per-face lighting with a key light,
+ambient and rim term, painter's-algorithm depth sorting, and canvas 2D as the
+rasteriser. No dependencies and no build step, same as everything else here.
+
+`models3d.js` assembles each fighter from those primitives and poses them with
+the *same* joint angles the rest of the game already computes, so walking,
+jumping, guarding, attacking and the KO fall all drive the 3D skeleton for
+free. The projection is anchored so depth 0 lines up exactly with the painted
+2D stage, which is why the models stand correctly inside it. Everything outside
+Versus — the whole top-down campaign — is unchanged.
 
 ## How the AI opponent works
 
