@@ -335,10 +335,10 @@ const MOODS = {
     background: '#2e2740', fog: [0.012, '#3a2f42'], exposure: 1.08,
   },
   DAWN: {
-    key: { colour: '#ffd9c0', intensity: 1.35, dir: [5, 2.6, 4] },
-    fill: { colour: '#7a94c8', intensity: 0.50, dir: [-4, 3, 2] },
-    rim: { colour: '#ffc9a8', intensity: 1.25, dir: [3, 3, -6] },
-    ambient: { colour: '#5a6080', intensity: 0.58 },
+    key: { colour: '#ffd9c0', intensity: 1.9, dir: [5, 2.6, 4] },
+    fill: { colour: '#8aa4d8', intensity: 0.75, dir: [-4, 3, 2] },
+    rim: { colour: '#ffc9a8', intensity: 1.8, dir: [3, 3, -6] },
+    ambient: { colour: '#6a7090', intensity: 0.90 },
     background: '#3c4562', fog: [0.010, '#4a5170'], exposure: 1.05,
   },
   STORM: {

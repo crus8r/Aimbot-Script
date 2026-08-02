@@ -252,6 +252,39 @@ function worldQuaternion(object, target) {
 /**
  * Copies motion from a control rig onto an imported skeleton every frame.
  */
+
+/**
+ * Measure the limb orientation an imported rig was authored in.
+ *
+ * Retargeting transfers rotation *deltas from a reference pose*, so both rigs
+ * must agree on what that reference is. Imports arrive in a T-pose (Mixamo),
+ * an A-pose (many DCC exports) or something in between; rather than assume,
+ * measure the arms and place the control rig in the same posture before the
+ * deltas are captured. Otherwise the difference between the two rest poses is
+ * silently baked in and every imported character stands with its arms out.
+ *
+ * @param {object} mapping control-rig slot -> imported bone
+ * @returns {{armL: number, armR: number}} radians of abduction from hanging straight down
+ */
+export function measureRestPose(mapping) {
+  const angleOf = (a, b, sign) => {
+    if (!a || !b) return null;
+    a.updateWorldMatrix(true, false);
+    b.updateWorldMatrix(true, false);
+    const pa = new THREE.Vector3().setFromMatrixPosition(a.matrixWorld);
+    const pb = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
+    const d = pb.sub(pa);
+    if (d.lengthSq() < 1e-9) return null;
+    d.normalize();
+    // 0 = hanging straight down, +pi/2 = horizontal and outward.
+    return Math.atan2(sign * d.x, -d.y);
+  };
+  return {
+    armL: angleOf(mapping.upperArmL, mapping.foreArmL, 1),
+    armR: angleOf(mapping.upperArmR, mapping.foreArmR, -1),
+  };
+}
+
 export class Retargeter {
   constructor(sourceBones, targetMapping, options = {}) {
     this.pairs = [];
@@ -442,6 +475,13 @@ export async function loadAvatar(buffer, options = {}) {
     });
   });
 
+  // Synthesise a mouth when the model has none, before the driver scans for
+  // what it can control.
+  let generatedJaw = null;
+  if (!vrm && !hasMouthShape(root)) {
+    generatedJaw = buildJawMorph(root, mapping);
+  }
+
   const expressions = new ExpressionDriver(root, vrm);
 
   const report = {
@@ -453,9 +493,328 @@ export async function loadAvatar(buffer, options = {}) {
     morphTargets: expressions.available.length,
     visemes: expressions.hasVisemes,
     expressionSlots: Object.keys(expressions.slots),
+    generatedJaw: generatedJaw
+      ? { meshes: generatedJaw.meshes, vertices: generatedJaw.vertices, dropRatio: generatedJaw.dropRatio, landmarks: generatedJaw.landmarks }
+      : null,
   };
 
-  return { root, mapping, expressions, vrm, height: targetHeight, report };
+  return { root, mapping, expressions, vrm, generatedJaw, height: targetHeight, report };
+}
+
+// ---------------------------------------------------------------------------
+// Generated jaw — lip sync for models that ship no blendshapes
+// ---------------------------------------------------------------------------
+
+/**
+ * Mixamo characters, and most stock game models, have a head mesh but no
+ * facial rig at all: no jaw bone, no morph targets. Their mouths physically
+ * cannot open, which is fatal for dialogue and worse for song.
+ *
+ * Rather than reject those models, synthesise the missing morph. We locate the
+ * mouth geometrically, then build a `jawOpen` morph target by rotating the
+ * lower face about an anatomical hinge. It cannot produce true phoneme shapes
+ * — there is no `aa` versus `oo` — but it turns "the mouth never moves" into
+ * "the mouth opens with the voice", which is the difference between unusable
+ * and usable.
+ *
+ * Everything is derived from the geometry itself, so it works on any rig whose
+ * head bone we managed to map.
+ */
+
+const JAW_MORPH_NAME = 'jawOpen';
+
+/** True if the model already has something we can drive as a mouth. */
+export function hasMouthShape(root) {
+  let found = false;
+  root.traverse((o) => {
+    if (!o.morphTargetDictionary) return;
+    if (Object.keys(o.morphTargetDictionary).some((k) => /viseme|jaw_?open|mouth_?open|^(aa|a)$/i.test(k))) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+/** Head bone plus every bone below it — the vertices we consider "head". */
+function headBoneSet(headBone) {
+  const set = new Set();
+  headBone.traverse((o) => { if (o.isBone || o.isObject3D) set.add(o); });
+  return set;
+}
+
+/**
+ * Build and attach a `jawOpen` morph target to every mesh containing mouth
+ * geometry.
+ *
+ * @param {THREE.Object3D} root imported model
+ * @param {object} mapping control-rig slot -> imported bone
+ * @param {object} [options] `{ angle }` maximum jaw rotation in radians
+ * @returns {object|null} a report, or null if no head bone was mapped
+ */
+export function buildJawMorph(root, mapping, options = {}) {
+  const headBone = mapping.head;
+  if (!headBone) return null;
+
+  const maxAngle = options.angle ?? 0.30;
+  const group = headBoneSet(headBone);
+
+  // --- Head frame -----------------------------------------------------------
+  // Up runs along the bone toward its child; forward is world +Z expressed in
+  // the bone's own space, since imported avatars are normalised to face +Z.
+  headBone.updateWorldMatrix(true, false);
+  const headQuat = new THREE.Quaternion();
+  headBone.matrixWorld.decompose(new THREE.Vector3(), headQuat, new THREE.Vector3());
+  const headWorldPos = new THREE.Vector3().setFromMatrixPosition(headBone.matrixWorld);
+
+  // "Up" has to come from the neck-to-head axis. Taking the head bone's first
+  // child is unreliable: on a Mixamo rig that child is usually an eye, which
+  // points forward and sideways and skews the entire frame — which in turn
+  // sends the mouth detection hunting in the wrong part of the skull.
+  let up = null;
+  if (mapping.neck) {
+    mapping.neck.updateWorldMatrix(true, false);
+    const neckPos = new THREE.Vector3().setFromMatrixPosition(mapping.neck.matrixWorld);
+    const dirWorld = headWorldPos.clone().sub(neckPos);
+    if (dirWorld.lengthSq() > 1e-10) {
+      up = dirWorld.normalize().applyQuaternion(headQuat.clone().invert()).normalize();
+    }
+  }
+  if (!up) {
+    const tip = headBone.children.find((c) => /top|end|skull/i.test(c.name) && !/eye/i.test(c.name))
+      || headBone.children.filter((c) => !/eye/i.test(c.name))
+        .sort((a, b) => b.position.lengthSq() - a.position.lengthSq())[0];
+    up = tip && tip.position.lengthSq() > 1e-8
+      ? tip.position.clone().normalize()
+      : new THREE.Vector3(0, 1, 0);
+  }
+  const forward = new THREE.Vector3(0, 0, 1)
+    .applyQuaternion(headQuat.clone().invert())
+    .projectOnPlane(up)
+    .normalize();
+  if (!Number.isFinite(forward.x) || forward.lengthSq() < 0.1) forward.set(0, 0, 1);
+  const right = new THREE.Vector3().crossVectors(up, forward).normalize();
+
+  // --- Gather head vertices in head-local space -----------------------------
+  const candidates = [];
+  root.traverse((o) => {
+    if (!o.isSkinnedMesh || !o.geometry?.attributes?.position) return;
+    const headIndex = o.skeleton.bones.indexOf(headBone);
+    const groupIndices = new Set();
+    const eyeIndices = new Set();
+    o.skeleton.bones.forEach((b, i) => {
+      if (group.has(b)) groupIndices.add(i);
+      if (/eye|lash|brow|pupil|iris|cornea/i.test(b.name)) eyeIndices.add(i);
+    });
+    if (headIndex < 0 && !groupIndices.size) return;
+    if (/eye|lash|brow|cornea|pupil/i.test(o.name)) return;
+
+    const toHead = new THREE.Matrix4()
+      .multiplyMatrices(o.skeleton.boneInverses[Math.max(0, headIndex)], o.bindMatrix);
+
+    const pos = o.geometry.attributes.position;
+    const skinIndex = o.geometry.attributes.skinIndex;
+    const skinWeight = o.geometry.attributes.skinWeight;
+    const local = new Float32Array(pos.count * 3);
+    const weight = new Float32Array(pos.count);
+    const v = new THREE.Vector3();
+    let any = 0;
+
+    for (let i = 0; i < pos.count; i++) {
+      let w = 0;
+      let eyeW = 0;
+      if (skinIndex && skinWeight) {
+        for (let k = 0; k < 4; k++) {
+          const bi = skinIndex.getComponent(i, k);
+          const bw = skinWeight.getComponent(i, k);
+          if (groupIndices.has(bi)) w += bw;
+          if (eyeIndices.has(bi)) eyeW += bw;
+        }
+      } else {
+        w = 1;
+      }
+      if (eyeW > 0.25) w = 0;
+      weight[i] = w;
+      if (w < 0.5) continue;
+      v.fromBufferAttribute(pos, i).applyMatrix4(toHead);
+      local[i * 3] = v.dot(right);
+      local[i * 3 + 1] = v.dot(up);
+      local[i * 3 + 2] = v.dot(forward);
+      any++;
+    }
+    if (any > 24) candidates.push({ mesh: o, local, weight, toHead, count: pos.count });
+  });
+
+  if (!candidates.length) return null;
+
+  // --- Anatomy from the geometry -------------------------------------------
+  // The forward-most vertex in the upper head is the nose tip, which anchors
+  // everything else far more reliably than absolute proportions do.
+  let minUp = Infinity;
+  let maxUp = -Infinity;
+  for (const c of candidates) {
+    for (let i = 0; i < c.count; i++) {
+      if (c.weight[i] < 0.5) continue;
+      const y = c.local[i * 3 + 1];
+      if (y < minUp) minUp = y;
+      if (y > maxUp) maxUp = y;
+    }
+  }
+  const headHeight = maxUp - minUp;
+  if (!(headHeight > 1e-4)) return null;
+
+  let noseUp = minUp + headHeight * 0.55;
+  let bestFwd = -Infinity;
+  for (const c of candidates) {
+    for (let i = 0; i < c.count; i++) {
+      if (c.weight[i] < 0.5) continue;
+      const y = c.local[i * 3 + 1];
+      // Only look in the middle band: the crown and the neck both mislead.
+      if (y < minUp + headHeight * 0.35 || y > minUp + headHeight * 0.80) continue;
+      if (Math.abs(c.local[i * 3]) > headHeight * 0.12) continue; // near the centreline
+      const z = c.local[i * 3 + 2];
+      if (z > bestFwd) { bestFwd = z; noseUp = y; }
+    }
+  }
+
+  // Anchor the facial landmarks to nose-tip-to-crown rather than to total head
+  // height. How much neck ends up weighted to the head bone varies wildly
+  // between rigs, so total height is an unstable ruler — and if the ruler is
+  // long, the mouth line lands below the lips and they travel together instead
+  // of parting.
+  const faceUnit = Math.max(1e-5, maxUp - noseUp);
+  const mouthUp = noseUp - faceUnit * 0.21;
+  const chinUp = noseUp - faceUnit * 0.46;
+  const hingeUp = noseUp + faceUnit * 0.09;      // roughly ear height
+  const hingeFwd = bestFwd - faceUnit * 0.72;    // set back toward the ear canal
+  const span = Math.max(1e-5, hingeUp - chinUp);
+  const frontSpan = Math.max(1e-5, bestFwd - hingeFwd);
+
+  const hinge = new THREE.Vector3()
+    .addScaledVector(up, hingeUp)
+    .addScaledVector(forward, hingeFwd);
+
+  // --- Build the morph ------------------------------------------------------
+  const axis = right.clone();
+  const applied = [];
+  const q = new THREE.Quaternion();
+  const rel = new THREE.Vector3();
+  const p = new THREE.Vector3();
+
+  for (const c of candidates) {
+    const { mesh, local, weight, count } = c;
+    const deltas = new Float32Array(count * 3);
+    const inverseToHead = new THREE.Matrix4().copy(c.toHead).invert();
+    let touched = 0;
+
+    for (let i = 0; i < count; i++) {
+      if (weight[i] < 0.4) continue;
+      const x = local[i * 3];
+      const y = local[i * 3 + 1];
+      const z = local[i * 3 + 2];
+      if (y > hingeUp + headHeight * 0.05) continue; // well above the hinge
+
+      // The mandible boundary. At the face it is the mouth line; sweeping back
+      // toward the ears it rises to meet the hinge itself. Weighting linearly
+      // from the hinge instead just stretches the whole lower face downward and
+      // the lips never part, because upper and lower lip travel together.
+      const tz = THREE.MathUtils.clamp((z - hingeFwd) / frontSpan, 0, 1);
+      const boundary = THREE.MathUtils.lerp(hingeUp, mouthUp, tz);
+      const band = faceUnit * 0.05;
+      let w = THREE.MathUtils.clamp((boundary + band - y) / (2 * band), 0, 1);
+      w = w * w * (3 - 2 * w);
+      // Fade out around the back of the skull and the neck column.
+      const front = THREE.MathUtils.smoothstep(z, hingeFwd - faceUnit * 0.10, hingeFwd + faceUnit * 0.50);
+      // Fade at the extreme sides so the cheeks don't shear.
+      const side = 1 - THREE.MathUtils.smoothstep(Math.abs(x), faceUnit * 0.45, faceUnit * 0.72);
+      w *= front * side * Math.min(1, weight[i]);
+      if (w < 0.004) continue;
+
+      p.set(0, 0, 0).addScaledVector(right, x).addScaledVector(up, y).addScaledVector(forward, z);
+      rel.subVectors(p, hinge);
+      q.setFromAxisAngle(axis, maxAngle * w);
+      rel.applyQuaternion(q).add(hinge).sub(p);
+
+      // Back into the mesh's own space, where morph deltas live.
+      const dx = rel.dot(right);
+      const dy = rel.dot(up);
+      const dz = rel.dot(forward);
+      const worldDelta = new THREE.Vector3()
+        .addScaledVector(right, dx).addScaledVector(up, dy).addScaledVector(forward, dz);
+      worldDelta.applyMatrix4(new THREE.Matrix4().extractRotation(inverseToHead));
+
+      deltas[i * 3] = worldDelta.x;
+      deltas[i * 3 + 1] = worldDelta.y;
+      deltas[i * 3 + 2] = worldDelta.z;
+      touched++;
+    }
+
+    if (touched < 12) continue;
+
+    // Largest displacement, in head-local units, for the report.
+    let maxDelta = 0;
+    for (let i = 0; i < count; i++) {
+      const dx = deltas[i * 3];
+      const dy = deltas[i * 3 + 1];
+      const dz = deltas[i * 3 + 2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > maxDelta) maxDelta = d2;
+    }
+    maxDelta = Math.sqrt(maxDelta);
+
+    const geo = mesh.geometry;
+    if (!geo.morphAttributes.position) geo.morphAttributes.position = [];
+    geo.morphAttributes.position.push(new THREE.BufferAttribute(deltas, 3));
+    geo.morphTargetsRelative = true;
+
+    const slot = geo.morphAttributes.position.length - 1;
+    mesh.morphTargetDictionary = mesh.morphTargetDictionary || {};
+    mesh.morphTargetDictionary[JAW_MORPH_NAME] = slot;
+    mesh.morphTargetInfluences = mesh.morphTargetInfluences || [];
+    while (mesh.morphTargetInfluences.length <= slot) mesh.morphTargetInfluences.push(0);
+
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    mats.forEach((m) => { if (m) m.needsUpdate = true; });
+
+    applied.push({ mesh: mesh.name || '(unnamed)', vertices: touched, maxDelta: +maxDelta.toFixed(4) });
+  }
+
+  if (!applied.length) return null;
+
+  // --- Mouth cavity ---------------------------------------------------------
+  // An opened jaw on a solid head reveals the inside of the skull. A dark
+  // ellipsoid behind the lips reads as a mouth instead of a hole.
+  const mouthPoint = new THREE.Vector3()
+    .addScaledVector(up, mouthUp)
+    .addScaledVector(forward, bestFwd - faceUnit * 0.22);
+
+  const cavity = new THREE.Mesh(
+    new THREE.SphereGeometry(faceUnit * 0.26, 12, 10),
+    new THREE.MeshBasicMaterial({ color: '#25101a', side: THREE.BackSide, toneMapped: false }),
+  );
+  cavity.position.copy(mouthPoint);
+  cavity.scale.set(1.15, 0.62, 0.8);
+  cavity.renderOrder = -1;
+  cavity.name = 'generatedMouthCavity';
+  headBone.add(cavity);
+
+  return {
+    applied,
+    headHeight: +headHeight.toFixed(4),
+    noseUp: +noseUp.toFixed(4),
+    mouthUp: +mouthUp.toFixed(4),
+    hingeUp: +hingeUp.toFixed(4),
+    angle: maxAngle,
+    faceUnit: +faceUnit.toFixed(4),
+    landmarks: {
+      mouth: +((mouthUp - minUp) / headHeight).toFixed(3),
+      nose: +((noseUp - minUp) / headHeight).toFixed(3),
+      hinge: +((hingeUp - minUp) / headHeight).toFixed(3),
+    },
+    meshes: applied.length,
+    vertices: applied.reduce((s, a) => s + a.vertices, 0),
+    // As a fraction of head height: a real jaw drop is roughly 0.12–0.22.
+    dropRatio: +(Math.max(...applied.map((a) => a.maxDelta)) / headHeight).toFixed(3),
+  };
 }
 
 // ---------------------------------------------------------------------------

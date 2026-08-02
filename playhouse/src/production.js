@@ -15,9 +15,35 @@ import { VFXSystem, ABILITY_DEFAULTS } from './vfx.js';
 import { direct, solveShot, shotAt, describeShot } from './director.js';
 import { disposeObject } from './engine.js';
 import { MAGIC_COLOURS } from './human.js';
-import { loadAvatar, Retargeter } from './avatar.js';
+import { loadAvatar, Retargeter, measureRestPose } from './avatar.js';
 
 const _v = new THREE.Vector3();
+
+
+/** Angle of a control-rig arm from hanging straight down, at bind. */
+function controlArmAngle(bones, side) {
+  const a = bones[`upperArm${side}`];
+  const b = bones[`foreArm${side}`];
+  if (!a || !b) return 0;
+  a.updateWorldMatrix(true, false);
+  b.updateWorldMatrix(true, false);
+  const pa = new THREE.Vector3().setFromMatrixPosition(a.matrixWorld);
+  const pb = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
+  const d = pb.sub(pa).normalize();
+  return Math.atan2((side === 'L' ? 1 : -1) * d.x, -d.y);
+}
+
+/** Rotate the control rig's arms to sit where the imported rig's arms sit. */
+function matchRestPose(bones, target) {
+  for (const side of ['L', 'R']) {
+    const wanted = side === 'L' ? target.armL : target.armR;
+    if (wanted === null || wanted === undefined) continue;
+    const own = controlArmAngle(bones, side);
+    const delta = wanted - own;
+    const bone = bones[`upperArm${side}`];
+    if (bone) bone.rotation.z = (side === 'L' ? 1 : -1) * delta;
+  }
+}
 
 export class Production {
   constructor(engine) {
@@ -154,7 +180,11 @@ export class Production {
     const rig = createCharacter(spec, { bonesOnly: true });
     rig.add(avatar.root);
 
-    // Build the retargeter while both skeletons are still in their rest pose.
+    // Put the control rig into whatever rest posture the import was authored
+    // in before capturing the reference. Without this, an A-pose control rig
+    // driving a T-pose import leaves every character standing arms-out.
+    matchRestPose(rig.userData.bones, measureRestPose(avatar.mapping));
+    rig.updateMatrixWorld(true);
     const retargeter = new Retargeter(rig.userData.bones, avatar.mapping, { scale: 1 });
 
     const animator = new Animator(rig, index);
