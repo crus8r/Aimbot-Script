@@ -11,6 +11,7 @@ import {
 } from './human.js';
 import { direct } from './director.js';
 import { ABILITIES } from './parser.js';
+import { saveAvatarFile, loadStoredAvatars, clearStoredAvatar } from './avatar.js';
 
 const SAMPLE = `Title: The Lamplighter's Hour
 Author: a Playhouse demo
@@ -342,12 +343,55 @@ function renderScriptPanel(body) {
 
 // --- Cast -------------------------------------------------------------------
 
+/** Import a .glb/.vrm for a character and report how well it mapped. */
+async function importAvatarFor(name, file) {
+  toast(`Loading ${file.name}…`, 8000);
+  try {
+    const buffer = await file.arrayBuffer();
+    const report = await production.setAvatar(name, buffer, file.name);
+    await saveAvatarFile(name, buffer, file.name);
+    const warn = report.unmapped.length
+      ? ` · ${report.unmapped.length} bone${report.unmapped.length === 1 ? '' : 's'} unmapped`
+      : '';
+    toast(`${name}: ${report.retargeted} bones retargeted`
+      + `${report.visemes ? ', visemes found' : ', no visemes (jaw only)'}${warn}`, 4200);
+    renderPanel('cast');
+  } catch (err) {
+    toast(`Could not load that avatar: ${err.message}`, 5000);
+    console.error(err);
+  }
+}
+
+/** Re-attach avatars saved in a previous session. */
+async function restoreAvatars() {
+  const stored = await loadStoredAvatars();
+  let restored = 0;
+  for (const [name, record] of stored) {
+    if (!production.cast.has(name)) continue;
+    try {
+      await production.setAvatar(name, record.buffer, record.filename);
+      restored++;
+    } catch { /* stale or corrupt entry */ }
+  }
+  if (restored) toast(`Restored ${restored} imported avatar${restored === 1 ? '' : 's'}`);
+}
+
 function renderCastPanel(body) {
   const script = production.script;
   if (!script?.characters.length) {
     body.innerHTML = '<div class="hint">No speaking parts found yet. Stage a script first.</div>';
     return;
   }
+
+  const intro = document.createElement('div');
+  intro.className = 'hint';
+  intro.style.marginBottom = '10px';
+  intro.innerHTML = `Import a <code>.glb</code> or <code>.vrm</code> per character for a much higher
+    quality cast — make them free at <strong>readyplayer.me</strong> (browser, exports .glb with
+    visemes) or <strong>VRoid Studio</strong> (.vrm). Everything they do on stage — walking,
+    gesturing, eye contact, lip sync — is driven here, so you never supply animation.
+    Skin and costume are baked into the file, so make one avatar per character.`;
+  body.appendChild(intro);
 
   for (const record of script.characters) {
     const spec = production.specs.get(record.name);
@@ -367,6 +411,59 @@ function renderCastPanel(body) {
       const next = production.recast(record.name, state.overrides[record.name]);
       head.querySelector('.swatch').style.background = next.skin;
     };
+
+    // --- Imported avatar ---------------------------------------------------
+    const imported = production.avatars.get(record.name);
+    const avatarRow = document.createElement('div');
+    avatarRow.className = 'row';
+    avatarRow.style.margin = '4px 0 10px';
+
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = '.glb,.gltf,.vrm,model/gltf-binary';
+    picker.style.display = 'none';
+    picker.onchange = () => { if (picker.files?.[0]) importAvatarFor(record.name, picker.files[0]); };
+    avatarRow.appendChild(picker);
+
+    const importBtn = document.createElement('button');
+    importBtn.className = imported ? 'btn small' : 'btn small primary';
+    importBtn.textContent = imported ? 'Replace avatar' : 'Import avatar';
+    importBtn.onclick = () => picker.click();
+    avatarRow.appendChild(importBtn);
+
+    if (imported) {
+      const drop = document.createElement('button');
+      drop.className = 'btn small';
+      drop.textContent = 'Remove';
+      drop.onclick = async () => {
+        await clearStoredAvatar(record.name);
+        production.clearAvatar(record.name);
+        renderPanel('cast');
+      };
+      avatarRow.appendChild(drop);
+
+      const status = document.createElement('div');
+      status.className = 'hint';
+      status.style.cssText = 'width:100%;margin:2px 0 0';
+      const r = imported.report;
+      status.innerHTML = `<strong>${r.kind.toUpperCase()}</strong> · ${r.retargeted}/21 bones ·
+        ${r.visemes ? `${r.morphTargets} morphs, visemes ✓` : 'no visemes'} ·
+        scaled ×${r.appliedScale}
+        ${r.unmapped.length ? `<br><span style="color:#c9a">unmapped: ${r.unmapped.join(', ')}</span>` : ''}`;
+      avatarRow.appendChild(status);
+    }
+    card.appendChild(avatarRow);
+
+    // Procedural controls only matter when there's no imported body.
+    if (imported) {
+      const note = document.createElement('div');
+      note.className = 'hint';
+      note.textContent = 'Skin, hair and costume come from the imported file. '
+        + 'Poses, walk, gestures and lip sync are driven here.';
+      card.appendChild(note);
+      body.appendChild(card);
+      continue;
+    }
 
     card.appendChild(selectField('Build', Object.keys(BUILDS), spec.build, (v) => set('build', v)));
     card.appendChild(selectField('Hair', HAIR_STYLES, spec.hairStyle, (v) => set('hairStyle', v)));
@@ -667,6 +764,7 @@ try {
   production.seek(0);
   production.play();
   frame();
+  restoreAvatars();
 } catch (err) {
   ui.bootMsg.innerHTML = `Failed to start.<br><span style="font-size:11px;color:#c88">${err.message}</span>`;
   console.error(err);

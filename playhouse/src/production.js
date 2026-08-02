@@ -15,6 +15,7 @@ import { VFXSystem, ABILITY_DEFAULTS } from './vfx.js';
 import { direct, solveShot, shotAt, describeShot } from './director.js';
 import { disposeObject } from './engine.js';
 import { MAGIC_COLOURS } from './human.js';
+import { loadAvatar, Retargeter } from './avatar.js';
 
 const _v = new THREE.Vector3();
 
@@ -29,6 +30,8 @@ export class Production {
     this.animators = new Map(); // name -> Animator
     this.movers = new Map();    // name -> Mover
     this.specs = new Map();     // name -> appearance spec
+    this.avatars = new Map();   // name -> { retargeter, expressions, root, report }
+    this.avatarFiles = new Map(); // name -> { buffer, filename } for rebuilds
 
     this.stageCache = new Map();
     this.stage = null;
@@ -62,6 +65,7 @@ export class Production {
    * @param {Object<string, object>} [overrides] per-character appearance overrides
    */
   load(text, overrides = {}) {
+    this.overrides = overrides;
     this.script = parseScript(text);
     this.plan = direct(this.script, { pace: this.pace ?? 1 });
 
@@ -71,7 +75,14 @@ export class Production {
       if (!wanted.has(name)) this.#destroyCharacter(name);
     }
 
+    const reapply = [];
     this.script.characters.forEach((record, i) => {
+      // Imported bodies survive a re-stage; only their rig is rebuilt.
+      if (this.avatars.has(record.name)) {
+        const stored = this.avatarFiles.get(record.name);
+        if (stored) reapply.push([record.name, stored]);
+        return;
+      }
       const spec = castCharacter(record.name, overrides[record.name] || {}, i);
       const prev = this.specs.get(record.name);
       if (prev && JSON.stringify(prev) === JSON.stringify(spec)) return;
@@ -97,6 +108,9 @@ export class Production {
     this.firedCues.clear();
 
     this.seek(0);
+    for (const [name, stored] of reapply) {
+      this.setAvatar(name, stored.buffer, stored.filename).catch(() => {});
+    }
     return this.script;
   }
 
@@ -109,10 +123,82 @@ export class Production {
     this.animators.delete(name);
     this.movers.delete(name);
     this.specs.delete(name);
+    this.avatars.delete(name);
   }
+
+  // -------------------------------------------------------------------------
+  // Imported avatars
+  // -------------------------------------------------------------------------
+
+  /**
+   * Replace a character's body with an imported .glb / .vrm, driven by the
+   * same control rig. Everything else — blocking, poses, camera, cues — is
+   * untouched, because none of it ever talked to the mesh.
+   *
+   * @param {string} name character name
+   * @param {ArrayBuffer} buffer file contents
+   * @param {string} [filename]
+   * @returns {Promise<object>} an import report for the UI
+   */
+  async setAvatar(name, buffer, filename = '') {
+    const index = Math.max(0, this.script.characters.findIndex((c) => c.name === name));
+    const spec = this.specs.get(name) || castCharacter(name, this.overrides?.[name] || {}, index);
+
+    // Load first: if it fails we have not touched the existing character.
+    const avatar = await loadAvatar(buffer.slice(0), { targetHeight: 1.75 });
+
+    const wasVisible = !!this.cast.get(name)?.parent;
+    this.#destroyCharacter(name);
+
+    // Control rig: skeleton only, no procedural body.
+    const rig = createCharacter(spec, { bonesOnly: true });
+    rig.add(avatar.root);
+
+    // Build the retargeter while both skeletons are still in their rest pose.
+    const retargeter = new Retargeter(rig.userData.bones, avatar.mapping, { scale: 1 });
+
+    const animator = new Animator(rig, index);
+    this.cast.set(name, rig);
+    this.specs.set(name, spec);
+    this.animators.set(name, animator);
+    this.movers.set(name, new Mover(rig, animator));
+    this.avatars.set(name, {
+      root: avatar.root,
+      retargeter,
+      expressions: avatar.expressions,
+      vrm: avatar.vrm,
+      report: { ...avatar.report, retargeted: retargeter.matched.length, unmapped: retargeter.missing },
+    });
+    this.avatarFiles.set(name, { buffer, filename });
+
+    if (wasVisible && this.stage) {
+      this.engine.scene.add(rig);
+      this.#placeCast(this.script.scenes[this.sceneIndex]);
+    }
+    return this.avatars.get(name).report;
+  }
+
+  /** Drop an imported avatar and go back to the procedural body. */
+  clearAvatar(name) {
+    if (!this.avatars.has(name)) return;
+    this.avatars.delete(name);
+    this.avatarFiles.delete(name);
+    this.recast(name, this.overrides?.[name] || {});
+  }
+
+  hasAvatar(name) { return this.avatars.has(name); }
 
   /** Re-dress one character without rebuilding the rest of the production. */
   recast(name, overrides) {
+    // An imported body owns its own look; rebuild it rather than replacing it
+    // with a procedural one.
+    if (this.avatars.has(name)) {
+      const stored = this.avatarFiles.get(name);
+      if (stored) {
+        this.setAvatar(name, stored.buffer, stored.filename).catch(() => {});
+        return this.specs.get(name);
+      }
+    }
     const index = this.script.characters.findIndex((c) => c.name === name);
     const spec = castCharacter(name, overrides, Math.max(0, index));
     const wasInScene = this.stage && this.cast.get(name)?.parent;
@@ -278,6 +364,18 @@ export class Production {
       if (!character?.parent) continue;
       this.movers.get(name)?.update(dt);
       animator.update(dt, elapsed);
+
+      // Imported bodies take the control rig's motion and their own faces.
+      const avatar = this.avatars.get(name);
+      if (avatar) {
+        character.updateMatrixWorld(true);
+        avatar.retargeter.apply(character.userData.bones.root);
+        const ex = avatar.expressions;
+        ex.speak(animator.mouthOpen, elapsed);
+        ex.blink(animator.blinkAmount);
+        ex.emotion(animator.emotion, 0.75);
+        ex.update(dt);
+      }
     }
 
     // --- Camera -----------------------------------------------------------
@@ -348,6 +446,7 @@ export class Production {
     for (const [name, animator] of this.animators) {
       const character = this.cast.get(name);
       if (!character?.parent) continue;
+      animator.emotion = beat.emotion || 'neutral';
       if (name === speakerName && (beat.type === 'dialogue' || beat.type === 'lyric')) {
         animator.setPose(poseForBeat(beat));
         animator.setTalking(true, beat.intensity ?? 0.5);

@@ -314,11 +314,11 @@ function chooseArchetype(location, interior) {
  */
 const MOODS = {
   NIGHT: {
-    key: { colour: '#ffd0a0', intensity: 0.35, dir: [-3, 5, 4] },
-    fill: { colour: '#4a6a9a', intensity: 0.28, dir: [4, 3, 2] },
-    rim: { colour: '#9ab8e8', intensity: 1.05, dir: [1, 4, -6] },
-    ambient: { colour: '#2a3450', intensity: 0.30 },
-    background: '#0a0d16', fog: [0.020, '#0a0d16'], exposure: 1.15,
+    key: { colour: '#ffd0a0', intensity: 0.95, dir: [-3, 5, 4] },
+    fill: { colour: '#5a7aae', intensity: 0.55, dir: [4, 3, 2] },
+    rim: { colour: '#a8c4f0', intensity: 1.9, dir: [1, 4, -6] },
+    ambient: { colour: '#3a4668', intensity: 0.80 },
+    background: '#0d1220', fog: [0.016, '#0d1220'], exposure: 1.35,
   },
   DAY: {
     key: { colour: '#fff2dc', intensity: 2.5, dir: [-4, 7, 5] },
@@ -328,10 +328,10 @@ const MOODS = {
     background: '#9fc0dd', fog: [0.006, '#b8cfe4'], exposure: 1.0,
   },
   DUSK: {
-    key: { colour: '#ff9f5e', intensity: 1.3, dir: [-6, 2.4, 3] },
-    fill: { colour: '#5a6ea8', intensity: 0.45, dir: [4, 3, 2] },
-    rim: { colour: '#ffb27a', intensity: 1.5, dir: [-5, 2, -5] },
-    ambient: { colour: '#4a4468', intensity: 0.50 },
+    key: { colour: '#ff9f5e', intensity: 1.7, dir: [-6, 2.4, 3] },
+    fill: { colour: '#6a7eb8', intensity: 0.62, dir: [4, 3, 2] },
+    rim: { colour: '#ffb27a', intensity: 1.9, dir: [-5, 2, -5] },
+    ambient: { colour: '#5a5480', intensity: 0.72 },
     background: '#2e2740', fog: [0.012, '#3a2f42'], exposure: 1.08,
   },
   DAWN: {
@@ -360,9 +360,10 @@ function moodFor(timeOfDay, interior) {
   const mood = JSON.parse(JSON.stringify(MOODS[key]));
   if (interior) {
     // Interiors get less sky and more bounce, so practicals can carry the scene.
-    mood.key.intensity *= 0.55;
-    mood.fill.intensity *= 0.8;
-    mood.ambient.intensity *= 0.85;
+    // Interiors lose the sky but gain bounce, and practicals carry the room.
+    mood.key.intensity *= 0.80;
+    mood.fill.intensity *= 0.95;
+    mood.ambient.intensity *= 1.15;
     mood.fog = null;
   }
   mood.name = key;

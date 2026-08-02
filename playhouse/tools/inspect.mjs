@@ -12,7 +12,6 @@ fs.mkdirSync(out, { recursive: true });
 const r = await esbuild.build({
   entryPoints: [path.join(root, 'src/debug-figure.js')],
   bundle: true, format: 'iife', minify: false, target: ['es2021'],
-  alias: { three: path.join(root, 'vendor/three.module.min.js') },
   write: false, logLevel: 'warning',
 });
 const js = r.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');

@@ -584,16 +584,14 @@ function buildHair(style, f, colour) {
 
   // Length elements.
   if (style === 'long' || style === 'bob') {
-    const drop = style === 'long' ? 0.28 : 0.10;
-    const curtain = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.098, style === 'long' ? 0.088 : 0.094, drop, 18, 3, true, Math.PI * 0.18, Math.PI * 1.64),
-      mat,
-    );
-    curtain.position.set(0, 0.050 - drop / 2, -0.010);
-    curtain.rotation.y = Math.PI / 2;
-    curtain.scale.set(0.88, 1, 0.98);
-    curtain.castShadow = true;
-    group.add(curtain);
+    // A mass behind the head rather than a sleeve around it: a full cylinder
+    // here wraps across the face, which is what it used to do.
+    const drop = style === 'long' ? 0.26 : 0.11;
+    const fall = new THREE.Mesh(new THREE.SphereGeometry(0.092, 16, 14), mat);
+    fall.scale.set(0.92, drop / 0.092 * 0.62, 0.78);
+    fall.position.set(0, 0.030 - drop * 0.42, -0.030);
+    fall.castShadow = true;
+    group.add(fall);
   }
   if (style === 'ponytail') {
     const tail = new THREE.Mesh(new THREE.CapsuleGeometry(0.030, 0.18, 4, 10), mat);
@@ -633,7 +631,7 @@ function buildEyes(f, eyeColour) {
   const eyes = [];
   for (const S of [1, -1]) {
     const eye = new THREE.Group();
-    eye.position.set(S * 0.032 * f.width, 0.068, 0.058);
+    eye.position.set(S * 0.031 * f.width, 0.068, 0.0655);
 
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.0128, 14, 12), eyeWhiteMaterial());
     eye.add(ball);
@@ -901,7 +899,7 @@ export { HAIR_STYLES, OUTFITS, BUILDS };
  * Build a rigged character from an appearance spec.
  * @returns {THREE.Group} with `.bones`, `.skeleton`, `.parts`, `.spec`
  */
-export function createCharacter(spec) {
+export function createCharacter(spec, options = {}) {
   const build = BUILDS[spec.build] || BUILDS.average;
   const p = { ...build, bust: spec.bust ?? 1.0, outfit: spec.outfit, limb: build.limb };
   const f = { ...spec.face, skin: spec.skin };
@@ -921,6 +919,30 @@ export function createCharacter(spec) {
     bones[parentIdx].add(bones[i]);
   });
   const rootBone = bones[0];
+  const boneLookup = Object.fromEntries(bones.map((b) => [b.name, b]));
+
+  // A control rig is the skeleton alone: the animation system drives it and a
+  // retargeter copies the result onto an imported avatar. No meshes needed.
+  if (options.bonesOnly) {
+    const rig = new THREE.Group();
+    rig.name = spec.name;
+    rig.add(rootBone);
+    rig.scale.setScalar(spec.height ?? 1);
+    rig.userData = {
+      spec,
+      bones: boneLookup,
+      skeleton: null,
+      eyes: [],
+      body: null,
+      hair: null,
+      jaw: boneLookup.jaw,
+      controlRig: true,
+      height: 1.75 * (spec.height ?? 1),
+      eyeHeight: 1.63 * (spec.height ?? 1),
+      chestHeight: 1.30 * (spec.height ?? 1),
+    };
+    return rig;
+  }
 
   // --- Body mesh ----------------------------------------------------------
   const mb = new MeshBuilder();

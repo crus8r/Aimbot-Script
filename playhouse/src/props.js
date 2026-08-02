@@ -148,7 +148,7 @@ function buildOilLamp({ brass = '#b8873f', oil = '#c8862c' } = {}) {
 
   g.add(flame);
 
-  const light = new THREE.PointLight('#ffb765', 2.6, 6.5, 1.9);
+  const light = new THREE.PointLight('#ffb765', 6.5, 11, 1.35);
   light.position.set(0, 0.225, 0);
   light.castShadow = true;
   light.shadow.mapSize.set(512, 512);
@@ -164,7 +164,7 @@ function buildOilLamp({ brass = '#b8873f', oil = '#c8862c' } = {}) {
     flame.scale.set(0.9 + f * 0.14, f, 0.9 + f * 0.14);
     flame.position.x = Math.sin(t * 8.3) * 0.0014;
     flame.position.z = Math.cos(t * 6.9) * 0.0014;
-    light.intensity = 2.1 + f * 1.1;
+    light.intensity = 5.4 + f * 2.2;
   };
   g.userData.lightSource = light;
 
@@ -496,7 +496,7 @@ function buildFireplace({ stone = '#6a6258' } = {}) {
   emberGroup.add(fireHot);
   g.add(emberGroup);
 
-  const light = new THREE.PointLight('#ff9440', 3.4, 8, 2);
+  const light = new THREE.PointLight('#ff9440', 7.5, 12, 1.4);
   light.position.set(0, 0.42, 0.26);
   light.castShadow = true;
   light.shadow.mapSize.set(512, 512);
@@ -507,7 +507,7 @@ function buildFireplace({ stone = '#6a6258' } = {}) {
     const f = 0.85 + Math.sin(t * 7.7) * 0.10 + Math.sin(t * 19.3) * 0.06 + Math.sin(t * 3.1) * 0.05;
     fireCore.scale.set(1.5 * f, 0.8 * f, 0.7);
     fireHot.scale.set(1.4 * (2 - f), 0.9 * f, 0.6);
-    light.intensity = 2.6 + f * 1.4;
+    light.intensity = 6.2 + f * 2.6;
   };
   g.userData.lightSource = light;
   return g;
@@ -521,13 +521,13 @@ function buildCandle({ wax = '#e8e0cc' } = {}) {
   const flame = new THREE.Mesh(new THREE.ConeGeometry(0.010, 0.036, 8, 1, true), glowMaterial('#ffcf80', 0.9));
   flame.position.y = 0.012 + h + 0.016;
   g.add(flame);
-  const light = new THREE.PointLight('#ffbb70', 0.9, 3.2, 2);
+  const light = new THREE.PointLight('#ffbb70', 2.2, 5.0, 1.5);
   light.position.y = 0.012 + h + 0.03;
   g.add(light);
   g.userData.update = (dt, t) => {
     const f = 0.85 + Math.sin(t * 13.1) * 0.10 + Math.sin(t * 31.2) * 0.05;
     flame.scale.set(1, f, 1);
-    light.intensity = 0.7 + f * 0.5;
+    light.intensity = 1.8 + f * 0.9;
   };
   g.userData.lightSource = light;
   return g;
@@ -548,12 +548,12 @@ function buildChandelier({ brass = '#b8933f' } = {}) {
     flame.position.set(cx, 0.13, cz);
     g.add(flame);
   }
-  const light = new THREE.PointLight('#ffc98a', 2.6, 9, 1.8);
+  const light = new THREE.PointLight('#ffc98a', 6.0, 14, 1.35);
   light.position.y = 0.1;
   light.castShadow = true;
   light.shadow.mapSize.set(512, 512);
   g.add(light);
-  g.userData.update = (dt, t) => { light.intensity = 2.2 + Math.sin(t * 5.3) * 0.25; };
+  g.userData.update = (dt, t) => { light.intensity = 5.6 + Math.sin(t * 5.3) * 0.5; };
   g.userData.lightSource = light;
   g.userData.ceilingMounted = true;
   return g;

@@ -190,6 +190,8 @@ export class Animator {
     this.lookWeight = 0;
     this.blinkTimer = 1 + Math.random() * 3;
     this.blinkPhase = -1;
+    this.blinkAmount = 0;   // read by the avatar expression driver
+    this.emotion = 'neutral';
     this.gestureTimer = 0;
     this.walkPhase = 0;
     this.walkSpeed = 0;
@@ -365,8 +367,11 @@ export class Animator {
     if (this.blinkPhase >= 0) {
       this.blinkPhase += dt / 0.13;
       const closed = Math.sin(Math.min(1, this.blinkPhase) * Math.PI);
+      this.blinkAmount = closed;
       this.eyes.forEach((e) => { e.lid.rotation.x = -0.30 + closed * 1.35; });
       if (this.blinkPhase >= 1) this.blinkPhase = -1;
+    } else {
+      this.blinkAmount = 0;
     }
   }
 }

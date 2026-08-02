@@ -22,7 +22,6 @@ const result = await esbuild.build({
   format: 'iife',
   minify: true,
   target: ['es2021', 'safari15'],
-  alias: { three: path.join(root, 'vendor/three.module.min.js') },
   write: false,
   legalComments: 'none',
   logLevel: 'info',
