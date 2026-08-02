@@ -232,7 +232,7 @@ export class Game {
       companions,
       sponsors: [],
       offers: [],
-      ratings: { views: 0, followers: 0, favourites: 0, peak: 0 },
+      ratings: { views: 0, followers: 0, favourites: 0, peak: 0, recent: [], floorStart: 0, lastSpikeAt: 0 },
       counters: {
         kills: 0, bossKills: 0, unarmedKills: 0, environmentalKills: 0, punchingUpKills: 0,
         npcKills: 0, fled: 0, parleys: 0, boxesOpened: 0, roomsCleared: 0, trapsSet: 0,
@@ -271,6 +271,9 @@ export class Game {
     // A save written before the material layer existed has no record of what
     // has been dug out of anything, which is correct: nothing had been.
     state.dug ??= {};
+    state.ratings.recent ??= [];
+    state.ratings.floorStart ??= 0;
+    state.ratings.lastSpikeAt ??= 0;
     return new Game(state, narrator);
   }
 
@@ -2199,6 +2202,8 @@ export class Game {
     const def = floorDef(next);
     this.state.floor = generateFloor(this.state.seed, next);
     this.state.floorTally = blankTally();
+    // A floor is scored on its own, so the audience it drew is measured from here.
+    this.state.ratings.floorStart = this.state.ratings.views;
     this.state.claims = 0;
     this.state.shop = null;
     revealFrom(this.state.floor, this.state.floor.at);

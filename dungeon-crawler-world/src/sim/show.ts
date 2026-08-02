@@ -101,6 +101,13 @@ export function applyViews(state: GameState, log: EventLog, spec: Spectacle): vo
   r.followers = Math.round(r.views * 0.012);
   r.favourites = Math.round(r.views * 0.0025);
 
+  // The shape of the audience, not just its size. Forty is enough to draw and
+  // short enough that it never becomes a thing in the save file worth thinking
+  // about.
+  (r.recent ??= []).push(spec.views);
+  while (r.recent.length > 40) r.recent.shift();
+  r.lastSpikeAt = state.elapsed;
+
   const before = state.crawler.bounty;
   // Fame is a debt. The square root keeps it from running away, and the
   // multiplier keeps it from ever being free.

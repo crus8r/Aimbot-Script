@@ -331,6 +331,19 @@ export interface Ratings {
   followers: number;
   favourites: number;
   peak: number;
+  /**
+   * The last forty spikes, newest last.
+   *
+   * The totals alone are a scoreboard, and a scoreboard is not what being
+   * broadcast feels like. What a crawler would actually notice is the shape:
+   * the room where nobody was watching, the four seconds where everybody was.
+   * Kept short and capped because it is drawn, not analysed.
+   */
+  recent: number[];
+  /** Views at the moment this floor opened, so a floor can be scored on its own. */
+  floorStart: number;
+  /** Run hours at the last spike, so attention can be made to drain. */
+  lastSpikeAt: number;
 }
 
 export interface Counters {
