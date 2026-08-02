@@ -1,0 +1,20 @@
+{
+  "name": "playhouse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Script in, staged performance out. A procedural director for screenplays, plays and musicals.",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "test": "node tools/smoke.mjs",
+    "serve": "node tools/serve.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "playwright": "^1.49.0"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "three": "^0.169.0"
+  }
+}
