@@ -10,7 +10,7 @@ import {
   SKIN_TONES, HAIR_COLOURS, EYE_COLOURS, HAIR_STYLES, OUTFITS, BUILDS, MAGIC_COLOURS,
 } from './human.js';
 import { direct } from './director.js';
-import { ABILITIES } from './parser.js';
+import { ABILITIES, parseScript } from './parser.js';
 import { saveAvatarFile, loadStoredAvatars, clearStoredAvatar } from './avatar.js';
 
 const SAMPLE = `Title: The Lamplighter's Hour
@@ -95,19 +95,28 @@ const ui = {
 
 const state = {
   scriptText: SAMPLE,
+  // The last staging result, kept out of the DOM so it survives the panel
+  // being torn down and rebuilt.
+  scriptStatus: null,      // { text, tone: 'ok' | 'warn' | 'error' }
   overrides: {},
   panel: null,
+  importing: new Map(),    // character -> filename currently being loaded
   audioMaster: false,
   lyricTimings: [],
   chromeHidden: false,
   chromeTimer: 0,
 };
 
+/**
+ * @param {string} message
+ * @param {number} [ms] how long to hold it; 0 holds until something replaces it,
+ *   which is what a multi-second import needs.
+ */
 function toast(message, ms = 2100) {
   ui.toast.textContent = message;
   ui.toast.classList.add('show');
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => ui.toast.classList.remove('show'), ms);
+  if (ms > 0) toast._t = setTimeout(() => ui.toast.classList.remove('show'), ms);
 }
 
 function fitCanvas() {
@@ -121,11 +130,34 @@ window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 220));
 fitCanvas();
 
 // ---------------------------------------------------------------------------
+// Local persistence
+// ---------------------------------------------------------------------------
+
+const SCRIPT_KEY = 'playhouse.script';
+const CAST_HINT_KEY = 'playhouse.castHintSeen';
+
+/** localStorage is unavailable in some privacy modes; never fail over it. */
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* private mode, quota */ }
+}
+function recall(key) {
+  try { return localStorage.getItem(key) || ''; } catch { return ''; }
+}
+
+// ---------------------------------------------------------------------------
 // Loading a script
 // ---------------------------------------------------------------------------
 
+/** Total beats across every scene — the honest measure of "did anything parse". */
+function countBeats(script) {
+  return script.scenes.reduce((n, s) => n + s.beats.length, 0);
+}
+
 function stageScript(text) {
   state.scriptText = text;
+  // Kept so a reload comes back to the writer's script rather than the demo —
+  // which is also what lets imported avatars find their character again.
+  remember(SCRIPT_KEY, text);
   const script = production.load(text, state.overrides);
   ui.prodTitle.textContent = script.meta.title || 'Playhouse';
   document.title = `${script.meta.title || 'Playhouse'} — Playhouse`;
@@ -297,11 +329,28 @@ function renderPanel(name) {
 
 // --- Script -----------------------------------------------------------------
 
+const STATUS_COLOURS = { ok: 'var(--ink-dim)', warn: '#e0a850', error: '#e08a8a' };
+
 function renderScriptPanel(body) {
   const ta = document.createElement('textarea');
   ta.value = state.scriptText;
   ta.spellcheck = false;
+  // The panel is rebuilt from scratch on every open, so the textarea is not the
+  // buffer — state is. Without this, typing lives only in a node that the next
+  // render throws away, and "Stage it" re-stages whatever was last staged.
+  ta.oninput = () => { state.scriptText = ta.value; };
   body.appendChild(ta);
+
+  const status = document.createElement('div');
+  status.className = 'hint';
+  status.style.margin = '0 0 10px';
+
+  const setStatus = (text, tone = 'ok') => {
+    state.scriptStatus = text ? { text, tone } : null;
+    status.textContent = text || '';
+    status.style.color = STATUS_COLOURS[tone] || STATUS_COLOURS.ok;
+  };
+  if (state.scriptStatus) setStatus(state.scriptStatus.text, state.scriptStatus.tone);
 
   const row = document.createElement('div');
   row.className = 'row';
@@ -309,22 +358,81 @@ function renderScriptPanel(body) {
   stage.className = 'btn primary';
   stage.textContent = 'Stage it';
   stage.onclick = () => {
+    const text = ta.value;
+    state.scriptText = text;
+
+    // Parse before committing: a script that yields nothing would otherwise
+    // tear down a working production and leave a bare stage with no
+    // explanation. Parsing is pure and cheap, so this costs nothing real.
+    let preview;
     try {
-      const s = stageScript(ta.value);
-      production.seek(0);
-      production.play();
-      closeSheet();
-      toast(`${s.scenes.length} scene${s.scenes.length === 1 ? '' : 's'}, ${s.characters.length} in the cast`);
+      preview = parseScript(text);
     } catch (err) {
-      toast(`Could not stage: ${err.message}`, 3600);
+      console.error(err);
+      setStatus(`This script could not be parsed: ${err.message}`, 'error');
+      toast('Could not parse that script — see the Script panel', 4000);
+      return;
     }
+
+    const beats = countBeats(preview);
+    if (!beats) {
+      const why = preview.parsed.scenes
+        ? `Found ${preview.parsed.scenes} scene heading${preview.parsed.scenes === 1 ? '' : 's'} `
+          + 'but no dialogue or action underneath.'
+        : 'No scene headings, dialogue or action were found.';
+      setStatus(`Nothing staged. ${why} Scene headings start with INT. or EXT.; a line in `
+        + 'CAPS with text on the line below it is a character cue. The previous production '
+        + 'is still loaded.', 'error');
+      toast('Nothing to stage — see the Script panel', 4000);
+      return;
+    }
+
+    let staged;
+    try {
+      staged = stageScript(text);
+    } catch (err) {
+      // Real failures belong on screen, not in a swallowed catch.
+      console.error(err);
+      setStatus(`Staging failed: ${err.message}`, 'error');
+      toast(`Staging failed: ${err.message}`, 4600);
+      return;
+    }
+
+    const shots = production.plan?.shots?.length ?? 0;
+    const summary = `${staged.scenes.length} scene${staged.scenes.length === 1 ? '' : 's'}, `
+      + `${staged.characters.length} speaking part${staged.characters.length === 1 ? '' : 's'}, `
+      + `${beats} beat${beats === 1 ? '' : 's'}, ${shots} shot${shots === 1 ? '' : 's'}`;
+
+    production.seek(0);
+    production.play();
+
+    if (!staged.characters.length) {
+      // It stages — action-only scenes are legitimate — but silence about it
+      // is how a mis-typed cue looks like the app ignoring you.
+      setStatus(`Staged “${staged.meta.title}” with no speaking parts: ${summary}. `
+        + 'Every line was read as action. A character cue is a line in CAPS with '
+        + 'the dialogue on the line directly below it.', 'warn');
+      toast('Staged, but no speaking parts were found', 4200);
+      return;
+    }
+
+    setStatus(`Staged “${staged.meta.title}” — ${summary}: `
+      + `${staged.characters.map((c) => c.name).join(', ')}.`, 'ok');
+    closeSheet();
+    toast(summary);
   };
   const reset = document.createElement('button');
   reset.className = 'btn';
   reset.textContent = 'Load sample';
-  reset.onclick = () => { ta.value = SAMPLE; };
+  reset.onclick = () => {
+    // Assigning .value fires no input event, so the buffer needs setting too.
+    ta.value = SAMPLE;
+    state.scriptText = SAMPLE;
+    setStatus('Sample loaded — press Stage it to put it on its feet.', 'ok');
+  };
   row.append(stage, reset);
   body.appendChild(row);
+  body.appendChild(status);
 
   const hint = document.createElement('div');
   hint.className = 'hint';
@@ -343,22 +451,39 @@ function renderScriptPanel(body) {
 
 // --- Cast -------------------------------------------------------------------
 
-/** Import a .glb/.vrm for a character and report how well it mapped. */
+/** How the mouth ended up being driven — visemes, a synthesised jaw, or nothing. */
+function describeMouth(report) {
+  if (report.generatedJaw) {
+    return `jaw generated across ${report.generatedJaw.meshes} mesh`
+      + `${report.generatedJaw.meshes === 1 ? '' : 'es'}`;
+  }
+  return report.visemes ? 'visemes found' : 'no visemes and no jaw — the mouth will not move';
+}
+
+/** Import a .glb/.vrm/.fbx for a character and report how well it mapped. */
 async function importAvatarFor(name, file) {
-  toast(`Loading ${file.name}…`, 8000);
+  // A 27 MB Mixamo rig takes seconds to parse and retarget. Hold the notice
+  // open for the whole of it and put a spinner on the card, or the interface
+  // looks dead exactly when it is working hardest.
+  state.importing.set(name, file.name);
+  if (state.panel === 'cast') renderPanel('cast');
+  toast(`Loading ${file.name} — a large avatar takes a few seconds…`, 0);
+
   try {
     const buffer = await file.arrayBuffer();
     const report = await production.setAvatar(name, buffer, file.name);
-    await saveAvatarFile(name, buffer, file.name);
+    const saved = await saveAvatarFile(name, buffer, file.name);
     const warn = report.unmapped.length
       ? ` · ${report.unmapped.length} bone${report.unmapped.length === 1 ? '' : 's'} unmapped`
       : '';
-    toast(`${name}: ${report.retargeted} bones retargeted`
-      + `${report.visemes ? ', visemes found' : ', no visemes (jaw only)'}${warn}`, 4200);
-    renderPanel('cast');
+    toast(`${name}: ${report.retargeted}/21 bones retargeted, ${describeMouth(report)}${warn}`
+      + `${saved ? '' : ' · could not be saved for next time'}`, 5200);
   } catch (err) {
-    toast(`Could not load that avatar: ${err.message}`, 5000);
+    toast(`Could not load ${file.name}: ${err.message}`, 6000);
     console.error(err);
+  } finally {
+    state.importing.delete(name);
+    if (state.panel === 'cast') renderPanel('cast');
   }
 }
 
@@ -366,14 +491,25 @@ async function importAvatarFor(name, file) {
 async function restoreAvatars() {
   const stored = await loadStoredAvatars();
   let restored = 0;
+  const failed = [];
   for (const [name, record] of stored) {
+    // A stored avatar for a character the current script does not have is not
+    // an error: it waits, and re-attaches if that character comes back.
     if (!production.cast.has(name)) continue;
     try {
       await production.setAvatar(name, record.buffer, record.filename);
       restored++;
-    } catch { /* stale or corrupt entry */ }
+    } catch (err) {
+      failed.push(name);
+      console.error(`Could not restore the avatar for ${name}`, err);
+    }
   }
-  if (restored) toast(`Restored ${restored} imported avatar${restored === 1 ? '' : 's'}`);
+  if (failed.length) {
+    toast(`Could not restore ${failed.join(', ')} — re-import from the Cast panel`, 5000);
+  } else if (restored) {
+    toast(`Restored ${restored} imported avatar${restored === 1 ? '' : 's'}`);
+  }
+  return restored;
 }
 
 function renderCastPanel(body) {
@@ -386,11 +522,12 @@ function renderCastPanel(body) {
   const intro = document.createElement('div');
   intro.className = 'hint';
   intro.style.marginBottom = '10px';
-  intro.innerHTML = `Import a <code>.glb</code> or <code>.vrm</code> per character for a much higher
-    quality cast — make them free at <strong>readyplayer.me</strong> (browser, exports .glb with
-    visemes) or <strong>VRoid Studio</strong> (.vrm). Everything they do on stage — walking,
-    gesturing, eye contact, lip sync — is driven here, so you never supply animation.
-    Skin and costume are baked into the file, so make one avatar per character.`;
+  intro.innerHTML = `Import a <code>.glb</code>, <code>.vrm</code> or <code>.fbx</code> per character
+    for a much higher quality cast — make them free at <strong>readyplayer.me</strong> (browser,
+    exports .glb with visemes), <strong>VRoid Studio</strong> (.vrm) or <strong>Mixamo</strong>
+    (.fbx; it ships no facial rig, so a jaw is synthesised for it here). Everything they do on
+    stage — walking, gesturing, eye contact, lip sync — is driven here, so you never supply
+    animation. Skin and costume are baked into the file, so make one avatar per character.`;
   body.appendChild(intro);
 
   for (const record of script.characters) {
