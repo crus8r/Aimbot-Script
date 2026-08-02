@@ -133,7 +133,9 @@ check(
 );
 
 // And it still takes turns after coming back from disk.
-const post = page.locator("#actions .act:not([disabled])");
+// Deliberately excludes panel buttons: opening a list is not taking a turn,
+// and clicking one proves nothing about whether the restored run can act.
+const post = page.locator("#actions .act:not([disabled]):not(.panel)");
 if (await post.count()) {
   const lines = await page.locator("#feed .line").count();
   await post.first().click().catch(() => {});
@@ -166,6 +168,48 @@ await page.waitForTimeout(200);
 // And it must be closable by more than one 33px button.
 await page.keyboard.press("Escape");
 check(!(await page.locator("#sheet.open").isVisible()), "Escape closes a sheet");
+
+/* ------------------------------------------------- the pack is a pack */
+
+// It used to be every item you own in one flat list. These are the four things
+// that make a two-hundred-item bag usable, and none of them reached the browser
+// until now.
+{
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  await page.locator("#tab-inv").click();
+  await page.waitForTimeout(250);
+
+  check((await page.locator("#sheet-body .slot").count()) >= 8, "what you are wearing is shown as slots, including the empty ones");
+  check(await page.locator("#sheet-body .loadbar").isVisible(), "the carry ceiling is a bar rather than a sentence");
+
+  const chips = page.locator("#sheet-body .chip.pickable");
+  check((await chips.count()) > 2, "the pack can be sliced and ordered");
+
+  // Slicing must actually change what is listed.
+  const all = await page.locator("#sheet-body .srow").count();
+  const junkChip = page.locator("#sheet-body .chip.pickable", { hasText: /^Junk/ }).first();
+  if (await junkChip.count()) {
+    await junkChip.click();
+    await page.waitForTimeout(250);
+    const sliced = await page.locator("#sheet-body .srow").count();
+    check(sliced > 0 && sliced <= all, `filtering narrows the list (${all} → ${sliced})`);
+    await page.locator("#sheet-body .chip.pickable", { hasText: /^All/ }).first().click();
+    await page.waitForTimeout(200);
+  } else {
+    check(false, "no filter chips rendered");
+  }
+
+  // Ordering must be able to change the first row.
+  const first = async () => (await page.locator("#sheet-body .srow .iname").first().textContent()) ?? "";
+  const byRelevance = await first();
+  await page.locator("#sheet-body .chip.pickable", { hasText: /^Name/ }).first().click();
+  await page.waitForTimeout(250);
+  const byName = await first();
+  check(byRelevance.length > 0 && byName.length > 0, "the list survives being reordered");
+
+  await page.keyboard.press("Escape");
+}
 
 /* --------------------------------------------- taking things in, for free */
 

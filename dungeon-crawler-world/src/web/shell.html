@@ -239,6 +239,19 @@ html.framed #bar { position: sticky; bottom: 0; z-index: 5; }
 .act.loot { border-color: #4a3c1c; color: var(--loot); }
 .act.feature { border-color: #3c3352; color: #c3aef0; }
 .act.unknown { color: var(--dim); font-style: italic; }
+/*
+ * Opens a panel; costs nothing. Every other button in the rail spends minutes
+ * off a floor timer that is trying to kill you, and they should not look the
+ * same. The chevron is the tell.
+ */
+.act.panel {
+  background: transparent;
+  border-style: dashed;
+  border-color: #2a343e;
+  color: var(--dim);
+}
+.act.panel::after { content: " ›"; color: #4a545f; }
+.act.panel:active { background: #151b21; }
 .act.on { border-color: var(--good); color: var(--good); background: #16241a; }
 .act.small {
   display: inline-block;
@@ -449,6 +462,125 @@ html.framed #bar { position: sticky; bottom: 0; z-index: 5; }
   border-radius: 9px;
 }
 textarea.field { min-height: 110px; resize: vertical; }
+
+/* ----------------------------------------------------------------- pack */
+
+/*
+ * What you are wearing, as slots.
+ *
+ * A list cannot show you an empty slot, and an empty slot is the most
+ * actionable thing on the screen — so this is a grid where absence is
+ * visible.
+ */
+.slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.slot {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name off" "item off";
+  align-items: center;
+  gap: 0 8px;
+  padding: 8px 10px;
+  background: #0e1318;
+  border: 1px solid var(--edge);
+  border-left: 3px solid #2c3742;
+  border-radius: 7px;
+}
+.slot.empty { border-left-color: #1a2027; opacity: .62; }
+.slotname {
+  grid-area: name;
+  font: 600 10px/1.2 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #5d6a78;
+}
+.slotitem {
+  grid-area: item;
+  font: 14px/1.3 ui-sans-serif, system-ui, sans-serif;
+  overflow-wrap: anywhere;
+}
+.slot.empty .slotitem { color: #4a545f; }
+.slotoff {
+  grid-area: off;
+  min-height: 44px;
+  padding: 6px 9px;
+  font: 11px/1 ui-sans-serif, system-ui, sans-serif;
+  color: var(--dim);
+  background: none;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.slotoff:active { background: #202832; }
+
+.slot.r-uncommon { border-left-color: #4b8a5c; }
+.slot.r-rare { border-left-color: #47749b; }
+.slot.r-epic { border-left-color: #7a5aa8; }
+.slot.r-legendary { border-left-color: var(--loot); }
+.slot.r-celestial { border-left-color: var(--hot); }
+
+/*
+ * The one limit in the game, which was a sentence.
+ * A number against a ceiling is arithmetic; a bar is a glance.
+ */
+.loadbar {
+  position: relative;
+  height: 22px;
+  margin: 2px 0 8px;
+  background: #080a0d;
+  border: 1px solid var(--edge);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.loadfill { height: 100%; background: linear-gradient(90deg, #2f4a3a, #4a7a5c); transition: width .3s ease; }
+.loadbar.heavy .loadfill { background: linear-gradient(90deg, #6a5620, #a08434); }
+.loadbar.full .loadfill { background: linear-gradient(90deg, #6e241f, var(--hp)); }
+.loadtext {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 600 11px/1 ui-monospace, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: #eef3f8;
+  text-shadow: 0 1px 2px #000;
+}
+
+/* Filter and sort chips. Tappable, so they are buttons, not spans. */
+.chips.pick { margin: 0 0 8px; }
+.chip.pickable {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+  color: var(--dim);
+}
+.chip.pickable.on { color: var(--ink); background: #232c36; border-color: #3c4a58; }
+.chip.pickable:active { background: #202832; }
+
+/* The verdict, under the name, because it is what decides the tap. */
+.iname { display: block; }
+.imeta {
+  display: block;
+  margin-top: 2px;
+  font: 11px/1.3 ui-monospace, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: #5d6a78;
+}
+.verdict {
+  display: block;
+  margin-top: 2px;
+  font: 600 11px/1.3 ui-sans-serif, system-ui, sans-serif;
+}
+.v-better, .v-empty { color: var(--good); }
+.v-worse { color: #6d7a88; }
+.v-same { color: var(--dim); }
+
+.hint.bad { color: var(--bad); }
 
 #toast {
   position: fixed;

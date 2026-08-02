@@ -13,6 +13,10 @@ import { MOB_BY_ID, BOSS_BY_ID } from "../data/mobs.ts";
 import { RACES } from "../data/paths.ts";
 import { STATIONS, UPGRADES, SPACE_COST, RECIPES, BREWS } from "../data/recipes.ts";
 import { transformMenu } from "../sim/transform.ts";
+import {
+  junkHaul, packView, PACK_FILTERS, PACK_SORTS,
+  type PackFilter, type PackSort,
+} from "../sim/pack.ts";
 import { LlmProposer, NoProposer } from "../voice/proposer.ts";
 import { depositsHere, strainNote, strainStage } from "../sim/harvest.ts";
 import type { Intake } from "../sim/intake.ts";
@@ -376,8 +380,16 @@ function drawCombatActions(box: HTMLElement): void {
 
 /* --------------------------------------------------------------- sheets */
 
+/**
+ * A button that opens a panel.
+ *
+ * Marked `panel` so it does not look like a button that spends your life. Every
+ * control in the action rail was rendered identically whether it cost an hour
+ * of the floor clock or merely showed you a list, which is a real thing to get
+ * wrong in a game whose antagonist is a countdown.
+ */
 function sheetBtn(label: string, render: (body: HTMLElement) => void, cls = ""): HTMLElement {
-  const b = el("button", `act ${cls}`, label);
+  const b = el("button", `act panel ${cls}`, label);
   b.addEventListener("click", () => openSheet(label, render));
   return b;
 }
@@ -421,39 +433,123 @@ function row(body: HTMLElement, left: string, right = "", note = ""): void {
   if (note) body.appendChild(el("div", "hint", note));
 }
 
+/**
+ * The pack.
+ *
+ * The old one was every item you own in one flat undifferentiated list, which
+ * by floor four is two hundred rows of "Scrap Metal" and is not an inventory,
+ * it is a punishment. Four things fix it and all four already existed in the
+ * terminal client and had simply never crossed over: what you are WEARING as
+ * slots rather than a list, a way to see one KIND at a time, a way to ORDER
+ * them, and — the one that actually decides whether you tap something — whether
+ * a thing is better than what you have on.
+ */
+let packFilter: PackFilter = "all";
+let packSort: PackSort = "relevance";
+
 function drawInventory(body: HTMLElement): void {
   const s = game!.state;
+  const view = packView(s, packFilter, packSort);
+  const node = currentNode(s.floor);
+  const vendor = node.kind === "shop" || node.kind === "guild";
+
+  /* --------------------------------------------------------- what you wear */
+  // Slots, not a list. An empty slot is the most actionable thing on the
+  // screen and a list cannot show you one.
+  body.appendChild(el("div", "sep", "worn"));
+  const grid = el("div", "slots");
+  for (const w of view.worn) {
+    const cell = el("div", `slot${w.item ? ` r-${w.item.rarity}` : " empty"}`);
+    cell.appendChild(el("span", "slotname", w.label));
+    cell.appendChild(el("span", "slotitem", w.item ? w.item.name : "—"));
+    if (w.item) {
+      const off = el("button", "slotoff", "take off");
+      off.setAttribute("aria-label", `Take off ${w.item.name}`);
+      off.addEventListener("click", () => void run({ t: "unequip", item: w.item!.iid }));
+      cell.appendChild(off);
+    }
+    grid.appendChild(cell);
+  }
+  body.appendChild(grid);
+
+  /* ------------------------------------------------------------ the weight */
+  // A bar, because a number against a ceiling is arithmetic and a bar is a
+  // glance. This is the only limit in the game and it was a sentence.
+  const load = el("div", `loadbar${view.load > 0.9 ? " full" : view.load > 0.7 ? " heavy" : ""}`);
+  const fill = el("div", "loadfill");
+  fill.style.width = `${Math.min(100, view.load * 100)}%`;
+  load.appendChild(fill);
+  load.appendChild(el("span", "loadtext", `${view.kg} / ${view.ceiling} kg`));
+  body.appendChild(load);
+  if (view.load > 0.9) {
+    body.appendChild(el("div", "hint bad", "Nothing else is coming off the ground until something goes down."));
+  }
+
   const tools = el("div", "actrow");
   tools.appendChild(actionBtn("Equip best", { t: "equipBest" }, "small good"));
-  tools.appendChild(actionBtn("Drop junk", { t: "dropJunk" }, "small"));
-  const node = currentNode(s.floor);
-  if (node.kind === "shop" || node.kind === "guild") {
-    tools.appendChild(actionBtn("Sell junk", { t: "sell", what: "junk" }, "small loot"));
+  const junk = junkHaul(s);
+  if (junk.items.length) {
+    tools.appendChild(actionBtn(`Drop junk (${junk.items.length}, ${junk.kg} kg)`, { t: "dropJunk" }, "small"));
+    if (vendor) tools.appendChild(actionBtn(`Sell junk (~${junk.gold}g)`, { t: "sell", what: "junk" }, "small loot"));
   }
   body.appendChild(tools);
-  body.appendChild(el("div", "hint", `${carriedWeight(s)} kg carried · lift ceiling ${carryCapacity(s)} kg`));
 
-  const worn = s.inventory.filter((i) => i.equipped);
-  if (worn.length) {
-    body.appendChild(el("div", "sep", "worn"));
-    for (const i of worn) row(body, i.name, i.slot ?? "", i.desc);
+  /* --------------------------------------------------------------- slicing */
+  const filters = el("div", "chips pick");
+  for (const f of PACK_FILTERS) {
+    const n = view.tally[f.id];
+    if (!n && f.id !== "all") continue; // never offer an empty drawer
+    const c = el("button", `chip pickable${packFilter === f.id ? " on" : ""}`, `${f.label} ${n}`);
+    c.addEventListener("click", () => {
+      packFilter = f.id;
+      redrawSheet();
+    });
+    filters.appendChild(c);
   }
-  body.appendChild(el("div", "sep", "carried"));
-  const rest = s.inventory.filter((i) => !i.equipped);
-  if (!rest.length) body.appendChild(el("div", "hint", "Nothing."));
-  for (const i of rest) {
+  body.appendChild(filters);
+
+  const sorts = el("div", "chips pick");
+  for (const o of PACK_SORTS) {
+    const c = el("button", `chip pickable${packSort === o.id ? " on" : ""}`, o.label);
+    c.addEventListener("click", () => {
+      packSort = o.id;
+      redrawSheet();
+    });
+    sorts.appendChild(c);
+  }
+  body.appendChild(sorts);
+
+  /* ---------------------------------------------------------------- carried */
+  body.appendChild(el("div", "sep", `carried — ${view.shownCount} of ${view.carriedCount}`));
+  if (!view.rows.length) body.appendChild(el("div", "hint", "Nothing here matches."));
+
+  for (const { item: i, comparison } of view.rows) {
     const r = el("div", `srow r-${i.rarity}`);
-    r.appendChild(el("span", "sleft", `${i.name}${i.qty > 1 ? ` ×${i.qty}` : ""}${i.locked ? " 🔒" : ""}`));
-    const btns = el("span", "sright");
-    if (i.slot) btns.appendChild(actionBtn("wear", { t: "equip", item: i.iid }, "small"));
-    if (i.use) btns.appendChild(actionBtn("use", { t: "use", item: i.iid }, "small"));
-    if (node.kind === "shop" || node.kind === "guild") {
-      btns.appendChild(actionBtn("sell", { t: "sell", what: i.iid }, "small"));
+    const left = el("span", "sleft");
+    left.appendChild(el("span", "iname", `${i.name}${i.qty > 1 ? ` ×${i.qty}` : ""}${i.locked ? " 🔒" : ""}`));
+    // The verdict, right under the name, because it is the only fact that
+    // decides whether you tap anything.
+    if (comparison.verdict !== "none") {
+      left.appendChild(el("span", `verdict v-${comparison.verdict}`, comparison.label));
     }
+    left.appendChild(el("span", "imeta", `${i.rarity} ${i.kind} · ${i.weight} kg · ${i.value}g`));
+    r.appendChild(left);
+
+    const btns = el("span", "sright");
+    if (i.slot) btns.appendChild(actionBtn("wear", { t: "equip", item: i.iid }, "small" + (comparison.verdict === "better" || comparison.verdict === "empty" ? " good" : "")));
+    if (i.use) btns.appendChild(actionBtn("use", { t: "use", item: i.iid }, "small"));
+    if (i.device) btns.appendChild(actionBtn("deploy", { t: "deploy", item: i.iid }, "small danger"));
+    if (vendor) btns.appendChild(actionBtn("sell", { t: "sell", what: i.iid }, "small"));
     btns.appendChild(actionBtn(i.locked ? "unlock" : "lock", { t: "lock", item: i.iid }, "small"));
     r.appendChild(btns);
     body.appendChild(r);
     body.appendChild(el("div", "hint", i.desc));
+  }
+
+  if (s.boxes.length) {
+    body.appendChild(el("div", "sep", "unopened"));
+    body.appendChild(el("div", "hint", "They open in a safe room, all at once, in tier order, whether you are ready or not."));
+    for (const b of s.boxes) row(body, BOX_BY_ID[b.type]?.name ?? b.type, b.tier, b.why);
   }
 }
 
