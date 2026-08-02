@@ -37,8 +37,9 @@ Best on a phone in landscape, but portrait and desktop both work.
 **VERSUS** — side-on 1v1, best of three rounds, MK-style. Pick your fighter,
 pick your opponent (Deathbringer by default, or any teammate), pick a
 difficulty. The fighters here are **real 3D models** — built from primitives,
-lit per face, depth-sorted and rendered through a small polygon renderer
-written for this mode. The character select shows them on a live turntable.
+shaded with physically-based materials, lit by a key/rim/fill rig and casting
+real shadows on the arena floor. The character select shows them on a live
+turntable.
 
 The two modes share one engine. Entities already carried `x / y / z` and drew at
 `(x, y − z)`; Versus pins both fighters to a single `y` lane, which turns that
@@ -187,32 +188,47 @@ superhero-sim/
   src/heroes.js     the five kits, abilities and Surge Forms
   src/enemies.js    the five enemy tiers and their AI
   src/render.js     camera, 2.5D city, procedural character art, VFX
-  src/gfx3d.js      the 3D renderer: matrix stack, primitives, lighting
-  src/models3d.js   the six fighters, built from primitives
+  src/fighters3d.js three.js renderer for the Versus fighters
+  src/specs3d.js    the six fighters, built from primitives
+  src/gfx3d.js      fallback 3D renderer: matrix stack, primitives, lighting
+  src/models3d.js   the six fighters again, for the fallback renderer
   src/sideview.js   side-on stage art + camera
+  vendor/three.min.js  three.js r149 (MIT), the only dependency
   src/versus.js     1v1 rounds, difficulty, and the opponent AI
   src/hud.js        DOM HUD, roster, minimap, menus, versus HUD
   src/game.js       main loop, squad, spawn director
 ```
 
 Plain `<script>` tags in dependency order, everything under a single `SH`
-namespace — no bundler, no dependencies. Performance is adaptive: the spawn cap
+namespace — no bundler, no build step. Performance is adaptive: the spawn cap
 lowers itself if the frame rate drops.
 
 ## How the 3D works
 
 Versus needed more presence than flat vector art could give, so it renders
-actual geometry. `gfx3d.js` is a compact immediate-mode renderer — a matrix
-stack, tapered prisms / boxes / spheres, per-face lighting with a key light,
-ambient and rim term, painter's-algorithm depth sorting, and canvas 2D as the
-rasteriser. No dependencies and no build step, same as everything else here.
+actual geometry through **three.js** (r149, vendored — the one dependency, and
+still no build step: it's a `<script>` tag that sets `window.THREE`).
 
-`models3d.js` assembles each fighter from those primitives and poses them with
-the *same* joint angles the rest of the game already computes, so walking,
-jumping, guarding, attacking and the KO fall all drive the 3D skeleton for
-free. The projection is anchored so depth 0 lines up exactly with the painted
-2D stage, which is why the models stand correctly inside it. Everything outside
-Versus — the whole top-down campaign — is unchanged.
+`specs3d.js` describes each fighter as a hierarchy of primitives — tapered
+limb prisms, spherical pauldrons, faceted crystal shards — with
+roughness/metalness materials, so armour reads as metal, weave as cloth and
+Deathbringer's mucus as something wet. `fighters3d.js` assembles those into a
+skeleton and poses it with the *same* joint angles the rest of the game already
+computes, so walking, jumping, guarding, attacking and the KO fall all drive
+the 3D rig for free.
+
+Three canvases stack in Versus: the painted stage (2D), the fighters (WebGL),
+and the effects (2D) on top. The perspective camera is anchored so depth 0
+lines up exactly with the painted stage — its field of view is derived from the
+2D camera's zoom — which is why the models stand correctly inside the scene and
+their cast shadows land on the painted floor.
+
+Quality is shed before frames are: shadow maps switch off first, and if the
+device still can't hold a playable rate the whole mode falls back to
+`gfx3d.js` / `models3d.js`, a hand-rolled canvas-2D polygon renderer that draws
+the same characters from the same joint angles. That path also covers devices
+with no WebGL at all. Everything outside Versus — the whole top-down campaign —
+is unchanged either way.
 
 ## How the AI opponent works
 

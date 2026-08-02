@@ -150,7 +150,7 @@
     you.reset();
     you.in = SH.input;
     you.vsTeam = 0; you.versus = true;
-    you.x = S.STAGE_W * 0.3; you.y = S.GROUND; you.z = 0;
+    you.x = S.STAGE_W * 0.34; you.y = S.GROUND; you.z = 0;
     you.facing = 0; you.ko = false; you.hitstun = 0; you.guard = 0;
     you.status = {};
     if (SH.ents.enemies.indexOf(you) < 0) SH.ents.enemies.push(you);
@@ -173,7 +173,7 @@
       foe.vx = 0; foe.vy = 0; foe.kvx = 0; foe.kvy = 0;
       if (SH.ents.enemies.indexOf(foe) < 0) SH.ents.enemies.push(foe);
     }
-    foe.x = S.STAGE_W * 0.7; foe.y = S.GROUND; foe.z = 0;
+    foe.x = S.STAGE_W * 0.66; foe.y = S.GROUND; foe.z = 0;
     foe.facing = Math.PI;
 
     V.timer = 99;
@@ -449,6 +449,7 @@
   };
 
   V.quitToMenu = function () {
+    SH.side.hideLayers();
     SH.hud.showVersusResult(false, V);
     V.exit();
     SH.game.state = 'menu';

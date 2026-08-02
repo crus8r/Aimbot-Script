@@ -162,8 +162,10 @@
     var spread = Math.abs(a.x - b.x);
     var topZ = Math.max(a.z, b.z);
     var tall = Math.max(fighterTop(a), fighterTop(b));
-    var want = U.clamp(Math.min(R.vw / (spread + 430), R.vh / (tall + 104 + topZ * 1.05)), 0.5, 1.55);
-    var cy = S.GROUND - (tall + topZ) * 0.42;
+    /* frame them like a fighting game: close in until the pair nearly fills
+       the screen, then pull back only as far as the spread demands */
+    var want = U.clamp(Math.min(R.vw / (spread + 260), R.vh / (tall + 72 + topZ * 1.05)), 0.5, 2.1);
+    var cy = S.GROUND - (tall + topZ) * 0.44;
     if (snap) { S.cam.x = mid; S.cam.y = cy; S.cam.s = want; }
     else {
       var k = Math.min(1, dt * 6);
@@ -195,6 +197,9 @@
   S.draw = function (vs) {
     var R = SH.render, ctx = R.ctx, cam = S.cam;
     var i;
+    var webgl = use3D();
+    var fx = webgl ? fxCtx() : ctx;          // effects go on their own layer
+    setLayers(webgl);
     ctx.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
     drawSky(ctx, R);
 
@@ -213,38 +218,68 @@
     drawGroundMist(ctx, v);
     drawHazards(ctx, v);
     drawTelegraphs(ctx, v);
-    for (i = 0; i < list.length; i++) shadow(ctx, list[i]);
+    /* WebGL casts real shadows on the ground; only airborne fighters still
+       need a painted blob, because the shadow camera can't reach them. */
+    if (!webgl) for (i = 0; i < list.length; i++) shadow(ctx, list[i]);
+    else for (i = 0; i < list.length; i++) if (list[i].z > 24) shadow(ctx, list[i]);
     ctx.restore();
 
-    /* ---- the fighters, in 3D ---- */
-    camFor3D();
-    SH.g3.begin();
-    for (i = 0; i < list.length; i++) SH.g3.push(), S.buildFighter(list[i]), SH.g3.pop();
-    if (SH.game.fps > 45) SH.g3.render(ctx, { mirror: true, alpha: 0.17, dim: 0.55 });
-    SH.g3.render(ctx);
-    SH.g3.renderGlows(ctx);
+    /* ---- the fighters ---- */
+    if (webgl) {
+      SH.f3.resize(R.vw, R.vh, R.dpr);
+      SH.f3.setTheme(S.theme);
+      SH.f3.render(vs);
+      adapt3D();
+      fx.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
+      fx.clearRect(0, 0, R.vw, R.vh);
+    } else {
+      camFor3D();
+      SH.g3.begin();
+      for (i = 0; i < list.length; i++) SH.g3.push(), S.buildFighter(list[i]), SH.g3.pop();
+      if (SH.game.fps > 45) SH.g3.render(ctx, { mirror: true, alpha: 0.17, dim: 0.55 });
+      SH.g3.render(ctx);
+      SH.g3.renderGlows(ctx);
+    }
 
     /* ---- effects on top ---- */
-    ctx.save();
-    worldXf(ctx);
+    fx.save();
+    worldXf(fx);
     var pr = SH.ents.projectiles;
-    for (i = 0; i < pr.length; i++) SH.render.proj(ctx, pr[i]);
-    SH.render.parts(ctx, v);
-    SH.render.overheads(ctx, v);
-    drawForeground(ctx, v);
-    ctx.restore();
+    for (i = 0; i < pr.length; i++) SH.render.proj(fx, pr[i]);
+    SH.render.parts(fx, v);
+    SH.render.overheads(fx, v);
+    drawForeground(fx, v);
+    fx.restore();
 
-    drawVignette(ctx, R);
+    drawVignette(fx, R);
 
     var dark = SH.darknessLevel();
     if (dark > 0) {
-      var g = ctx.createRadialGradient(R.vw / 2, R.vh * 0.55, R.vh * 0.14, R.vw / 2, R.vh * 0.55, R.vh * 0.95);
+      var g = fx.createRadialGradient(R.vw / 2, R.vh * 0.55, R.vh * 0.14, R.vw / 2, R.vh * 0.55, R.vh * 0.95);
       g.addColorStop(0, 'rgba(4,2,8,' + (dark * 0.45).toFixed(3) + ')');
       g.addColorStop(1, 'rgba(2,1,5,' + (dark * 0.97).toFixed(3) + ')');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, R.vw, R.vh);
+      fx.fillStyle = g;
+      fx.fillRect(0, 0, R.vw, R.vh);
     }
   };
+
+  /* The 3D fighters render straight into their own stacked canvas, so the
+     browser composites the layers instead of us blitting a WebGL surface
+     through the 2D context every frame. */
+  var fxC = null, l3d = null;
+  function fxCtx() {
+    if (!fxC) {
+      fxC = SH.render.addLayer(document.getElementById('gamefx'));
+      fxC._ctx = fxC.getContext('2d');
+    }
+    return fxC._ctx;
+  }
+  function setLayers(on) {
+    if (!l3d) l3d = document.getElementById('game3d');
+    if (l3d) l3d.classList.toggle('on', !!on);
+    if (fxC) fxC.classList.toggle('on', !!on);
+  }
+  S.hideLayers = function () { setLayers(false); };
 
   /* ------------------------------------------------------------- stage */
   function layer(key, R, drawFn) {
@@ -574,6 +609,10 @@
   /* =====================================================================
    * POSE
    * =================================================================== */
+  /* Joint angles are measured from "straight forward" (+X), turning clockwise
+   * in the side view: PI/2 is straight down, less than that is forward-down,
+   * more is backward-down, negative is raised. Forearm and shin values are
+   * relative to their parent. Both renderers apply them the same way. */
   function poseOf(f) {
     var t = (f.anim && f.anim.t) || 0;
     var speed = Math.abs(f.vx || 0);
@@ -584,21 +623,21 @@
 
     var p = {
       bob: 0, lean: 0, crouch: 0, breathe: Math.sin(t * 2.4) * 0.5,
-      armF: [0.95, -0.78], armB: [1.22, -1.0],
+      armF: [1.44, -1.02], armB: [1.66, -0.6],
       legF: [1.3, 0.32], legB: [1.86, -0.3],
       head: 0, swing: swing, air: air, walking: walking, t: t
     };
 
     if (f.ko) {
       p.fall = -1.34; p.crouch = 42;
-      p.armF = [2.5, 0.3]; p.armB = [2.2, 0.2];
+      p.armF = [2.42, 0.34]; p.armB = [2.16, 0.22];
       p.legF = [2.85, 0.5]; p.legB = [3.05, 0.35];
       return p;
     }
 
     if (f.guard) {
       p.crouch = 11; p.lean = -0.1;
-      p.armF = [0.55, -1.85]; p.armB = [0.9, -1.75];
+      p.armF = [1.02, -1.98]; p.armB = [1.2, -1.86];
       p.legF = [1.24, 0.42]; p.legB = [1.96, -0.4];
       p.bob = Math.sin(t * 5) * 0.5;
       return p;
@@ -610,22 +649,22 @@
       p.lean = 0.12 + rise * 0.12;
       p.legF = [1.02 - rise * 0.4, 1.0];
       p.legB = [1.74 + rise * 0.12, 0.62];
-      p.armF = [0.42 - rise * 0.8, -0.72];
-      p.armB = [1.95 + rise * 0.4, 0.45];
+      p.armF = [0.98 - rise * 0.92, -1.24];
+      p.armB = [2.16 + rise * 0.34, 0.2];
     } else if (walking) {
       var ph = t * (8 + Math.min(speed, 620) * 0.017);
       var amp = U.clamp(speed / 260, 0.35, 1.25);
       p.legF = [1.52 + Math.sin(ph) * 0.6 * amp, 0.16 + Math.max(0, Math.cos(ph)) * 0.55];
       p.legB = [1.52 + Math.sin(ph + Math.PI) * 0.6 * amp, 0.16 + Math.max(0, Math.cos(ph + Math.PI)) * 0.55];
-      p.armF = [0.95 + Math.sin(ph + Math.PI) * 0.4 * amp, -0.72];
-      p.armB = [1.24 + Math.sin(ph) * 0.4 * amp, -0.9];
+      p.armF = [1.44 + Math.sin(ph + Math.PI) * 0.42 * amp, -0.9];
+      p.armB = [1.66 + Math.sin(ph) * 0.42 * amp, -0.66];
       p.bob = Math.abs(Math.sin(ph)) * 2.8 * amp;
       p.lean = 0.13 * amp;
     } else {
       // fighting stance: weight back, lead hand up, subtle breathing
       p.bob = Math.sin(t * 2.4) * 1.2;
-      p.armF = [0.95 + Math.sin(t * 2.4) * 0.06, -0.78];
-      p.armB = [1.22 + Math.sin(t * 2.4 + 0.8) * 0.05, -1.0];
+      p.armF = [1.44 + Math.sin(t * 2.4) * 0.055, -1.02 - Math.sin(t * 2.4) * 0.04];
+      p.armB = [1.66 + Math.sin(t * 2.4 + 0.8) * 0.05, -0.6];
       p.legF = [1.3, 0.32];
       p.legB = [1.86, -0.3];
       p.lean = 0.06;
@@ -633,25 +672,63 @@
 
     if (swing >= 0) {
       var e = U.ease(swing);
-      p.armF = [U.lerp(-1.6, 0.66, e), U.lerp(-0.5, 0.16, e)];
-      p.armB = [U.lerp(1.85, 2.45, e), -0.5];
+      p.armF = [U.lerp(-1.55, 0.9, e), U.lerp(-0.65, -0.05, e)];
+      p.armB = [U.lerp(2.05, 2.5, e), -0.45];
       p.lean = U.lerp(-0.26, 0.36, e);
       p.crouch = 6 * Math.sin(e * Math.PI);
       p.legF = [U.lerp(1.4, 1.18, e), 0.36];
       p.legB = [U.lerp(1.8, 1.95, e), -0.3];
     } else if (f.attackT > 0) {
-      p.armF = [0.4, 0.06];
+      p.armF = [0.34, -0.12];
+      p.armB = [1.9, -0.4];
       p.lean = 0.2;
     }
 
     if (hurt) { p.lean -= 0.24; p.head = -0.22; }
     return p;
   }
+  S.poseOf = poseOf;
 
   /* =====================================================================
    * 3D FIGHTERS
+   *
+   * Preferred path is three.js (fighters3d.js) — real meshes, PBR materials
+   * and shadow maps, rendered to its own WebGL canvas and blitted in between
+   * the painted stage and the 2D effects layer. If WebGL or the library is
+   * unavailable we fall back to the hand-rolled canvas renderer in gfx3d.js,
+   * which draws the same characters with the same joint angles.
    * =================================================================== */
   var TURN = 0.42;              // how far the fighters square up to camera
+  var tried3D = false, has3D = false;
+
+  /* Shed quality rather than frames: drop shadow maps first, and if the
+     device still can't hold a playable rate, fall back to the canvas
+     renderer for the rest of the session. Both need to be sustained, so a
+     one-off hitch never triggers them. */
+  var q3d = 2, lowT = 0;
+  function adapt3D() {
+    var fps = SH.game.fps;
+    if (!fps) return;
+    if (fps > 46) { lowT = Math.max(0, lowT - 0.05); return; }
+    lowT += 1 / 60;
+    if (q3d === 2 && lowT > 2) { q3d = 1; lowT = 0; SH.f3.shadows(false); }
+    else if (q3d === 1 && fps < 30 && lowT > 4) {
+      q3d = 0;
+      has3D = false;
+      setLayers(false);
+      SH.f3.clear();
+    }
+  }
+
+  function use3D() {
+    if (!tried3D) {
+      tried3D = true;
+      var c = document.getElementById('game3d');
+      has3D = !!(SH.f3 && c && SH.f3.init(c));
+    }
+    return has3D;
+  }
+  S.use3D = use3D;
 
   function camFor3D() {
     var R = SH.render;
@@ -692,7 +769,21 @@
   /* =====================================================================
    * PREVIEW (character select) — a slow turntable of the real model
    * =================================================================== */
-  S.drawPreview = function (ctx, id, w, h, t) {
+  S.drawPreview = function (ctx, id, w, h, t, yaw) {
+    if (use3D()) {
+      var acc = id === 'deathbringer' ? '#ff7a12' : SH.kitById(id).colors.accent;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      var gr = ctx.createRadialGradient(w * 0.5, h * 0.94, 2, w * 0.5, h * 0.94, w * 0.6);
+      gr.addColorStop(0, U.rgba(acc, 0.26));
+      gr.addColorStop(1, U.rgba(acc, 0));
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, h * 0.45, w, h * 0.55);
+      var ok = SH.f3.preview(ctx, id, w, h, t, yaw);
+      ctx.restore();
+      if (ok) return;
+    }
     var G = SH.g3;
     var isDB = id === 'deathbringer';
     var accent = isDB ? '#ff7a12' : SH.kitById(id).colors.accent;

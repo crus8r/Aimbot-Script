@@ -39,6 +39,20 @@
     ctx.globalAlpha = 1;
   }
 
+  /* Extra full-screen canvases (the Versus 3D + FX layers) that must stay
+     exactly the same size as the main one. */
+  R.layers = [];
+  R.addLayer = function (c) {
+    if (c && R.layers.indexOf(c) < 0) { R.layers.push(c); sizeCanvas(c); }
+    return c;
+  };
+  function sizeCanvas(c) {
+    c.width = Math.floor(R.vw * R.dpr);
+    c.height = Math.floor(R.vh * R.dpr);
+    c.style.width = R.vw + 'px';
+    c.style.height = R.vh + 'px';
+  }
+
   R.init = function (canvas) {
     R.canvas = canvas;
     R.ctx = canvas.getContext('2d', { alpha: false });
@@ -53,10 +67,8 @@
     R.vw = window.innerWidth;
     R.vh = window.innerHeight;
     R.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    c.width = Math.floor(R.vw * R.dpr);
-    c.height = Math.floor(R.vh * R.dpr);
-    c.style.width = R.vw + 'px';
-    c.style.height = R.vh + 'px';
+    sizeCanvas(c);
+    for (var i = 0; i < R.layers.length; i++) sizeCanvas(R.layers[i]);
     R.cam.s = U.clamp(Math.min(R.vw, R.vh) / 400, 0.8, 1.7);
   };
 

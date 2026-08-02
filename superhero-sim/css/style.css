@@ -30,6 +30,8 @@ html, body {
 }
 
 canvas#game { position: absolute; inset: 0; display: block; }
+canvas.layer { position: absolute; inset: 0; display: none; pointer-events: none; }
+canvas.layer.on { display: block; }
 
 .hidden { display: none !important; }
 

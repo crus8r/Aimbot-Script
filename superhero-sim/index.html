@@ -15,6 +15,10 @@
 <body>
 
 <canvas id="game"></canvas>
+<!-- Versus only: the three.js fighters composite between the painted stage
+     and the 2D effects layer. Both stay hidden in the campaign. -->
+<canvas id="game3d" class="layer"></canvas>
+<canvas id="gamefx" class="layer"></canvas>
 
 <div id="hud">
 
@@ -228,8 +232,11 @@
 <script src="src/heroes.js"></script>
 <script src="src/enemies.js"></script>
 <script src="src/render.js"></script>
+<script src="vendor/three.min.js"></script>
 <script src="src/gfx3d.js"></script>
 <script src="src/models3d.js"></script>
+<script src="src/specs3d.js"></script>
+<script src="src/fighters3d.js"></script>
 <script src="src/sideview.js"></script>
 <script src="src/versus.js"></script>
 <script src="src/hud.js"></script>
