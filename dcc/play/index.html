@@ -2,7 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- interactive-widget lets Chrome/Android resize the layout viewport itself
+     when the keyboard opens, so 100dvh just works there. iOS ignores it, which
+     is what the visualViewport code further down is for. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0c0d10">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Crawl">
+<meta name="description" content="A Dungeon Crawler World campaign.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230c0d10'/%3E%3Cpath d='M12 46h13V33h13V20h14' stroke='%23d4823f' stroke-width='6' fill='none' stroke-linecap='square' stroke-linejoin='miter'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230c0d10'/%3E%3Cpath d='M12 46h13V33h13V20h14' stroke='%23d4823f' stroke-width='6' fill='none' stroke-linecap='square' stroke-linejoin='miter'/%3E%3C/svg%3E">
 <title>Crawl</title>
 <!-- Single-file build. Edit dcc/app/{lore,rules}.js and re-run build.js. -->
 <style>
@@ -16,11 +28,17 @@
   --sans:system-ui,-apple-system,'Segoe UI',sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
+html{height:100%;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{
   background:var(--bg); color:var(--ink); font-family:var(--sans);
   display:flex; flex-direction:column; overflow:hidden;
   -webkit-font-smoothing:antialiased;
+  /* dvh tracks the shrinking viewport when a mobile keyboard opens; the vh
+     line is the fallback for browsers that lack it. --vvh is set from
+     visualViewport where available, which is the only thing iOS Safari
+     actually respects. */
+  height:100vh; height:100dvh; height:var(--vvh, 100dvh);
+  overscroll-behavior:none;          /* no pull-to-refresh mid-session */
 }
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
@@ -41,11 +59,18 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 #hud .spacer{flex:1}
 #hud .warn{color:var(--red)}
 #safeTag{color:var(--green)}
-.iconbtn{padding:4px 8px;border-radius:6px;color:var(--ink-dim)}
+.iconbtn{
+  padding:6px 9px;border-radius:6px;color:var(--ink-dim);font-size:15px;line-height:1;
+  min-width:34px;min-height:32px;-webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
 .iconbtn:hover{background:#232730;color:var(--ink)}
+.iconbtn:active{background:#2b303a;color:var(--amber)}
 
 /* ---------- narration ---------- */
-#scroll{flex:1;overflow-y:auto;overflow-x:hidden;scroll-behavior:smooth}
+#scroll{
+  flex:1;overflow-y:auto;overflow-x:hidden;scroll-behavior:smooth;
+  -webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+}
 #log{max-width:70ch;margin:0 auto;padding:34px 26px 40px}
 .turn{margin-bottom:30px}
 .narr{font-family:var(--serif);font-size:17.5px;line-height:1.72;color:var(--ink)}
@@ -77,19 +102,31 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
   flex:0 0 auto;background:var(--bg2);border-top:1px solid var(--line);
   padding-bottom:env(safe-area-inset-bottom);
 }
-#chips{display:flex;gap:6px;padding:8px 14px 0;overflow-x:auto;scrollbar-width:none}
+#chips{
+  display:flex;gap:6px;padding:8px 14px 0;overflow-x:auto;scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;
+  /* soft right edge, so it reads as "there is more over here" */
+  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent 100%);
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent 100%);
+}
 #chips::-webkit-scrollbar{display:none}
 .chip{
-  flex:0 0 auto;font-family:var(--mono);font-size:11.5px;padding:5px 10px;
+  flex:0 0 auto;font-family:var(--mono);font-size:12px;padding:8px 12px;
   border:1px solid var(--line);border-radius:20px;color:var(--ink-dim);white-space:nowrap;
+  min-height:34px;                 /* thumb-sized target, not mouse-sized */
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
 }
 .chip:hover{border-color:var(--amber-dim);color:var(--amber)}
 .chip.hot{border-color:var(--amber);color:var(--amber)}
 .chip:disabled{opacity:.35;cursor:default}
 #inputrow{display:flex;align-items:flex-end;gap:10px;padding:9px 14px 11px}
-#caret{font-family:var(--mono);color:var(--amber);padding-bottom:9px;user-select:none}
+/* top-aligned so it marks the first line of a wrapped entry, not the last */
+#caret{font-family:var(--mono);color:var(--amber);align-self:flex-start;padding-top:9px;user-select:none}
+#go{align-self:flex-end}
 #say{
-  flex:1;font-family:var(--mono);font-size:14.5px;line-height:1.5;resize:none;
+  /* 16px is not a taste call: iOS Safari force-zooms the page on focus for
+     anything smaller, and never zooms back out. */
+  flex:1;font-family:var(--mono);font-size:16px;line-height:1.45;resize:none;
   max-height:180px;padding:8px 0;color:var(--ink);
 }
 #say::placeholder{color:var(--ink-faint)}
@@ -100,29 +137,42 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 #go:disabled{background:#3a3d45;color:var(--ink-faint)}
 
 /* ---------- edge tabs + panels ---------- */
-#tabs{
-  position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;gap:0;
-  pointer-events:none;z-index:40;
-}
 #panelwrap{
   position:fixed;inset:0;z-index:50;display:none;
   background:rgba(0,0,0,.55);backdrop-filter:blur(3px);
 }
 #panelwrap.open{display:block}
 #panel{
-  position:absolute;left:0;right:0;bottom:0;max-height:78vh;
+  position:absolute;left:0;right:0;bottom:0;max-height:82vh;max-height:82dvh;
   background:var(--panel);border-top:1px solid var(--line);
   border-radius:14px 14px 0 0;display:flex;flex-direction:column;
   animation:rise .18s ease-out;padding-bottom:env(safe-area-inset-bottom);
 }
+#panelbody{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 @keyframes rise{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
-#panelhead{
-  display:flex;gap:2px;padding:10px 12px;border-bottom:1px solid var(--line);align-items:center;
+#panelgrip{
+  width:38px;height:4px;border-radius:3px;background:#343943;
+  margin:8px auto 2px;flex:0 0 auto;
 }
+#panelhead{
+  display:flex;gap:2px;padding:8px 46px 8px 12px;border-bottom:1px solid var(--line);
+  align-items:center;overflow-x:auto;scrollbar-width:none;position:relative;
+  -webkit-overflow-scrolling:touch;
+}
+#panelhead::-webkit-scrollbar{display:none}
 #panelhead .pt{
-  font-family:var(--mono);font-size:12px;padding:6px 11px;border-radius:6px;color:var(--ink-dim);
+  flex:0 0 auto;font-family:var(--mono);font-size:12.5px;padding:8px 12px;border-radius:6px;
+  color:var(--ink-dim);min-height:34px;white-space:nowrap;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
 }
 #panelhead .pt.on{background:#232730;color:var(--amber)}
+/* Pinned so the scrolling tab row can never bury it. */
+#panelClose{
+  position:absolute;right:0;top:0;bottom:0;width:46px;display:flex;
+  align-items:center;justify-content:center;font-size:20px;color:var(--ink-dim);
+  background:linear-gradient(90deg,rgba(22,24,29,0),var(--panel) 34%);
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
 #panelbody{overflow-y:auto;padding:16px 18px 26px;font-size:14px;line-height:1.6}
 #panelbody h4{
   font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
@@ -184,7 +234,28 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
 }
 .note b{color:var(--ink-dim)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:620px){.grid2{grid-template-columns:1fr}#log{padding:24px 18px 34px}.narr{font-size:16.5px}}
+@media(max-width:620px){
+  .grid2{grid-template-columns:1fr}
+  #log{padding:20px 16px 30px}
+  .narr{font-size:17px;line-height:1.68}      /* reading size, not UI size */
+  #hud{gap:9px;font-size:11.5px;padding:7px 10px;padding-top:calc(7px + env(safe-area-inset-top))}
+  .bar{width:42px}
+  #clock{font-size:11px}
+  #inputrow{padding:8px 12px 10px}
+  #chips{padding:8px 12px 0}
+  .sheet{padding:32px 18px 60px}
+  .sheet h1{font-size:24px}
+  .qcard .q{font-size:17px}
+  .opt{padding:13px 14px}                      /* thumb-sized */
+  .btn{padding:15px}
+  #panelbody{padding:14px 16px 30px}
+  /* the viewers count is the first thing to go when space is tight */
+  #viewers{display:none}
+}
+@media(max-width:400px){
+  #mpwrap{display:none}
+  .narr{font-size:16.5px}
+}
 </style>
 </head>
 <body>
@@ -198,41 +269,43 @@ input,select,textarea{font:inherit;color:inherit;background:none;border:none;out
   <span class="stat" id="condwrap" hidden></span>
   <span class="spacer"></span>
   <span class="stat" id="viewers"></span>
-  <button class="iconbtn" id="btnSave" title="Export save">save</button>
+  <button class="iconbtn" id="btnPanel" title="Sheet, bag, threads, codex">☰</button>
+  <button class="iconbtn" id="btnSave" title="Export save">⭳</button>
   <button class="iconbtn" id="btnCfg" title="Settings">⚙</button>
 </div>
 
 <div id="scroll"><div id="log"></div></div>
 
 <div id="dock">
+  <!-- Order matters on a phone: only the first two or three are visible
+       without scrolling, so the mechanically important ones lead. -->
   <div id="chips">
-    <button class="chip" data-act="look">look around</button>
-    <button class="chip" data-act="listen">listen</button>
-    <button class="chip" data-act="rest">rest a moment</button>
     <button class="chip hot" id="chipCool">✦ rule of cool</button>
     <button class="chip" id="chipAppeal">appeal that</button>
+    <button class="chip" data-act="look">look around</button>
     <button class="chip" id="chipFix">fix a number</button>
+    <button class="chip" data-act="listen">listen</button>
     <button class="chip" id="chipMgr">get a manager</button>
+    <button class="chip" data-act="rest">rest a moment</button>
   </div>
   <div id="inputrow">
     <span id="caret">&gt;</span>
-    <textarea id="say" rows="1" placeholder="what do you do?"></textarea>
+    <textarea id="say" rows="1" placeholder="what do you do?"
+      enterkeyhint="send" autocapitalize="sentences" autocorrect="on" spellcheck="true"></textarea>
     <button id="go">send</button>
   </div>
 </div>
 
-<div id="tabs"></div>
-
 <div id="panelwrap">
   <div id="panel">
+    <div id="panelgrip"></div>
     <div id="panelhead">
       <button class="pt" data-p="sheet">sheet</button>
       <button class="pt" data-p="bag">bag</button>
       <button class="pt" data-p="threads">threads</button>
       <button class="pt" data-p="codex">codex</button>
       <button class="pt" data-p="log">rooms</button>
-      <span style="flex:1"></span>
-      <button class="pt" id="panelClose">close</button>
+      <button id="panelClose" title="Close">×</button>
     </div>
     <div id="panelbody"></div>
   </div>
@@ -1379,14 +1452,24 @@ function renderNarration(container, raw) {
     container.appendChild(p);
     para = [];
   };
-  for (const line of lines) {
-    const t = line.trim();
-    const m = t.match(/^\[(SYSTEM|LOOT|CHAT|ACHIEVEMENT|ANNOUNCEMENT)\]\s*(.*)$/i);
+  const TAG = /^\[(SYSTEM|LOOT|CHAT|ACHIEVEMENT|ANNOUNCEMENT)\]\s*(.*)$/i;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    const m = t.match(TAG);
     if (m) {
       flush();
       const kind = m[1].toUpperCase();
       const cls = kind === "LOOT" ? "lootline" : kind === "CHAT" ? "chatline" : "sysline";
-      container.appendChild(el("div", cls, m[2]));
+      // A notification is usually two lines — the achievement and the System's
+      // snide gloss under it. Absorb continuation lines so the whole thing
+      // stays inside one styled block instead of leaking into the prose.
+      const buf = [m[2]];
+      while (i + 1 < lines.length) {
+        const nxt = lines[i + 1].trim();
+        if (!nxt || TAG.test(nxt)) break;
+        buf.push(nxt); i++;
+      }
+      container.appendChild(el("div", cls, buf.join("\n").trim()));
     } else if (!t) { flush(); }
     else { para.push(t); }
   }
@@ -2032,18 +2115,29 @@ document.querySelectorAll(".modal").forEach(m => m.addEventListener("click", e =
   if (e.target === m && m.id === "mCfg") m.classList.remove("open");
 }));
 
-// edge tabs
-const TABS = [["sheet", "sheet"], ["bag", "bag"], ["threads", "threads"], ["codex", "codex"], ["log", "rooms"]];
-{
-  const t = $("#tabs");
-  for (const [k, label] of TABS) {
-    const b = el("button", "chip", label);
-    b.style.cssText = "pointer-events:auto;margin:0 2px 6px;background:var(--bg2);opacity:.92";
-    b.onclick = () => openPanel(k);
-    t.appendChild(b);
-  }
-  t.style.cssText += ";bottom:auto;top:calc(38px + env(safe-area-inset-top));";
+$("#btnPanel").onclick = () => openPanel();
+
+/* Mobile keyboards shrink the visual viewport without changing 100vh, so the
+   input dock ends up underneath the keyboard. Drive body height from
+   visualViewport instead — this is the only thing iOS Safari honours. */
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const fit = () => {
+    // Only override while a keyboard (or similar widget) is genuinely eating
+    // the viewport. Some browsers report a visualViewport a little shorter
+    // than the layout viewport at rest, and clamping to it unconditionally
+    // leaves a dead strip at the bottom of the screen.
+    const eaten = window.innerHeight - vv.height;
+    if (eaten > 120) document.documentElement.style.setProperty("--vvh", vv.height + "px");
+    else document.documentElement.style.removeProperty("--vvh");
+    if (document.activeElement === $("#say") && atBottom()) toBottom();
+  };
+  vv.addEventListener("resize", fit);
+  vv.addEventListener("scroll", fit);
+  fit();
 }
+// Keep the newest text in view when the keyboard opens over it.
+$("#say").addEventListener("focus", () => setTimeout(toBottom, 250));
 
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") { closePanel(); $("#mCfg").classList.remove("open"); }
