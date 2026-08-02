@@ -22,19 +22,38 @@ So this kit is inverted from the usual approach:
   into wandering corridors.
 - **Lore read on demand**, one page at a time, never wholesale.
 
+## The app
+
+**`app/` is the playable build** — a browser app, three files, no install and
+no build step. Double-click `app/index.html`, paste an Anthropic API key, and
+play. See `app/README.md`.
+
+It implements everything below: the Constitution as its system prompt, state
+updates through a typed tool call, pacing counters enforced in code, room-card
+compaction, pooled inventory, and a codex that makes the DM's own inventions
+permanent. The world lives in `app/lore.js` and the DM contract in
+`app/rules.js` — both plain text you edit and reload, because those are the
+files you'll actually spend time on.
+
+The markdown files below are the same system in portable form, for running a
+campaign in a chat window or a Claude Code session instead.
+
 ## Files
 
 | File | What it is |
 |---|---|
-| `CONSTITUTION.md` | The DM contract. Outranks everything. Read every session. |
+| `app/` | **The playable browser app.** Start here. |
+| `app/lore.js` | The world. A baseline and style guide, not an allowlist. |
+| `app/rules.js` | The DM contract and the prompt builder. |
+| `CONSTITUTION.md` | The DM contract, portable. Outranks everything. |
 | `VOICE.md` | Tone, mob taxonomy, NPC stance cards. |
 | `CLAUDE.md` | The turn loop. Auto-loads when running in this directory. |
 | `TESTS.md` | 7 regression tests. Run before investing hours in any new setup. |
-| `state/` | Live game state. The DM writes here every turn. |
+| `state/` | Live game state for file-based play. |
 | `state/rooms/` | Compacted room cards, digested every 10 rooms. |
-| `lore/` | On-demand reference. One page per topic. |
+| `lore/` | On-demand reference for file-based play. One page per topic. |
 
-## Running it
+## Running it without the app
 
 **In Claude Code (recommended).** `cd` into this directory and start a session. `CLAUDE.md`
 loads the turn loop automatically, state persists on disk, and context compaction stops

@@ -1,0 +1,1052 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crawl</title>
+<style>
+:root{
+  --bg:#0c0d10; --bg2:#131519; --panel:#16181d; --line:#262a32;
+  --ink:#e9e4da; --ink-dim:#9a9488; --ink-faint:#6a6559;
+  --amber:#d4823f; --amber-dim:#8a5628;
+  --green:#6fbf5a; --red:#c9503f; --blue:#6d93b8; --violet:#9a7ab8;
+  --serif:Georgia,'Iowan Old Style','Palatino Linotype',serif;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--sans);
+  display:flex; flex-direction:column; overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
+
+/* ---------- HUD ---------- */
+#hud{
+  flex:0 0 auto; display:flex; align-items:center; gap:14px;
+  padding:8px 14px; background:var(--bg2); border-bottom:1px solid var(--line);
+  font-family:var(--mono); font-size:12px; color:var(--ink-dim);
+  padding-top:calc(8px + env(safe-area-inset-top));
+}
+.stat{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.stat b{color:var(--ink);font-weight:600}
+.bar{width:60px;height:5px;background:#2a2d35;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;transition:width .35s ease}
+.bar.hp i{background:linear-gradient(90deg,#a3402f,#d4604a)}
+.bar.mp i{background:linear-gradient(90deg,#3f5f8a,#6d93b8)}
+#hud .spacer{flex:1}
+#hud .warn{color:var(--red)}
+#safeTag{color:var(--green)}
+.iconbtn{padding:4px 8px;border-radius:6px;color:var(--ink-dim)}
+.iconbtn:hover{background:#232730;color:var(--ink)}
+
+/* ---------- narration ---------- */
+#scroll{flex:1;overflow-y:auto;overflow-x:hidden;scroll-behavior:smooth}
+#log{max-width:70ch;margin:0 auto;padding:34px 26px 40px}
+.turn{margin-bottom:30px}
+.narr{font-family:var(--serif);font-size:17.5px;line-height:1.72;color:var(--ink)}
+.narr p{margin:0 0 1.05em}
+.narr em{color:#f2ebdd}
+.you{
+  font-family:var(--mono);font-size:14px;color:var(--amber);
+  margin:0 0 18px;padding-left:16px;border-left:2px solid var(--amber-dim);
+  white-space:pre-wrap;word-break:break-word;
+}
+.sysline,.lootline,.chatline{
+  font-family:var(--mono);font-size:13.5px;line-height:1.55;
+  margin:14px 0;padding:9px 13px;border-radius:4px;white-space:pre-wrap;
+}
+.sysline{background:rgba(212,130,63,.09);border-left:3px solid var(--amber);color:#f0c898}
+.lootline{background:rgba(154,122,184,.10);border-left:3px solid var(--violet);color:#d3bde3}
+.chatline{background:rgba(109,147,184,.08);border-left:3px solid var(--blue);color:#a9c2d8;font-size:12.5px}
+.meta{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-top:10px}
+.err{
+  font-family:var(--mono);font-size:13px;color:#ffb3a7;background:rgba(201,80,63,.12);
+  border-left:3px solid var(--red);padding:11px 13px;border-radius:4px;margin:14px 0;white-space:pre-wrap;
+}
+.thinking{font-family:var(--mono);font-size:12px;color:var(--ink-faint);letter-spacing:.06em}
+.thinking::after{content:'';animation:dots 1.4s steps(4,end) infinite}
+@keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+
+/* ---------- input ---------- */
+#dock{
+  flex:0 0 auto;background:var(--bg2);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+#chips{display:flex;gap:6px;padding:8px 14px 0;overflow-x:auto;scrollbar-width:none}
+#chips::-webkit-scrollbar{display:none}
+.chip{
+  flex:0 0 auto;font-family:var(--mono);font-size:11.5px;padding:5px 10px;
+  border:1px solid var(--line);border-radius:20px;color:var(--ink-dim);white-space:nowrap;
+}
+.chip:hover{border-color:var(--amber-dim);color:var(--amber)}
+.chip.hot{border-color:var(--amber);color:var(--amber)}
+.chip:disabled{opacity:.35;cursor:default}
+#inputrow{display:flex;align-items:flex-end;gap:10px;padding:9px 14px 11px}
+#caret{font-family:var(--mono);color:var(--amber);padding-bottom:9px;user-select:none}
+#say{
+  flex:1;font-family:var(--mono);font-size:14.5px;line-height:1.5;resize:none;
+  max-height:180px;padding:8px 0;color:var(--ink);
+}
+#say::placeholder{color:var(--ink-faint)}
+#go{
+  font-family:var(--mono);font-size:12px;padding:7px 15px;border-radius:6px;
+  background:var(--amber);color:#160d05;font-weight:700;
+}
+#go:disabled{background:#3a3d45;color:var(--ink-faint)}
+
+/* ---------- edge tabs + panels ---------- */
+#tabs{
+  position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;gap:0;
+  pointer-events:none;z-index:40;
+}
+#panelwrap{
+  position:fixed;inset:0;z-index:50;display:none;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(3px);
+}
+#panelwrap.open{display:block}
+#panel{
+  position:absolute;left:0;right:0;bottom:0;max-height:78vh;
+  background:var(--panel);border-top:1px solid var(--line);
+  border-radius:14px 14px 0 0;display:flex;flex-direction:column;
+  animation:rise .18s ease-out;padding-bottom:env(safe-area-inset-bottom);
+}
+@keyframes rise{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
+#panelhead{
+  display:flex;gap:2px;padding:10px 12px;border-bottom:1px solid var(--line);align-items:center;
+}
+#panelhead .pt{
+  font-family:var(--mono);font-size:12px;padding:6px 11px;border-radius:6px;color:var(--ink-dim);
+}
+#panelhead .pt.on{background:#232730;color:var(--amber)}
+#panelbody{overflow-y:auto;padding:16px 18px 26px;font-size:14px;line-height:1.6}
+#panelbody h4{
+  font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-faint);margin:20px 0 8px;font-weight:600;
+}
+#panelbody h4:first-child{margin-top:0}
+.row{display:flex;justify-content:space-between;gap:14px;padding:6px 0;border-bottom:1px solid #1e2128}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--ink-dim);font-family:var(--mono);font-size:12.5px}
+.row .v{text-align:right}
+.entry{padding:9px 0;border-bottom:1px solid #1e2128}
+.entry:last-child{border-bottom:none}
+.entry .t{font-weight:600}
+.entry .d{color:var(--ink-dim);font-size:13px;margin-top:3px}
+.tag{
+  font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:3px;
+  background:#2a2d35;color:var(--ink-dim);margin-left:7px;vertical-align:1px;
+}
+.tag.hot{background:rgba(201,80,63,.25);color:#f0a294}
+.tag.warm{background:rgba(212,130,63,.2);color:#e0a870}
+.tag.inf{background:rgba(154,122,184,.2);color:#c6aede}
+.empty{color:var(--ink-faint);font-style:italic;font-size:13px}
+.statgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center;margin:6px 0 4px}
+.statgrid div{background:#1c1f26;border-radius:6px;padding:9px 4px}
+.statgrid b{display:block;font-size:19px;font-family:var(--mono);color:var(--amber)}
+.statgrid span{font-family:var(--mono);font-size:10px;color:var(--ink-faint);letter-spacing:.08em}
+
+/* ---------- modals ---------- */
+.modal{position:fixed;inset:0;z-index:60;display:none;background:rgba(6,7,9,.9);overflow-y:auto}
+.modal.open{display:block}
+.sheet{max-width:640px;margin:0 auto;padding:44px 24px 70px}
+.sheet h1{font-family:var(--serif);font-size:28px;font-weight:400;margin-bottom:8px}
+.sheet .sub{color:var(--ink-dim);font-size:14px;line-height:1.6;margin-bottom:26px}
+.field{margin-bottom:18px}
+.field label{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-faint);margin-bottom:7px}
+.field input,.field select{
+  width:100%;background:#1c1f26;border:1px solid var(--line);border-radius:7px;padding:11px 13px;font-size:15px;
+}
+.field input:focus,.field select:focus{border-color:var(--amber-dim)}
+.field .hint{font-size:12.5px;color:var(--ink-faint);margin-top:6px;line-height:1.5}
+.btn{
+  display:block;width:100%;background:var(--amber);color:#160d05;font-weight:700;
+  padding:13px;border-radius:8px;font-size:15px;margin-top:22px;
+}
+.btn:disabled{background:#3a3d45;color:var(--ink-faint)}
+.btn.ghost{background:none;border:1px solid var(--line);color:var(--ink-dim);font-weight:400;margin-top:10px}
+.qcard{margin-bottom:26px}
+.qcard .q{font-family:var(--serif);font-size:18px;line-height:1.5;margin-bottom:12px}
+.opt{
+  display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:7px;
+  background:#1c1f26;border:1px solid var(--line);border-radius:8px;font-size:14.5px;line-height:1.45;
+}
+.opt:hover{border-color:var(--amber-dim)}
+.opt.sel{border-color:var(--amber);background:rgba(212,130,63,.11);color:#f0c898}
+.note{
+  font-family:var(--mono);font-size:12px;color:var(--ink-faint);line-height:1.6;
+  background:#14161b;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-top:18px;
+}
+.note b{color:var(--ink-dim)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:620px){.grid2{grid-template-columns:1fr}#log{padding:24px 18px 34px}.narr{font-size:16.5px}}
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <span class="stat"><span class="bar hp"><i id="hpbar" style="width:100%"></i></span><b id="hptxt">—</b></span>
+  <span class="stat" id="mpwrap"><span class="bar mp"><i id="mpbar" style="width:100%"></i></span><b id="mptxt">—</b></span>
+  <span class="stat">L<b id="lvl">1</b></span>
+  <span class="stat" id="clock">—</span>
+  <span class="stat" id="safeTag" hidden>SAFE</span>
+  <span class="stat" id="condwrap" hidden></span>
+  <span class="spacer"></span>
+  <span class="stat" id="viewers"></span>
+  <button class="iconbtn" id="btnSave" title="Export save">save</button>
+  <button class="iconbtn" id="btnCfg" title="Settings">⚙</button>
+</div>
+
+<div id="scroll"><div id="log"></div></div>
+
+<div id="dock">
+  <div id="chips">
+    <button class="chip" data-act="look">look around</button>
+    <button class="chip" data-act="listen">listen</button>
+    <button class="chip" data-act="rest">rest a moment</button>
+    <button class="chip hot" id="chipCool">✦ rule of cool</button>
+    <button class="chip" id="chipAppeal">appeal that</button>
+    <button class="chip" id="chipFix">fix a number</button>
+    <button class="chip" id="chipMgr">get a manager</button>
+  </div>
+  <div id="inputrow">
+    <span id="caret">&gt;</span>
+    <textarea id="say" rows="1" placeholder="what do you do?"></textarea>
+    <button id="go">send</button>
+  </div>
+</div>
+
+<div id="tabs"></div>
+
+<div id="panelwrap">
+  <div id="panel">
+    <div id="panelhead">
+      <button class="pt" data-p="sheet">sheet</button>
+      <button class="pt" data-p="bag">bag</button>
+      <button class="pt" data-p="threads">threads</button>
+      <button class="pt" data-p="codex">codex</button>
+      <button class="pt" data-p="log">rooms</button>
+      <span style="flex:1"></span>
+      <button class="pt" id="panelClose">close</button>
+    </div>
+    <div id="panelbody"></div>
+  </div>
+</div>
+
+<!-- settings -->
+<div class="modal" id="mCfg"><div class="sheet">
+  <h1>Settings</h1>
+  <div class="sub">Your key is stored in this browser only and is sent directly to Anthropic. Nothing passes through any other server.</div>
+  <div class="field">
+    <label>Anthropic API key</label>
+    <input id="cfgKey" type="password" placeholder="sk-ant-…" autocomplete="off">
+    <div class="hint">Get one at console.anthropic.com. Billing is per token, on your own account.</div>
+  </div>
+  <div class="grid2">
+    <div class="field">
+      <label>Model</label>
+      <select id="cfgModel">
+        <option value="claude-opus-5">Opus 5 — best writing</option>
+        <option value="claude-sonnet-5">Sonnet 5 — cheaper, fast</option>
+        <option value="claude-haiku-4-5">Haiku 4.5 — cheapest</option>
+      </select>
+      <div class="hint">Switchable mid-run. Opus for boss floors, Sonnet for corridors.</div>
+    </div>
+    <div class="field">
+      <label>Effort</label>
+      <select id="cfgEffort">
+        <option value="low">low — fastest</option>
+        <option value="medium" selected>medium</option>
+        <option value="high">high — most rigorous</option>
+      </select>
+      <div class="hint">How hard the DM thinks before answering. Higher follows the Constitution more closely and costs more.</div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="field"><label>Rule of Cool tokens per floor</label><input id="cfgTokens" type="number" min="0" max="9"></div>
+    <div class="field"><label>Max tokens per turn</label><input id="cfgMax" type="number" min="2000" max="32000" step="1000"></div>
+  </div>
+  <h4 style="font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);margin:24px 0 10px">Pacing thresholds</h4>
+  <div class="grid2">
+    <div class="field"><label>Spectacle</label><input id="cfgSpec" type="number" min="2" max="20"></div>
+    <div class="field"><label>Pressure</label><input id="cfgPres" type="number" min="2" max="20"></div>
+    <div class="field"><label>Gain</label><input id="cfgGain" type="number" min="2" max="20"></div>
+    <div class="field"><label>Drift</label><input id="cfgDrift" type="number" min="1" max="20"></div>
+  </div>
+  <div class="note"><b>Turns since a beat fired.</b> When a counter hits its threshold the DM is ordered to fire that beat, no excuses. Lower <b>pressure</b> for a harsher run, lower <b>spectacle</b> for a sillier one. <b>Drift</b> is the one that stops you wandering corridors looking for a safe room.</div>
+  <button class="btn" id="cfgSaveBtn">save</button>
+  <button class="btn ghost" id="cfgLoadBtn">load a save file…</button>
+  <button class="btn ghost" id="cfgNewBtn" style="color:#c9503f">abandon run and start over</button>
+  <input type="file" id="fileIn" accept=".json" hidden>
+</div></div>
+
+<!-- new game -->
+<div class="modal" id="mNew"><div class="sheet">
+  <h1 id="newTitle">4:17 p.m.</h1>
+  <div class="sub" id="newSub">
+    Every roofed structure on Earth came down at once. You were outside, which is
+    the only reason you are reading this. Eight billion people were not.<br><br>
+    Before the tutorial begins, the production needs to know who you were.
+  </div>
+  <div id="newForm"></div>
+  <button class="btn" id="newGo" disabled>enter the dungeon</button>
+  <div class="note" style="margin-top:22px">Your answers set your starting attributes — the average adult enters at 3 to 5 in each — and decide which entry achievements fire. Race and class come on floor three, at your Tutorial Guild Hall, the same as everyone else.</div>
+</div></div>
+
+<script src="lore.js"></script>
+<script src="rules.js"></script>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ===================== state ===================== */
+const CFG_KEY = "crawl.cfg", SAVE_KEY = "crawl.save";
+
+const defaultCfg = () => ({
+  apiKey: "", model: "claude-opus-5", effort: "medium",
+  maxTokens: 16000, tokensPerFloor: 3,
+  thresholds: { spectacle: 6, pressure: 4, gain: 8, drift: 3 },
+});
+
+const newState = (name, stats, flags) => ({
+  v: 1,
+  char: {
+    name, level: 1, floor: 1, race: "", klass: "",
+    hp: 20, hpMax: 20, mp: 10, mpMax: 10, gold: 0,
+    stats, unspent: 0, conditions: [], location: "A corridor of hewn stone",
+    inSafeRoom: false, floorMinutes: 0, tokens: 3, viewers: 0, followers: 0,
+    skills: [], spells: [], flags,
+  },
+  inv: { pools: [], items: [] },
+  boxes: [], threads: [], npcs: [], codex: [], rooms: [], digests: [],
+  achievements: [],
+  pacing: { spectacle: 0, pressure: 0, gain: 0, drift: 0 },
+  thresholds: { spectacle: 6, pressure: 4, gain: 8, drift: 3 },
+  tokensPerFloor: 3,
+  history: [], transcript: [], pendingToolUse: null,
+});
+
+let CFG = defaultCfg();
+let S = null;
+let busy = false;
+
+function loadCfg() { try { CFG = Object.assign(defaultCfg(), JSON.parse(localStorage.getItem(CFG_KEY) || "{}")); } catch (e) { CFG = defaultCfg(); } }
+function saveCfg() { localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); }
+function saveGame() { if (S) try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) { console.warn("save failed", e); } }
+function loadGame() { try { const r = localStorage.getItem(SAVE_KEY); return r ? JSON.parse(r) : null; } catch (e) { return null; } }
+
+/* ===================== rendering ===================== */
+const LOG = $("#log"), SCROLL = $("#scroll");
+const atBottom = () => SCROLL.scrollHeight - SCROLL.scrollTop - SCROLL.clientHeight < 140;
+const toBottom = () => { SCROLL.scrollTop = SCROLL.scrollHeight; };
+
+function renderNarration(container, raw) {
+  container.innerHTML = "";
+  const lines = raw.split("\n");
+  let para = [];
+  const flush = () => {
+    if (!para.length) return;
+    const p = el("p");
+    p.innerHTML = para.join(" ")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      .replace(/_(.+?)_/g, "<em>$1</em>");
+    container.appendChild(p);
+    para = [];
+  };
+  for (const line of lines) {
+    const t = line.trim();
+    const m = t.match(/^\[(SYSTEM|LOOT|CHAT|ACHIEVEMENT|ANNOUNCEMENT)\]\s*(.*)$/i);
+    if (m) {
+      flush();
+      const kind = m[1].toUpperCase();
+      const cls = kind === "LOOT" ? "lootline" : kind === "CHAT" ? "chatline" : "sysline";
+      container.appendChild(el("div", cls, m[2]));
+    } else if (!t) { flush(); }
+    else { para.push(t); }
+  }
+  flush();
+}
+
+function pushYou(text) {
+  const w = el("div", "turn");
+  w.appendChild(el("div", "you", "> " + text));
+  LOG.appendChild(w); toBottom();
+  return w;
+}
+function pushErr(msg) {
+  const w = el("div", "turn"); w.appendChild(el("div", "err", msg));
+  LOG.appendChild(w); toBottom();
+}
+
+/* ===================== HUD ===================== */
+function refreshHud() {
+  if (!S) return;
+  const c = S.char;
+  $("#hpbar").style.width = clamp(c.hp / Math.max(1, c.hpMax) * 100, 0, 100) + "%";
+  $("#hptxt").textContent = `${c.hp}/${c.hpMax}`;
+  $("#mpbar").style.width = clamp(c.mp / Math.max(1, c.mpMax) * 100, 0, 100) + "%";
+  $("#mptxt").textContent = `${c.mp}/${c.mpMax}`;
+  $("#lvl").textContent = c.level;
+
+  const days = (LORE.floors[c.floor] || {}).days || 3;
+  const left = days * 24 * 60 - c.floorMinutes;
+  const ck = $("#clock");
+  ck.textContent = `F${c.floor} · ${Math.floor(left / 60)}h${String(left % 60).padStart(2, "0")}`;
+  ck.className = "stat" + (left < 6 * 60 ? " warn" : "");
+
+  $("#safeTag").hidden = !c.inSafeRoom;
+  const cw = $("#condwrap");
+  cw.hidden = !c.conditions.length;
+  cw.textContent = c.conditions.join(" · ");
+  cw.className = "stat warn";
+
+  $("#viewers").textContent = c.floor < 2 ? "" : `${c.viewers.toLocaleString()}◉`;
+  const cc = $("#chipCool");
+  cc.textContent = `✦ rule of cool (${c.tokens})`;
+  cc.disabled = c.tokens <= 0 || busy;
+}
+
+/* ===================== panels ===================== */
+let curPanel = "sheet";
+function openPanel(p) { curPanel = p || curPanel; $("#panelwrap").classList.add("open"); drawPanel(); }
+function closePanel() { $("#panelwrap").classList.remove("open"); }
+
+function drawPanel() {
+  document.querySelectorAll("#panelhead .pt[data-p]").forEach(b => b.classList.toggle("on", b.dataset.p === curPanel));
+  const b = $("#panelbody"); b.innerHTML = "";
+  const c = S.char;
+  const H = t => b.appendChild(el("h4", null, t));
+  const row = (k, v) => { const r = el("div", "row"); r.appendChild(el("span", "k", k)); r.appendChild(el("span", "v", v)); b.appendChild(r); };
+  const entry = (t, d, tag) => {
+    const e = el("div", "entry"); const h = el("div", "t"); h.textContent = t;
+    if (tag) { const s = el("span", "tag " + (tag.cls || ""), tag.text); h.appendChild(s); }
+    e.appendChild(h); if (d) e.appendChild(el("div", "d", d)); b.appendChild(e);
+  };
+  const none = t => b.appendChild(el("div", "empty", t));
+
+  if (curPanel === "sheet") {
+    H("attributes");
+    const g = el("div", "statgrid");
+    for (const k of ["str", "dex", "con", "int", "cha"]) {
+      const d = el("div"); d.appendChild(el("b", null, c.stats[k])); d.appendChild(el("span", null, k.toUpperCase())); g.appendChild(d);
+    }
+    b.appendChild(g);
+    if (c.unspent) b.appendChild(el("div", "empty", `${c.unspent} unspent points — spendable on floor 3, in a safe room.`));
+    H("vitals");
+    row("name", c.name); row("level", c.level);
+    row("race", c.race || "— (floor 3)"); row("class", c.klass || "— (floor 3)");
+    row("health", `${c.hp}/${c.hpMax}`); row("mana", `${c.mp}/${c.mpMax}`);
+    row("gold", c.gold); row("location", c.location);
+    row("conditions", c.conditions.join(", ") || "none");
+    row("rule of cool", `${c.tokens}/${S.tokensPerFloor} this floor`);
+    if (c.floor >= 2) { row("viewers", c.viewers.toLocaleString()); row("followers", c.followers.toLocaleString()); }
+    H("skills");
+    c.skills.length ? c.skills.forEach(s => entry(`${s.name} — ${s.level}`, s.note)) : none("None yet.");
+    H("spells");
+    c.spells.length ? c.spells.forEach(s => entry(s.name + (s.cost ? ` — ${s.cost}` : ""), s.note)) : none("None yet.");
+    H("achievements");
+    S.achievements.length ? S.achievements.slice().reverse().forEach(a => entry(a.name, a.text, a.box ? { text: a.box } : null)) : none("None yet.");
+  }
+
+  if (curPanel === "bag") {
+    H("unopened boxes");
+    S.boxes.length
+      ? S.boxes.forEach(x => entry(`${x.tier} ${x.type} box`, x.note || (c.inSafeRoom ? "Can be opened here." : "Opens only in a safe room.")))
+      : none("None.");
+    H("bulk");
+    S.inv.pools.length
+      ? S.inv.pools.forEach(p => entry(p.label, p.description, p.where && p.where !== "carried" ? { text: p.where } : null))
+      : none("Nothing bulky yet.");
+    for (const cat of ["weapons", "armor", "consumables", "components", "utility", "junk"]) {
+      const items = S.inv.items.filter(i => (i.category || "utility") === cat);
+      if (!items.length) continue;
+      H(cat);
+      items.forEach(i => entry(
+        i.label + (i.qty > 1 ? ` ×${i.qty}` : ""),
+        i.description,
+        i.slot ? { text: "equipped", cls: "warm" } : (i.rarity && i.rarity !== "common" ? { text: i.rarity } : null)
+      ));
+    }
+    const uncat = S.inv.items.filter(i => !["weapons", "armor", "consumables", "components", "utility", "junk"].includes(i.category || "utility"));
+    if (uncat.length) { H("other"); uncat.forEach(i => entry(i.label, i.description)); }
+    if (!S.inv.items.length && !S.inv.pools.length && !S.boxes.length) none("Empty. You brought nothing and you have taken nothing.");
+  }
+
+  if (curPanel === "threads") {
+    H("open threads");
+    const open = S.threads.filter(t => t.heat !== "resolved");
+    open.length
+      ? open.sort((x, y) => ({ hot: 0, warm: 1, cold: 2 })[x.heat] - ({ hot: 0, warm: 1, cold: 2 })[y.heat])
+        .forEach(t => entry(t.title, [t.who, t.resolves && "closes when: " + t.resolves].filter(Boolean).join(" · "),
+          { text: t.heat, cls: t.heat === "hot" ? "hot" : t.heat === "warm" ? "warm" : "" }))
+      : none("Nothing hanging over you. Yet.");
+    H("people");
+    S.npcs.length
+      ? S.npcs.forEach(n => entry(`${n.name} — ${n.what}`, [n.disposition, n.wants && "wants " + n.wants, n.owed].filter(Boolean).join(" · ")))
+      : none("You have met no one worth remembering.");
+    H("pacing");
+    for (const k of ["spectacle", "pressure", "gain", "drift"]) {
+      const v = S.pacing[k], th = S.thresholds[k];
+      row(k, `${v}/${th}${v >= th ? "  ← due" : ""}`);
+    }
+  }
+
+  if (curPanel === "codex") {
+    b.appendChild(el("div", "empty",
+      "Everything the DM has invented. Once it is here it is canon and cannot be contradicted — that is the whole point. Anything you love, paste into lore.js to keep it across runs."));
+    const kinds = [...new Set(S.codex.map(e => e.kind))];
+    if (!kinds.length) none("Nothing invented yet.");
+    for (const k of kinds) {
+      H(k + "s");
+      S.codex.filter(e => e.kind === k).forEach(e => entry(e.name, e.entry, { text: "inferred", cls: "inf" }));
+    }
+  }
+
+  if (curPanel === "log") {
+    H("rooms");
+    S.rooms.length
+      ? S.rooms.slice().reverse().forEach(r => entry(r.name, [r.happened, r.changed, r.owed && "owed: " + r.owed, r.unresolved && "unresolved: " + r.unresolved].filter(Boolean).join(" · ")))
+      : none("You have not finished with anywhere yet.");
+    if (S.digests.length) { H("earlier"); S.digests.forEach(d => entry("digest", d)); }
+  }
+}
+
+/* ===================== state application ===================== */
+function applyTurn(t) {
+  if (!t || typeof t !== "object") return;
+  const c = S.char;
+
+  if (typeof t.minutes === "number") c.floorMinutes = Math.max(0, c.floorMinutes + Math.round(t.minutes));
+
+  // Level first: it raises the ceiling. Damage reported in the same turn must
+  // still land, so never full-heal here — grant the new headroom and no more.
+  if (typeof t.level === "number" && t.level !== c.level) {
+    const gained = Math.max(0, t.level - c.level);
+    c.level = t.level;
+    if (gained) {
+      c.unspent += gained * 3;
+      const bump = gained * 5;
+      c.hpMax += bump; c.hp += bump;
+      const mbump = gained * 2;
+      c.mpMax += mbump; c.mp += mbump;
+    }
+  }
+  if (typeof t.hp_max === "number") c.hpMax = Math.max(1, Math.round(t.hp_max));
+  if (typeof t.mp_max === "number") c.mpMax = Math.max(0, Math.round(t.mp_max));
+  if (typeof t.hp === "number") c.hp = c.hp + Math.round(t.hp);
+  if (typeof t.mp === "number") c.mp = c.mp + Math.round(t.mp);
+  c.hp = clamp(c.hp, 0, c.hpMax);
+  c.mp = clamp(c.mp, 0, c.mpMax);
+  if (typeof t.gold === "number") c.gold = Math.max(0, c.gold + Math.round(t.gold));
+  if (typeof t.unspent === "number") c.unspent = Math.max(0, c.unspent + t.unspent);
+  if (typeof t.unspent_points === "number") c.unspent = Math.max(0, c.unspent + t.unspent_points);
+
+  if (t.stats) for (const k of ["str", "dex", "con", "int", "cha"])
+    if (typeof t.stats[k] === "number") c.stats[k] = Math.max(1, c.stats[k] + t.stats[k]);
+
+  if (Array.isArray(t.conditions_remove))
+    c.conditions = c.conditions.filter(x => !t.conditions_remove.some(r => x.toLowerCase().includes(String(r).toLowerCase())));
+  if (Array.isArray(t.conditions_add))
+    for (const x of t.conditions_add) if (x && !c.conditions.includes(x)) c.conditions.push(x);
+
+  if (typeof t.floor === "number" && t.floor !== c.floor) {
+    c.floor = t.floor; c.floorMinutes = 0; c.tokens = S.tokensPerFloor;
+  }
+  if (t.location) c.location = t.location;
+  if (typeof t.in_safe_room === "boolean") c.inSafeRoom = t.in_safe_room;
+
+  const upsert = (arr, key, val) => { const i = arr.findIndex(x => x[key].toLowerCase() === val[key].toLowerCase()); if (i >= 0) arr[i] = Object.assign(arr[i], val); else arr.push(val); };
+
+  if (Array.isArray(t.skills)) for (const s of t.skills) if (s && s.name) upsert(c.skills, "name", s);
+  if (Array.isArray(t.spells)) for (const s of t.spells) if (s && s.name) upsert(c.spells, "name", s);
+  if (Array.isArray(t.npcs)) for (const n of t.npcs) if (n && n.name) upsert(S.npcs, "name", n);
+  if (Array.isArray(t.codex)) for (const e of t.codex) if (e && e.name && e.entry) upsert(S.codex, "name", e);
+
+  if (Array.isArray(t.threads)) for (const th of t.threads) {
+    if (!th || !th.title) continue;
+    const id = th.id || th.title;
+    const i = S.threads.findIndex(x => (x.id || x.title) === id);
+    if (i >= 0) S.threads[i] = Object.assign(S.threads[i], th, { id });
+    else S.threads.push(Object.assign({ id }, th));
+  }
+  S.threads = S.threads.filter(t2 => t2.heat !== "resolved").concat(S.threads.filter(t2 => t2.heat === "resolved").slice(-4));
+
+  if (Array.isArray(t.boxes)) for (const bx of t.boxes) if (bx && bx.tier) S.boxes.push(bx);
+  if (Array.isArray(t.achievements)) for (const a of t.achievements) if (a && a.name) S.achievements.push(a);
+
+  if (Array.isArray(t.inventory)) for (const op of t.inventory) applyInv(op);
+
+  if (t.audience) {
+    if (typeof t.audience.viewers === "number") c.viewers = Math.max(0, Math.round(t.audience.viewers));
+    if (typeof t.audience.followers === "number") c.followers = Math.max(0, Math.round(t.audience.followers));
+  }
+
+  if (t.room_card && t.room_card.name) {
+    S.rooms.push(t.room_card);
+    if (S.rooms.length > 10) {
+      const chunk = S.rooms.splice(0, 10);
+      S.digests.push(chunk.map(r => r.name).join(" → ") + ". " +
+        chunk.map(r => r.happened).filter(Boolean).slice(0, 5).join(" "));
+    }
+  }
+
+  if (t.token_spent && c.tokens > 0) c.tokens--;
+
+  // pacing
+  for (const k of ["spectacle", "pressure", "gain", "drift"]) S.pacing[k]++;
+  if (Array.isArray(t.beats_fired)) for (const k of t.beats_fired) if (S.pacing[k] != null) S.pacing[k] = 0;
+
+  if (t.death) c.dead = true;
+}
+
+function applyInv(op) {
+  if (!op || !op.op || !op.label) return;
+  const P = S.inv.pools, I = S.inv.items;
+  const findP = () => P.findIndex(x => x.label.toLowerCase() === op.label.toLowerCase());
+  const findI = () => I.findIndex(x => x.label.toLowerCase() === op.label.toLowerCase());
+
+  switch (op.op) {
+    case "pool": {
+      const i = findP();
+      const rec = { label: op.label, description: op.description || (i >= 0 ? P[i].description : ""), category: op.category || (i >= 0 ? P[i].category : "junk"), where: op.where || (i >= 0 ? P[i].where : "carried") };
+      if (i >= 0) P[i] = rec; else P.push(rec);
+      break;
+    }
+    case "item": {
+      const i = findI();
+      if (i >= 0) { I[i].qty = (I[i].qty || 1) + (op.qty || 1); if (op.description) I[i].description = op.description; }
+      else I.push({ label: op.label, description: op.description || "", category: op.category || "utility", rarity: op.rarity || "common", qty: op.qty || 1, where: op.where || "carried", slot: op.slot || "" });
+      break;
+    }
+    case "consume": {
+      const i = findI(); if (i < 0) break;
+      I[i].qty = (I[i].qty || 1) - (op.qty || 1);
+      if (I[i].qty <= 0) I.splice(i, 1);
+      break;
+    }
+    case "remove": {
+      const i = findI(); if (i >= 0) { I.splice(i, 1); break; }
+      const j = findP(); if (j >= 0) P.splice(j, 1);
+      break;
+    }
+    case "move": {
+      const i = findI(); if (i >= 0) { I[i].where = op.where || "carried"; break; }
+      const j = findP(); if (j >= 0) P[j].where = op.where || "carried";
+      break;
+    }
+    case "equip": { const i = findI(); if (i >= 0) I[i].slot = op.slot || "weapon"; break; }
+    case "unequip": { const i = findI(); if (i >= 0) I[i].slot = ""; break; }
+  }
+}
+
+/* ===================== the turn ===================== */
+function trimHistory() {
+  const MAX = 30, KEEP = 20;
+  if (S.history.length <= MAX) return;
+  S.history.splice(0, S.history.length - KEEP);
+
+  // The window must open on a user turn.
+  while (S.history.length && S.history[0].role !== "user") S.history.shift();
+
+  // Every user turn after the first carries a tool_result answering the
+  // previous assistant's tool_use. Once that assistant turn is trimmed away
+  // the tool_result is an orphan and the API rejects it — so strip it rather
+  // than dropping the turn, which would throw away the player's own words.
+  const first = S.history[0];
+  if (first && Array.isArray(first.content)) {
+    first.content = first.content.filter(b => b.type !== "tool_result");
+    if (!first.content.length) S.history.shift();
+  }
+  // What falls out of the window is not lost: room cards, threads, the codex
+  // and the digests carry it, and they ride in the state block every turn.
+}
+
+/* The API allows at most 4 cache breakpoints per request. One lives on the
+   system block; this keeps exactly one more, on the newest user turn, and
+   clears any left behind by earlier turns. Without the sweep they accumulate
+   in history and the request 400s around turn four. Moving the breakpoint
+   forward each turn is the intended multi-turn pattern — the older prefix is
+   still read as a cache hit. */
+function setCacheBreakpoint() {
+  for (const m of S.history)
+    if (Array.isArray(m.content))
+      for (const b of m.content) if (b && b.cache_control) delete b.cache_control;
+  const last = S.history[S.history.length - 1];
+  if (last && Array.isArray(last.content) && last.content.length)
+    last.content[last.content.length - 1].cache_control = { type: "ephemeral" };
+}
+
+async function takeTurn(playerText) {
+  if (busy || !S) return;
+  if (!CFG.apiKey) { openCfg(); return; }
+  busy = true; $("#go").disabled = true; refreshHud();
+
+  pushYou(playerText);
+  S.transcript.push({ who: "you", text: playerText });
+
+  const heldToolUse = S.pendingToolUse;   // restored if the request fails
+  const userBlocks = [];
+  if (S.pendingToolUse) {
+    userBlocks.push({ type: "tool_result", tool_use_id: S.pendingToolUse, content: "recorded" });
+    S.pendingToolUse = null;
+  }
+  userBlocks.push({ type: "text", text: buildStateBlock(S) + "\n\n> " + playerText });
+  S.history.push({ role: "user", content: userBlocks });
+  trimHistory();
+  setCacheBreakpoint();
+
+  const wrap = el("div", "turn");
+  const think = el("div", "thinking", "the dungeon considers you");
+  const body = el("div", "narr");
+  wrap.appendChild(think); wrap.appendChild(body);
+  LOG.appendChild(wrap); toBottom();
+
+  let narration = "";
+  const blocks = [];
+  let started = false;
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": CFG.apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: CFG.model,
+        max_tokens: CFG.maxTokens,
+        stream: true,
+        thinking: { type: "adaptive" },
+        output_config: { effort: CFG.effort },
+        system: [{ type: "text", text: buildSystemPrompt(S), cache_control: { type: "ephemeral" } }],
+        messages: S.history,
+        tools: [APPLY_TURN_TOOL],
+      }),
+    });
+
+    if (!res.ok) {
+      let detail = "";
+      try { const j = await res.json(); detail = j?.error?.message || JSON.stringify(j); }
+      catch (e) { detail = await res.text().catch(() => ""); }
+      throw new Error(`HTTP ${res.status}\n${detail}`);
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let cur = null, jsonBuf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === "[DONE]") continue;
+          let ev; try { ev = JSON.parse(payload); } catch (e) { continue; }
+
+          if (ev.type === "content_block_start") {
+            const cb = ev.content_block || {};
+            cur = { type: cb.type };
+            if (cb.type === "text") cur.text = cb.text || "";
+            if (cb.type === "thinking") { cur.thinking = cb.thinking || ""; cur.signature = cb.signature || ""; }
+            if (cb.type === "redacted_thinking") cur.data = cb.data || "";
+            if (cb.type === "tool_use") { cur.id = cb.id; cur.name = cb.name; jsonBuf = ""; }
+          } else if (ev.type === "content_block_delta") {
+            const d = ev.delta || {};
+            if (d.type === "text_delta" && cur) {
+              if (!started) { started = true; think.remove(); }
+              cur.text = (cur.text || "") + d.text;
+              narration += d.text;
+              body.textContent = narration;
+              if (atBottom()) toBottom();
+            } else if (d.type === "thinking_delta" && cur) { cur.thinking = (cur.thinking || "") + (d.thinking || ""); }
+            else if (d.type === "signature_delta" && cur) { cur.signature = (cur.signature || "") + (d.signature || ""); }
+            else if (d.type === "input_json_delta") { jsonBuf += d.partial_json || ""; }
+          } else if (ev.type === "content_block_stop") {
+            if (cur) {
+              if (cur.type === "tool_use") { try { cur.input = JSON.parse(jsonBuf || "{}"); } catch (e) { cur.input = {}; } }
+              blocks.push(cur); cur = null;
+            }
+          } else if (ev.type === "error") {
+            throw new Error(ev.error?.message || "stream error");
+          }
+        }
+      }
+    }
+
+    think.remove();
+    renderNarration(body, narration.trim());
+    S.transcript.push({ who: "dm", text: narration.trim() });
+
+    const tool = blocks.find(b => b.type === "tool_use");
+    if (tool) { applyTurn(tool.input); S.pendingToolUse = tool.id; }
+    else {
+      // no tool call: still tick pacing so drift can't stall
+      for (const k of ["spectacle", "pressure", "gain", "drift"]) S.pacing[k]++;
+    }
+
+    if (blocks.length) S.history.push({ role: "assistant", content: blocks });
+
+    if (S.char.dead) {
+      const d = el("div", "sysline", "[SYSTEM] Crawler terminated. Thank you for playing. Your remains are the property of Borant Corporation.");
+      wrap.appendChild(d);
+    }
+  } catch (e) {
+    think.remove();
+    if (!narration) body.remove();
+    let msg = String(e.message || e);
+    if (/Failed to fetch|NetworkError|CORS/i.test(msg))
+      msg += "\n\nThis is almost always one of:\n · the API key is wrong or has no credit\n · a browser extension is blocking the request\n · your browser is refusing the direct call — try Chrome, or serve the folder with:  python3 -m http.server 8080";
+    pushErr(msg);
+    // Roll the failed turn back cleanly: drop the user message we just added
+    // and hand back the outstanding tool_use id, or the next request would
+    // leave an assistant tool_use with no matching tool_result and be rejected.
+    S.history.pop();
+    S.pendingToolUse = heldToolUse;
+  }
+
+  busy = false; $("#go").disabled = false;
+  refreshHud(); saveGame();
+  if ($("#panelwrap").classList.contains("open")) drawPanel();
+  $("#say").focus();
+}
+
+/* ===================== opening ===================== */
+function openingPrompt() {
+  const c = S.char;
+  const ach = (c.flags || []).map(f => LORE.entryAchievements.find(a => a.when === f)).filter(Boolean);
+  ach.push(LORE.entryAchievements.find(a => a.when === "always"));
+  const list = ach.filter(Boolean).map(a => `  · ${a.name}${a.box ? ` — ${a.box}` : " — NO BOX"}: ${a.text}`).join("\n");
+  return `[NEW RUN — write the cold open.]
+
+The crawler is ${c.name}. This is the first moment inside the dungeon: the
+tutorial floor, a corridor of hewn stone under a dead Earth. Floor 1 is not
+broadcast live.
+
+Do all of this, in this order:
+1. Two or three paragraphs of arrival. Ground it in the body and the smell of
+   the place. Do not explain the rules to them.
+2. The System AI's welcome notification, in its own voice, as [SYSTEM] lines.
+3. Fire these entry achievements as [SYSTEM] lines, using the given text
+   verbatim. Award the boxes noted; the ones marked NO BOX get no box:
+${list}
+4. Something to do or someone to see within the first thirty seconds — a sound,
+   a body, a door, another crawler, a rat. Do not leave them in an empty
+   corridor.
+5. End on the player having a choice to make.
+
+Then call apply_turn with the boxes, achievements, starting location, and the
+minutes elapsed.`;
+}
+
+/* ===================== new game / survey ===================== */
+let surveyAnswers = [];
+function buildSurvey() {
+  const f = $("#newForm"); f.innerHTML = ""; surveyAnswers = [];
+  const nf = el("div", "field");
+  nf.innerHTML = `<label>Your name</label><input id="newName" placeholder="what people called you" autocomplete="off">`;
+  f.appendChild(nf);
+  LORE.survey.forEach((q, qi) => {
+    const card = el("div", "qcard");
+    card.appendChild(el("div", "q", q.q));
+    q.a.forEach((o, oi) => {
+      const btn = el("button", "opt", o.t);
+      btn.onclick = () => {
+        surveyAnswers[qi] = oi;
+        [...card.querySelectorAll(".opt")].forEach((x, k) => x.classList.toggle("sel", k === oi));
+        checkSurvey();
+      };
+      card.appendChild(btn);
+    });
+    f.appendChild(card);
+  });
+  $("#newName") && $("#newName").addEventListener("input", checkSurvey);
+  checkSurvey();
+}
+function checkSurvey() {
+  const named = ($("#newName")?.value || "").trim().length > 0;
+  const done = LORE.survey.every((_, i) => surveyAnswers[i] != null);
+  $("#newGo").disabled = !(named && done);
+}
+function finishSurvey() {
+  const name = $("#newName").value.trim() || "Crawler";
+  const stats = { str: 2, dex: 2, con: 2, int: 2, cha: 2 };
+  const flags = [];
+  LORE.survey.forEach((q, qi) => {
+    const o = q.a[surveyAnswers[qi]];
+    if (!o) return;
+    for (const k in (o.d || {})) stats[k] = (stats[k] || 0) + o.d[k];
+    if (o.flag) flags.push(...o.flag.split(","));
+  });
+  for (const k in stats) stats[k] = clamp(stats[k], 1, 8);
+
+  S = newState(name, stats, [...new Set(flags)]);
+  S.thresholds = Object.assign({}, CFG.thresholds);
+  S.tokensPerFloor = CFG.tokensPerFloor;
+  S.char.tokens = CFG.tokensPerFloor;
+  S.char.mpMax = S.char.mp = Math.max(4, stats.int * 2);
+  S.char.hpMax = S.char.hp = 16 + stats.con * 2;
+
+  localStorage.removeItem(SAVE_KEY);
+  LOG.innerHTML = "";
+  $("#mNew").classList.remove("open");
+  refreshHud(); saveGame();
+  takeTurn(openingPrompt());
+}
+
+/* ===================== settings ===================== */
+function openCfg() {
+  $("#cfgKey").value = CFG.apiKey; $("#cfgModel").value = CFG.model;
+  $("#cfgEffort").value = CFG.effort; $("#cfgMax").value = CFG.maxTokens;
+  $("#cfgTokens").value = CFG.tokensPerFloor;
+  $("#cfgSpec").value = CFG.thresholds.spectacle; $("#cfgPres").value = CFG.thresholds.pressure;
+  $("#cfgGain").value = CFG.thresholds.gain; $("#cfgDrift").value = CFG.thresholds.drift;
+  $("#mCfg").classList.add("open");
+}
+function saveCfgFromForm() {
+  CFG.apiKey = $("#cfgKey").value.trim();
+  CFG.model = $("#cfgModel").value;
+  CFG.effort = $("#cfgEffort").value;
+  CFG.maxTokens = clamp(+$("#cfgMax").value || 16000, 2000, 32000);
+  CFG.tokensPerFloor = clamp(+$("#cfgTokens").value || 3, 0, 9);
+  CFG.thresholds = {
+    spectacle: clamp(+$("#cfgSpec").value || 6, 2, 20),
+    pressure: clamp(+$("#cfgPres").value || 4, 2, 20),
+    gain: clamp(+$("#cfgGain").value || 8, 2, 20),
+    drift: clamp(+$("#cfgDrift").value || 3, 1, 20),
+  };
+  saveCfg();
+  if (S) { S.thresholds = Object.assign({}, CFG.thresholds); S.tokensPerFloor = CFG.tokensPerFloor; saveGame(); }
+  $("#mCfg").classList.remove("open");
+  refreshHud();
+}
+
+function exportSave() {
+  if (!S) return;
+  const blob = new Blob([JSON.stringify(S, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `crawl-${S.char.name.replace(/\s+/g, "-").toLowerCase()}-f${S.char.floor}.json`;
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function importSave(file) {
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      if (!d || !d.char) throw new Error("not a save file");
+      S = d; saveGame();
+      LOG.innerHTML = "";
+      for (const t of (S.transcript || []).slice(-24)) {
+        if (t.who === "you") pushYou(t.text);
+        else { const w = el("div", "turn"), b = el("div", "narr"); renderNarration(b, t.text); w.appendChild(b); LOG.appendChild(w); }
+      }
+      $("#mCfg").classList.remove("open"); $("#mNew").classList.remove("open");
+      refreshHud(); toBottom();
+    } catch (e) { alert("Could not read that save: " + e.message); }
+  };
+  r.readAsText(file);
+}
+
+/* ===================== wiring ===================== */
+function send() {
+  const t = $("#say").value.trim();
+  if (!t) return;
+  $("#say").value = ""; $("#say").style.height = "auto";
+  takeTurn(t);
+}
+
+$("#go").onclick = send;
+$("#say").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$("#say").addEventListener("input", e => {
+  e.target.style.height = "auto";
+  e.target.style.height = Math.min(180, e.target.scrollHeight) + "px";
+});
+
+document.querySelectorAll("#chips .chip[data-act]").forEach(b => {
+  b.onclick = () => takeTurn(b.textContent);
+});
+$("#chipCool").onclick = () => {
+  if (!S || S.char.tokens <= 0) return;
+  const t = $("#say").value.trim();
+  takeTurn("[RULE OF COOL — spending a token] " + (t || "resolve my plan at its most favourable reasonable interpretation."));
+  $("#say").value = "";
+};
+$("#chipAppeal").onclick = () => takeTurn("[APPEAL] Restate what you ruled and quote the prior text you relied on. If you cannot quote text that already existed, the ruling is overturned. Three lines maximum.");
+$("#chipFix").onclick = () => {
+  const w = prompt("What number is wrong?");
+  if (w) takeTurn("[CORRECTION] " + w + "\n\nThis is bookkeeping, not a ruling. Fix it, confirm it in one line, and do not argue.");
+};
+$("#chipMgr").onclick = () => takeTurn("I want to speak to a manager.");
+
+$("#btnCfg").onclick = openCfg;
+$("#btnSave").onclick = exportSave;
+$("#cfgSaveBtn").onclick = saveCfgFromForm;
+$("#cfgLoadBtn").onclick = () => $("#fileIn").click();
+$("#fileIn").onchange = e => { if (e.target.files[0]) importSave(e.target.files[0]); };
+$("#cfgNewBtn").onclick = () => {
+  if (!confirm("Abandon this run and start a new crawler? Export a save first if you want it back.")) return;
+  $("#mCfg").classList.remove("open"); buildSurvey(); $("#mNew").classList.add("open");
+};
+
+document.querySelectorAll("#panelhead .pt[data-p]").forEach(b => b.onclick = () => { curPanel = b.dataset.p; drawPanel(); });
+$("#panelClose").onclick = closePanel;
+$("#panelwrap").onclick = e => { if (e.target.id === "panelwrap") closePanel(); };
+$("#newGo").onclick = finishSurvey;
+document.querySelectorAll(".modal").forEach(m => m.addEventListener("click", e => {
+  if (e.target === m && m.id === "mCfg") m.classList.remove("open");
+}));
+
+// edge tabs
+const TABS = [["sheet", "sheet"], ["bag", "bag"], ["threads", "threads"], ["codex", "codex"], ["log", "rooms"]];
+{
+  const t = $("#tabs");
+  for (const [k, label] of TABS) {
+    const b = el("button", "chip", label);
+    b.style.cssText = "pointer-events:auto;margin:0 2px 6px;background:var(--bg2);opacity:.92";
+    b.onclick = () => openPanel(k);
+    t.appendChild(b);
+  }
+  t.style.cssText += ";bottom:auto;top:calc(38px + env(safe-area-inset-top));";
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { closePanel(); $("#mCfg").classList.remove("open"); }
+});
+
+/* ===================== boot ===================== */
+loadCfg();
+S = loadGame();
+if (S) {
+  S.thresholds = S.thresholds || Object.assign({}, CFG.thresholds);
+  S.codex = S.codex || []; S.digests = S.digests || []; S.achievements = S.achievements || [];
+  for (const t of (S.transcript || []).slice(-24)) {
+    if (t.who === "you") pushYou(t.text);
+    else { const w = el("div", "turn"), b = el("div", "narr"); renderNarration(b, t.text); w.appendChild(b); LOG.appendChild(w); }
+  }
+  refreshHud(); toBottom();
+  if (!CFG.apiKey) openCfg();
+} else {
+  buildSurvey();
+  $("#mNew").classList.add("open");
+}
+</script>
+</body>
+</html>
