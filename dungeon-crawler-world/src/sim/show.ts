@@ -65,6 +65,15 @@ export function broadcastMultiplier(floor: number): number {
 export interface Spectacle {
   views: number;
   reasons: string[];
+  /**
+   * The composed style multiplier, kept rather than recovered.
+   *
+   * The client prints "×3.2 USED THE ROOM" next to the spike, and that number
+   * has to be the one the resolver actually applied. Reconstructing it from the
+   * labels downstream would be a second implementation of the same arithmetic,
+   * quietly free to disagree with the first.
+   */
+  multiplier: number;
 }
 
 export function scoreKill(
@@ -75,25 +84,29 @@ export function scoreKill(
   let views = 40 + victimLevel * 28;
   const reasons: string[] = [];
   const seen = new Set<Style>();
+  let multiplier = 1;
   for (const s of styles) {
     if (seen.has(s)) continue;
     seen.add(s);
-    views *= STYLE_MULTIPLIER[s] ?? 1;
+    const m = STYLE_MULTIPLIER[s] ?? 1;
+    multiplier *= m;
+    views *= m;
     reasons.push(STYLE_LABEL[s] ?? s);
   }
   views *= derive(state).spectacle;
   views *= broadcastMultiplier(state.floor.n);
-  return { views: Math.round(views), reasons };
+  return { views: Math.round(views), reasons, multiplier: Math.round(multiplier * 10) / 10 };
 }
 
 export function scoreEvent(state: GameState, base: number, reason: string): Spectacle {
   return {
     views: Math.round(base * derive(state).spectacle * broadcastMultiplier(state.floor.n)),
     reasons: [reason],
+    multiplier: 1,
   };
 }
 
-export function applyViews(state: GameState, log: EventLog, spec: Spectacle): void {
+export function applyViews(state: GameState, log: EventLog, spec: Spectacle, victim?: string): void {
   if (spec.views <= 0) return;
   const r = state.ratings;
   r.views += spec.views;
@@ -119,6 +132,8 @@ export function applyViews(state: GameState, log: EventLog, spec: Spectacle): vo
     amount: spec.views,
     total: r.views,
     because: spec.reasons,
+    multiplier: spec.multiplier,
+    victim,
   });
   if (state.crawler.bounty - before >= 25) {
     log.push({

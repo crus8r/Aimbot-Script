@@ -140,6 +140,8 @@ export interface TurnResult {
   events: GameEvent[];
 }
 
+export type ClockStage = "open" | "posted" | "closing" | "terminal";
+
 const HOURS_PER_ROUND = 0.02; // ~70 seconds a round, and it adds up
 
 export class Game {
@@ -1407,7 +1409,7 @@ export class Game {
           this.state.floorTally.environmentalKills++;
         }
         if (k.styles.includes("punching_up")) this.state.counters.punchingUpKills++;
-        applyViews(this.state, this.log, scoreKill(this.state, k.level, k.styles));
+        applyViews(this.state, this.log, scoreKill(this.state, k.level, k.styles), k.name);
       }
 
       // A wipe is worth more than the sum of its bodies.
@@ -2204,6 +2206,7 @@ export class Game {
     this.state.floorTally = blankTally();
     // A floor is scored on its own, so the audience it drew is measured from here.
     this.state.ratings.floorStart = this.state.ratings.views;
+    this.state.flags.clockStage = "open";
     this.state.claims = 0;
     this.state.shop = null;
     revealFrom(this.state.floor, this.state.floor.at);
@@ -2321,10 +2324,43 @@ export class Game {
       this.die("Caught on the floor at collapse. The ceiling came down exactly on schedule.");
       return;
     }
-    if (s.floor.hoursLeft < 6 && !s.flags.collapseWarned) {
-      s.flags.collapseWarned = true;
-      this.log.say(`Under six hours. The floor is closing and it is not a metaphor. Find a stairwell.`);
-    }
+    this.checkClockStage();
+  }
+
+  /**
+   * One escalation ladder for the floor clock, fired on CROSSINGS.
+   *
+   * Not on values. Time advances in chunks — a travel leg or an hour at a wall
+   * bills fifteen to ninety minutes at once and will step clean over any single
+   * threshold — so anything written as `if (hoursLeft === 6)` or even
+   * `< 6 && > 5.9` silently never happens. The stage is stored and compared.
+   *
+   * This replaced a lone six-hour warning, which was the only rung that
+   * existed, so the floor went from "fine" to "you have six hours" with nothing
+   * in between and nothing after.
+   */
+  private checkClockStage(): void {
+    const s = this.state;
+    const left = s.floor.hoursLeft;
+    const frac = left / Math.max(1, s.floor.hoursTotal);
+    const stage: ClockStage = left <= 1 ? "terminal" : left <= 6 ? "closing" : frac <= 0.25 ? "posted" : "open";
+    const was = (s.flags.clockStage as ClockStage) ?? "open";
+    if (stage === was) return;
+    s.flags.clockStage = stage;
+
+    // Only ever announce escalation. A floor whose clock went backwards — it
+    // cannot, but a restore can — should not congratulate anybody.
+    const rank: Record<ClockStage, number> = { open: 0, posted: 1, closing: 2, terminal: 3 };
+    if (rank[stage] <= rank[was]) return;
+
+    this.log.say(
+      {
+        open: "",
+        posted: `Three quarters of this floor is gone. ${left.toFixed(1)} hours left, and the notice has been posted whether you read it or not.`,
+        closing: "Under six hours. The floor is closing and it is not a metaphor. Find a stairwell.",
+        terminal: "Under an hour. The paperwork on your death has been started in advance; the system finds this efficient rather than morbid.",
+      }[stage],
+    );
   }
 
   private spawnHunter(): void {

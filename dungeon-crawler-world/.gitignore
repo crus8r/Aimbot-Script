@@ -1,3 +1,5 @@
 node_modules/
 dcw-save.json
 *.log
+shots/
+web/

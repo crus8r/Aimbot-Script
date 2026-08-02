@@ -171,7 +171,24 @@ export type GameEvent =
   | (BaseEvent & { kind: "body"; what: "exhausted" | "starving" | "fed" | "rested"; note: string })
   | (BaseEvent & { kind: "heal"; amount: number; hp: number; source: string })
   // ---- the show
-  | (BaseEvent & { kind: "views"; amount: number; total: number; because: string[] })
+  | (BaseEvent & {
+      kind: "views";
+      amount: number;
+      total: number;
+      because: string[];
+      /** The composed style multiplier the resolver actually applied. */
+      multiplier: number;
+      /**
+       * What the audience was paying for.
+       *
+       * Load-bearing, and not obvious: the kill log is drained at END OF
+       * COMBAT, so the event stream reads `kill, kill, attack, kill,
+       * combat_end, views, views, views`. Anything that attributes a views
+       * spike to the line before it credits every one of them to "Clear. 3
+       * rounds, 2 down." — which looks plausible enough to ship and is wrong.
+       */
+      victim?: string;
+    })
   | (BaseEvent & { kind: "bounty"; value: number; delta: number })
   | (BaseEvent & { kind: "sponsor_offer"; sponsor: string; terms: string; gives: string })
   | (BaseEvent & { kind: "sponsor"; sponsor: string; state: "signed" | "dropped"; note: string })

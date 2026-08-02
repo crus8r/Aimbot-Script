@@ -58,7 +58,7 @@ export function matchesFilter(item: Item, filter: string): boolean {
 
 /* ---------------------------------------------------------------- order */
 
-export type PackSort = "relevance" | "value" | "weight" | "rarity" | "name" | "recent";
+export type PackSort = "relevance" | "value" | "weight" | "rarity" | "name" | "recent" | "density";
 
 export const PACK_SORTS: readonly { id: PackSort; label: string }[] = [
   { id: "relevance", label: "Useful" },
@@ -67,6 +67,14 @@ export const PACK_SORTS: readonly { id: PackSort; label: string }[] = [
   { id: "rarity", label: "Rarity" },
   { id: "name", label: "Name" },
   { id: "recent", label: "Newest" },
+  /**
+   * Value per kilogram, and the only sort that answers "what do I drop".
+   *
+   * The correct and non-obvious order for a game with no slot limit whose
+   * storage stat is Strength: the question is never "what is worth least", it
+   * is "what is worth least for the space it costs me".
+   */
+  { id: "density", label: "Density" },
 ];
 
 export const rarityRank = (r: Rarity): number => RARITIES.indexOf(r);
@@ -97,6 +105,10 @@ export function sortItems<T extends { item: Item }>(state: GameState, rows: T[],
     case "rarity": return copy.sort((a, b) => rarityRank(b.item.rarity) - rarityRank(a.item.rarity));
     case "name": return copy.sort((a, b) => a.item.name.localeCompare(b.item.name));
     case "recent": return copy.reverse();
+    case "density": {
+      const per = (i: { value: number; weight: number }) => i.value / Math.max(0.1, i.weight);
+      return copy.sort((a, b) => per(b.item) - per(a.item));
+    }
     default: return copy.sort((a, b) => relevanceScore(state, b.item) - relevanceScore(state, a.item));
   }
 }

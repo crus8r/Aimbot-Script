@@ -8,6 +8,24 @@ import { commaList, hours as fmtHours } from "../core/util.ts";
 export interface RenderedLine {
   channel: EventChannel;
   text: string;
+  /**
+   * A presentational register the channel union does not carry.
+   *
+   * `EventChannel` is read in a dozen places and widening it to hold "combat"
+   * and "announce" would make a semantic change to say a typographic thing.
+   * A fight should read faster than a room and an achievement should read like
+   * a notice; neither is a different KIND of fact.
+   */
+  tone?: "combat" | "announce";
+  /**
+   * What the audience paid for this line, when they paid for it.
+   *
+   * Attached rather than adjacent, because the kill log is drained at end of
+   * combat: the raw stream is `kill, kill, attack, kill, combat_end, views,
+   * views, views`, so anything pairing a spike with the line before it credits
+   * the lot to "Clear. 3 rounds, 2 down."
+   */
+  score?: { views: number; because: string[]; multiplier: number };
 }
 
 export interface Narrator {
@@ -34,8 +52,18 @@ export class ProceduralNarrator implements Narrator {
   async render(events: readonly GameEvent[], state: GameState): Promise<RenderedLine[]> {
     const out: RenderedLine[] = [];
     for (const e of events) {
+      // A views spike is not a line. It is a price tag, and it belongs on the
+      // line that earned it — which is somewhere further up, because combat
+      // pays out at the end.
+      if (e.kind === "views") {
+        attachScore(out, e);
+        continue;
+      }
       const line = this.one(e, state);
-      if (line) out.push(...(Array.isArray(line) ? line : [{ channel: e.channel, text: line }]));
+      if (!line) continue;
+      const tone = TONE[e.kind];
+      const made = Array.isArray(line) ? line : [{ channel: e.channel, text: line }];
+      out.push(...(tone ? made.map((l) => ({ tone, ...l })) : made));
     }
     return out;
   }
@@ -251,8 +279,8 @@ export class ProceduralNarrator implements Narrator {
       case "heal":
         return `+${e.amount}. ${e.source}`;
 
-      case "views":
-        return `+${e.amount.toLocaleString()} views${e.because.length ? ` — ${commaList(e.because)}` : ""}.`;
+      // "views" never reaches here — `render` intercepts it and hangs it on
+      // the line that earned it instead of printing it as one.
 
       case "bounty":
         return `Your bounty is ${e.value.toLocaleString()}. It went up because you were interesting.`;
@@ -294,6 +322,57 @@ export class ProceduralNarrator implements Narrator {
 
       default:
         return null;
+    }
+  }
+}
+
+/**
+ * Which register a kind of fact reads in.
+ *
+ * Presentational only, and deliberately not part of the event — the same fact
+ * would be the same fact in a client that made no distinction.
+ */
+const TONE: Partial<Record<GameEvent["kind"], "combat" | "announce">> = {
+  attack: "combat",
+  kill: "combat",
+  miss_reason: "combat",
+  trap_sprung: "combat",
+  flee: "combat",
+  combat_end: "combat",
+  collapse: "combat",
+  achievement: "announce",
+  level_up: "announce",
+  floor: "announce",
+  sponsor: "announce",
+  stairs: "announce",
+  box_awarded: "announce",
+  mint: "announce",
+  select: "announce",
+};
+
+/**
+ * Put a views spike on the line that earned it.
+ *
+ * Searches backwards for the named victim, then falls back to the newest line
+ * that has no price on it yet. The fallback is what stops three simultaneous
+ * payouts stacking onto one body.
+ */
+function attachScore(out: RenderedLine[], e: Extract<GameEvent, { kind: "views" }>): void {
+  if (e.amount <= 0) return;
+  const score = { views: e.amount, because: e.because, multiplier: e.multiplier };
+
+  if (e.victim) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (!out[i]!.score && out[i]!.text.includes(e.victim)) {
+        out[i] = { ...out[i]!, score };
+        return;
+      }
+    }
+  }
+  for (let i = out.length - 1; i >= 0; i--) {
+    if (!out[i]!.score) {
+      out[i] = { ...out[i]!, score };
+      return;
     }
   }
 }

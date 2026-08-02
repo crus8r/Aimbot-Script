@@ -179,7 +179,7 @@ test("floor one is not broadcast live and everything after it is", () => {
 test("views raise the bounty, which is the cost of being watchable", () => {
   const g = newGame(14);
   const log = new EventLog(() => 0);
-  applyViews(g.state, log, { views: 250_000, reasons: ["test"] });
+  applyViews(g.state, log, { views: 250_000, reasons: ["test"], multiplier: 1 });
   assert.ok(g.state.crawler.bounty > 0);
   assert.ok(g.state.ratings.followers > 0);
 });
@@ -230,12 +230,12 @@ test("the narrator renders every event kind without throwing", async () => {
     { kind: "box_opened", channel: "loot", at: 0, tier: "Bronze", box: "Adventurer Box", items: ["rope"], gold: 4 },
     { kind: "achievement", channel: "loot", at: 0, id: "x", name: "A Thing", text: "t", box: null },
     { kind: "death", channel: "bad", at: 0, cause: "c", floor: 1, level: 3 },
-    { kind: "views", channel: "show", at: 0, amount: 100, total: 100, because: ["style"] },
+    { kind: "views", channel: "show", at: 0, amount: 100, total: 100, because: ["style"], multiplier: 2.5 },
     { kind: "rest", channel: "good", at: 0, hours: 7, where: "a safe room" },
     { kind: "floor", channel: "good", at: 0, n: 2, name: "The Second Floor", hours: 144, note: "note" },
   ];
   const lines = await n.render(samples, g.state);
-  assert.ok(lines.length >= samples.length - 4, "several events rendered to nothing");
+  assert.ok(lines.length >= samples.length - 5, "several events rendered to nothing");
   for (const l of lines) assert.equal(typeof l.text, "string");
 });
 

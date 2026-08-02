@@ -100,8 +100,9 @@ check(feed.includes("look under the shelving"), "freeform input reached the inte
 /* -------------------------------------------------------------- sheets */
 
 for (const [tab, title] of [
-  ["#tab-inv", "Inventory"], ["#tab-sheet", "Crawler"], ["#tab-skills", "Skills"],
-  ["#tab-spells", "Spells"], ["#tab-craft", "Workshop"], ["#tab-map", "Floor"], ["#tab-menu", "Menu"],
+  ["#tab-inv", "§7 The manifest"], ["#tab-sheet", "§3 Personnel file"], ["#tab-skills", "§5 Competencies"],
+  ["#tab-spells", "§6 Permitted workings"], ["#tab-craft", "§8 Works and materials"],
+  ["#tab-map", "§1 The survey"], ["#tab-menu", "§12 Administration"],
 ] as const) {
   await page.locator(tab).click();
   const open = await page.locator("#sheet.open").isVisible();
@@ -135,7 +136,7 @@ check(
 // And it still takes turns after coming back from disk.
 // Deliberately excludes panel buttons: opening a list is not taking a turn,
 // and clicking one proves nothing about whether the restored run can act.
-const post = page.locator("#actions .act:not([disabled]):not(.panel)");
+const post = page.locator("#actions .act:not([disabled]):not(.act--panel)");
 if (await post.count()) {
   const lines = await page.locator("#feed .line").count();
   await post.first().click().catch(() => {});
@@ -153,14 +154,17 @@ await page.waitForTimeout(200);
 // Lock, because it is the one pack action that always changes what the row
 // says (a padlock appears) whatever the run's random seed handed you.
 {
-  const lock = page.locator("#sheet-body .act", { hasText: /^lock$/ }).first();
+  // The manifest keeps a row's controls behind the row itself, so open one.
+  await page.locator("#sheet-body .mrow").first().click();
+  await page.waitForTimeout(250);
+  const lock = page.locator("#sheet-body .act", { hasText: /^Lock$/ }).first();
   if (await lock.count()) {
     const before = await page.locator("#sheet-body").textContent();
     await lock.click();
     await page.waitForTimeout(600);
     const after = await page.locator("#sheet-body").textContent();
     check(before !== after, "the pack redraws after an action taken inside it");
-    check((after ?? "").includes("🔒"), "and the change is the one you asked for");
+    check((after ?? "").includes("⌧"), "and the change is the one you asked for");
   } else {
     check(false, "no lockable item in the pack — the redraw check did not run");
   }
@@ -180,30 +184,30 @@ check(!(await page.locator("#sheet.open").isVisible()), "Escape closes a sheet")
   await page.locator("#tab-inv").click();
   await page.waitForTimeout(250);
 
-  check((await page.locator("#sheet-body .slot").count()) >= 8, "what you are wearing is shown as slots, including the empty ones");
-  check(await page.locator("#sheet-body .loadbar").isVisible(), "the carry ceiling is a bar rather than a sentence");
+  check((await page.locator("#sheet-body .slotrow").count()) >= 8, "what you are wearing is shown as slots, including the empty ones");
+  check(await page.locator("#sheet-body .gauge").first().isVisible(), "the carry ceiling is a gauge rather than a sentence");
 
-  const chips = page.locator("#sheet-body .chip.pickable");
+  const chips = page.locator("#sheet-body .chip");
   check((await chips.count()) > 2, "the pack can be sliced and ordered");
 
   // Slicing must actually change what is listed.
-  const all = await page.locator("#sheet-body .srow").count();
-  const junkChip = page.locator("#sheet-body .chip.pickable", { hasText: /^Junk/ }).first();
+  const all = await page.locator("#sheet-body .mrow").count();
+  const junkChip = page.locator("#sheet-body .chip", { hasText: /^Junk/ }).first();
   if (await junkChip.count()) {
     await junkChip.click();
     await page.waitForTimeout(250);
-    const sliced = await page.locator("#sheet-body .srow").count();
+    const sliced = await page.locator("#sheet-body .mrow").count();
     check(sliced > 0 && sliced <= all, `filtering narrows the list (${all} → ${sliced})`);
-    await page.locator("#sheet-body .chip.pickable", { hasText: /^All/ }).first().click();
+    await page.locator("#sheet-body .chip", { hasText: /^All/ }).first().click();
     await page.waitForTimeout(200);
   } else {
     check(false, "no filter chips rendered");
   }
 
   // Ordering must be able to change the first row.
-  const first = async () => (await page.locator("#sheet-body .srow .iname").first().textContent()) ?? "";
+  const first = async () => (await page.locator("#sheet-body .mrow__name").first().textContent()) ?? "";
   const byRelevance = await first();
-  await page.locator("#sheet-body .chip.pickable", { hasText: /^Name/ }).first().click();
+  await page.locator("#sheet-body .chip", { hasText: /^Name/ }).first().click();
   await page.waitForTimeout(250);
   const byName = await first();
   check(byRelevance.length > 0 && byName.length > 0, "the list survives being reordered");
