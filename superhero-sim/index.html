@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#05070c">
+<meta name="description" content="VANGUARD — a mobile superhero squad simulator. Five custom heroes, one open city, temporary Surge Forms.">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>VANGUARD — Superhero Squad Simulator</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🛡️</text></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="hud">
+
+  <!-- top left: squad -->
+  <div id="topleft">
+    <div id="roster"></div>
+    <div id="bars">
+      <div class="barrow">
+        <span id="heroname">SAVIOR</span>
+        <span id="hptext">0 / 0</span>
+      </div>
+      <div class="bar hp"><i id="hpfill"></i></div>
+      <div class="bar surge"><i id="surgefill"></i></div>
+      <div class="bar res hidden" id="reswrap"><i id="resfill"></i><b id="resname">ENERGY</b></div>
+    </div>
+  </div>
+
+  <!-- top centre: stats -->
+  <div id="topmid">
+    <div id="zone">LV1 · QUIET DISTRICT</div>
+    <div id="statline">
+      <span class="stat"><b id="kills">0</b> KILLS</span>
+      <span class="stat"><b id="score">0</b> PTS</span>
+      <span class="stat hidden" id="combo"></span>
+    </div>
+    <div id="bossbar" class="hidden">
+      <span id="bossname">COLOSSUS</span>
+      <div class="bar boss"><i id="bossfill"></i></div>
+    </div>
+  </div>
+
+  <!-- top right -->
+  <div id="topright">
+    <div id="btnpause">❚❚</div>
+    <canvas id="minimap"></canvas>
+    <div id="fps" class="hidden">60 FPS</div>
+  </div>
+
+  <div id="banner"></div>
+  <div id="toast"></div>
+
+  <!-- controls -->
+  <div id="stickzone"></div>
+  <div id="stick"><div id="knob"></div></div>
+
+  <div id="buttons">
+    <div class="btn big" data-btn="primary"><span class="bicon">🗡</span><span class="blabel">Attack</span><span class="bcount hidden"></span></div>
+    <div class="btn" data-btn="a1"><span class="bicon">🛡</span><span class="blabel">Ability</span><span class="bcount hidden"></span></div>
+    <div class="btn" data-btn="a2"><span class="bicon">✷</span><span class="blabel">Ability</span><span class="bcount hidden"></span></div>
+    <div class="btn small" data-btn="dash"><span class="bicon">»</span><span class="blabel">Dash</span><span class="bcount hidden"></span></div>
+    <div class="btn form" data-btn="form"><span class="bicon">★</span><span class="blabel">FORM</span></div>
+    <div class="btn force" data-btn="force"><span class="bicon">⚡</span><span class="blabel">FORCE</span></div>
+    <div class="btn tiny hidden" data-btn="extra"><span class="bicon">🔥</span><span class="blabel">FIRE</span></div>
+  </div>
+</div>
+
+<!-- ======================= TITLE / CODEX ======================= -->
+<div id="menu">
+  <div class="sheet">
+    <header>
+      <h1>VANGUARD</h1>
+      <p class="sub">Five heroes. One fractured city. Swap freely, break your Surge, hold the line.</p>
+    </header>
+
+    <div id="cards"></div>
+
+    <div class="howto">
+      <h2>CONTROLS</h2>
+      <div class="cols">
+        <div>
+          <p><b>Touch</b></p>
+          <p>Left half of the screen — drag anywhere to move.</p>
+          <p>Right cluster — Attack, two abilities, Dash.</p>
+          <p><b>Drag off an action button</b> to aim it manually; otherwise it auto-targets the nearest enemy.</p>
+          <p>Tap a portrait at the top-left to swap hero instantly.</p>
+          <p><b>FORCE</b> fills your Surge and triggers the greater form immediately — this is a test build.</p>
+        </div>
+        <div>
+          <p><b>Keyboard</b></p>
+          <p>WASD / Arrows — move</p>
+          <p>J or Space — attack &nbsp;·&nbsp; K — ability 1 &nbsp;·&nbsp; L — ability 2</p>
+          <p>Shift — dash &nbsp;·&nbsp; Q / E — Surge Form &nbsp;·&nbsp; F — force form</p>
+          <p>1–5 or Tab — swap hero &nbsp;·&nbsp; C — extra action &nbsp;·&nbsp; Esc — pause</p>
+        </div>
+      </div>
+      <h2>THE CITY</h2>
+      <p>Threat rises the further you travel from the central plaza — level 1 near the middle, level 4 at the edges. Six marked arenas hold a level 5 <b>Colossus</b>. Enemy tiers each have their own trick: swarms, ranged bolts, front-facing shields that must be flanked, blink-stalkers that dodge — and the boss.</p>
+    </div>
+
+    <button id="playbtn">DEPLOY SQUAD</button>
+  </div>
+</div>
+
+<!-- ======================= PAUSE ======================= -->
+<div id="pause" class="hidden">
+  <div class="panel">
+    <h2>PAUSED</h2>
+    <button id="resumebtn">RESUME</button>
+    <button id="rosterbtn">SQUAD CODEX</button>
+    <button id="restartbtn">RESTART RUN</button>
+    <div class="optrow">
+      <button id="sndbtn" class="opt">SOUND: ON</button>
+      <button id="shakebtn" class="opt">SHAKE: ON</button>
+      <button id="fpsbtn" class="opt">FPS: OFF</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= DOWNED ======================= -->
+<div id="downed" class="hidden">
+  <div class="panel">
+    <h2 class="danger">HERO DOWN</h2>
+    <p>Tag in a teammate — downed heroes recover on the bench.</p>
+    <div id="downedroster"></div>
+    <p id="nolives" class="hidden danger">The whole squad is down.</p>
+    <button id="reviveall">REVIVE SQUAD</button>
+  </div>
+</div>
+
+<div id="boot" class="hidden"></div>
+
+<script src="src/util.js"></script>
+<script src="src/audio.js"></script>
+<script src="src/input.js"></script>
+<script src="src/entities.js"></script>
+<script src="src/world.js"></script>
+<script src="src/heroes.js"></script>
+<script src="src/enemies.js"></script>
+<script src="src/render.js"></script>
+<script src="src/hud.js"></script>
+<script src="src/game.js"></script>
+</body>
+</html>
