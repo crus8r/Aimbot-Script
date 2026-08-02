@@ -75,6 +75,13 @@
   };
 
   G.restart = function () {
+    if (G.pausedFrom === 'versus' && SH.versus.active) {
+      SH.hud.showPause(false);
+      G.state = 'versus';
+      SH.versus.rematch();
+      return;
+    }
+    if (SH.versus.active) SH.versus.exit();
     SH.ents.clearAll();
     SH.world.arenas.forEach(function (a) { a.boss = null; a.respawn = 0; a.cleared = false; });
     G.stats.best = Math.max(G.stats.best, G.stats.score);
@@ -93,12 +100,13 @@
   };
 
   G.togglePause = function () {
-    if (G.state === 'play') {
+    if (G.state === 'play' || G.state === 'versus') {
+      G.pausedFrom = G.state;
       G.state = 'pause';
       SH.hud.showPause(true);
       SH.input.clearAll();
     } else if (G.state === 'pause') {
-      G.state = 'play';
+      G.state = G.pausedFrom || 'play';
       SH.hud.showPause(false);
       SH.hud.hideMenu();
     }
@@ -154,6 +162,20 @@
     SH.hud.banner(next.kit.name, col);
     SH.input.clearAll();
   }
+
+  /* Surge for a specific hero (the active player unless told otherwise) */
+  G.gainSurge = function (h, amt) {
+    if (!h || h.ko || h.form > 0) return;
+    h.surge = U.clamp(h.surge + amt, 0, h.maxSurge);
+    if (h === G.player()) {
+      if (h.surge >= h.maxSurge && !h.surgeAnnounced) {
+        h.surgeAnnounced = true;
+        SH.hud.banner('SURGE READY', h.kit.colors.glow);
+        SH.audio.play('revive');
+      }
+      if (h.surge < h.maxSurge) h.surgeAnnounced = false;
+    }
+  };
 
   G.addSurge = function (amt, force) {
     var h = G.player();
@@ -221,11 +243,12 @@
 
   G.onBossKilled = function (e) {
     G.stats.bosses++;
-    G.stats.score += 800;
+    G.stats.score += e.type === 'deathbringer' ? 3000 : 800;
     var ar = e.arena;
     if (ar) { ar.cleared = true; ar.boss = null; ar.respawn = 95; }
-    SH.hud.banner('ARENA CLEARED', '#5affa8');
-    SH.hud.toast('+800 · squad restored', '#5affa8');
+    SH.hud.banner(e.type === 'deathbringer' ? 'THE BLIGHT IS BROKEN' : 'ARENA CLEARED', '#5affa8');
+    SH.hud.toast((e.type === 'deathbringer' ? '+3000' : '+800') + ' · squad restored', '#5affa8');
+    if (e.type === 'deathbringer') { SH.darkness.t = 0; SH.darkness.amount = 0; }
     G.squad.forEach(function (h) {
       if (!h.ko) h.hp = Math.min(h.maxHp, h.hp + h.maxHp * 0.4);
     });
@@ -278,11 +301,16 @@
       if (ar.boss && ar.boss.dead) ar.boss = null;
       var d = U.dist(h.x, h.y, ar.x, ar.y);
       if (d < ar.r + 40 && !ar.boss && ar.respawn <= 0) {
-        var b = SH.spawnEnemy('colossus', ar.x, ar.y);
+        var b = SH.spawnEnemy(ar.type || 'colossus', ar.x, ar.y);
         if (b) {
           ar.boss = b;
           b.arena = ar;
-          SH.hud.banner('COLOSSUS AWAKENS', '#ff2b2b');
+          if (b.type === 'deathbringer') {
+            SH.hud.banner('DEATHBRINGER STIRS', '#ff7a12');
+            SH.setDarkness(0.55, 5);
+          } else {
+            SH.hud.banner('COLOSSUS AWAKENS', '#ff2b2b');
+          }
         }
       }
       if (ar.boss && !ar.boss.dead && d < 1100 && d < bestD) { bestD = d; track = ar.boss; }
@@ -312,6 +340,7 @@
   }
 
   /* --------------------------------------------------------- form input */
+  G.handleFormInput = handleFormInput;
   function handleFormInput() {
     var h = G.player();
     var IN = SH.input;
@@ -363,11 +392,19 @@
       updateSpawner(dt);
       updateArenas(dt);
       updateBench(dt);
+      SH.updateDarkness(dt);
       SH.render.follow(h, dt);
+    } else if (G.state === 'versus') {
+      SH.versus.update(dt);
+      SH.versus.draw();
+      SH.hud.updateVersus(dt, SH.versus);
+      SH.input.endFrame();
+      return;
     } else if (G.state === 'downed') {
       SH.updateEntities(dt * 0.25);
       SH.render.follow(G.player(), dt);
     } else if (G.state === 'menu') {
+      if (SH.versus.active) SH.versus.exit();
       // slow orbit of the plaza behind the title screen
       G.menuT = (G.menuT || 0) + dt * 0.12;
       var W = SH.world;

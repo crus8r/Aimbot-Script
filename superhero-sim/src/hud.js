@@ -46,12 +46,23 @@
     el.formBtn = document.querySelector('[data-btn="form"]');
     el.extraBtn = document.querySelector('[data-btn="extra"]');
 
+    el.vhud = $('vhud');
+    el.vsetup = $('vsetup');
+    el.vresult = $('vresult');
+    el.vtimer = $('vtimer');
+    el.vround = $('vround');
+    el.vL = { name: $('vnameL'), hp: $('vhpL'), sg: $('vsgL'), pips: $('vpipsL') };
+    el.vR = { name: $('vnameR'), hp: $('vhpR'), sg: $('vsgR'), pips: $('vpipsR') };
+    el.prevYou = $('prevyou');
+    el.prevFoe = $('prevfoe');
+
     mmCtx = el.minimap.getContext('2d');
     el.minimap.width = 132; el.minimap.height = 99;
 
     buildRoster();
     buildCards();
     bindMenu();
+    buildVersusSetup();
   };
 
   /* ------------------------------------------------------------ roster */
@@ -111,6 +122,26 @@
       c.appendChild(info);
       el.cards.appendChild(c);
     });
+
+    // the arch nemesis
+    var db = document.createElement('div');
+    db.className = 'card';
+    db.style.setProperty('--accent', '#ff7a12');
+    var dcv = document.createElement('canvas');
+    dcv.width = 88; dcv.height = 88;
+    dcv.className = 'cardart';
+    SH.render.drawPortrait(dcv.getContext('2d'), 'deathbringer', 88);
+    db.appendChild(dcv);
+    var dinfo = document.createElement('div');
+    dinfo.className = 'cardinfo';
+    dinfo.innerHTML =
+      '<h3>DEATHBRINGER<em>TIER 6 · ARCH NEMESIS</em></h3>' +
+      '<p class="ctitle">The Rot That Walks</p>' +
+      '<p class="cdesc">A pitch-black ent the size of a house, sheeted in viscous living mucus, with two burning orange eyes set in a hollow face. It manipulates darkness and kills with a touch.</p>' +
+      '<p class="cform"><b>DEATH TOUCH</b> — a lunge that withers you: heavy damage, a rotting DoT, and healing cut to a third while it lasts.</p>' +
+      '<p class="ctip">Also: black roots erupting from the ground, a rooting grasp, mucus that pools and slows, and a veil of darkness that blinds the arena and sends shadow orbs hunting. Fight it in the east grove, or in VERSUS.</p>';
+    db.appendChild(dinfo);
+    el.cards.appendChild(db);
   }
 
   function bindMenu() {
@@ -190,9 +221,18 @@
     if (l) l.textContent = label;
   }
 
+  function tickBanner(dt) {
+    if (bannerT > 0) {
+      bannerT -= dt;
+      if (bannerT <= 0) el.banner.classList.remove('show');
+    }
+  }
+
   H.update = function (dt, game) {
     var h = game.player();
     if (!h) return;
+    tickPreviews(dt);
+    if (game.state === 'versus') return;
 
     // bars
     var hpF = U.clamp(h.hp / h.maxHp, 0, 1);
@@ -248,19 +288,15 @@
     el.kills.textContent = game.stats.kills;
     el.score.textContent = U.formatNum(game.stats.score);
 
-    // banner fade
-    if (bannerT > 0) {
-      bannerT -= dt;
-      if (bannerT <= 0) el.banner.classList.remove('show');
-    }
+    tickBanner(dt);
 
     // boss bar
     var boss = game.trackedBoss;
     if (boss && !boss.dead) {
       el.bossbar.classList.remove('hidden');
       el.bossFill.style.width = (U.clamp(boss.hp / boss.maxHp, 0, 1) * 100).toFixed(1) + '%';
-      el.bossName.textContent = 'COLOSSUS' + (boss.enraged ? ' — ENRAGED' : '');
-      el.bossFill.style.background = boss.enraged ? '#ff2b2b' : '#ff6b4a';
+      el.bossName.textContent = (boss.name || 'BOSS') + (boss.enraged ? ' — ENRAGED' : '');
+      el.bossFill.style.background = boss.type === 'deathbringer' ? '#ff7a12' : (boss.enraged ? '#ff2b2b' : '#ff6b4a');
     } else {
       el.bossbar.classList.add('hidden');
     }
@@ -346,6 +382,212 @@
   };
   H.hideMenu = function () { el.menu.classList.add('hidden'); };
   H.showPause = function (on) { el.pause.classList.toggle('hidden', !on); };
+
+  /* =====================================================================
+   * VERSUS
+   * =================================================================== */
+  var vsel = { you: 'savior', foe: 'deathbringer', diff: 'normal' };
+  var setupT = 0;
+
+  function fighterList() {
+    return SH.KITS.map(function (k) {
+      return { id: k.id, name: k.name, accent: k.colors.accent, sub: k.role };
+    });
+  }
+
+  function buildVersusSetup() {
+    var youWrap = $('pickyou'), foeWrap = $('pickfoe'), diffWrap = $('pickdiff');
+    if (!youWrap) return;
+
+    function mkPick(wrap, entry, onPick) {
+      var b = document.createElement('button');
+      b.className = 'pick';
+      b.style.setProperty('--accent', entry.accent);
+      b.dataset.id = entry.id;
+      var cv = document.createElement('canvas');
+      cv.width = 44; cv.height = 44;
+      SH.render.drawPortrait(cv.getContext('2d'), entry.id, 44);
+      b.appendChild(cv);
+      var s = document.createElement('span');
+      s.innerHTML = '<b>' + entry.name + '</b><em>' + (entry.sub || '') + '</em>';
+      b.appendChild(s);
+      b.addEventListener('click', function () { SH.audio.play('ui'); onPick(entry.id); });
+      wrap.appendChild(b);
+      return b;
+    }
+
+    youWrap.innerHTML = '';
+    fighterList().forEach(function (e) {
+      mkPick(youWrap, e, function (id) { vsel.you = id; syncPicks(); });
+    });
+
+    foeWrap.innerHTML = '';
+    mkPick(foeWrap, {
+      id: 'deathbringer', name: 'DEATHBRINGER', accent: '#ff7a12', sub: 'TIER 6 · ARCH NEMESIS'
+    }, function (id) { vsel.foe = id; syncPicks(); });
+    fighterList().forEach(function (e) {
+      mkPick(foeWrap, e, function (id) { vsel.foe = id; syncPicks(); });
+    });
+
+    diffWrap.innerHTML = '';
+    ['easy', 'normal', 'hard', 'nightmare'].forEach(function (d) {
+      var b = document.createElement('button');
+      b.className = 'pick diffpick';
+      b.dataset.id = d;
+      b.textContent = SH.versus.DIFF[d].label;
+      b.addEventListener('click', function () { SH.audio.play('ui'); vsel.diff = d; syncPicks(); });
+      diffWrap.appendChild(b);
+    });
+
+    $('fightbtn').addEventListener('click', function () {
+      SH.audio.resume();
+      SH.audio.play('form');
+      H.showVersusSetup(false);
+      H.hideMenu();
+      SH.versus.start(vsel.you, vsel.foe, vsel.diff);
+    });
+    $('vsbackbtn').addEventListener('click', function () {
+      H.showVersusSetup(false);
+      H.showMenu(false);
+    });
+    $('versusbtn').addEventListener('click', function () {
+      SH.audio.resume();
+      SH.audio.play('ui');
+      H.hideMenu();
+      H.showVersusSetup(true);
+    });
+    $('rematchbtn').addEventListener('click', function () { SH.versus.rematch(); });
+    $('vschangebtn').addEventListener('click', function () { SH.versus.quitToMenu(); });
+    $('vsexitbtn').addEventListener('click', function () {
+      H.showVersusResult(false, SH.versus);
+      SH.versus.exit();
+      SH.game.state = 'menu';
+      H.showMenu(false);
+    });
+    syncPicks();
+  }
+
+  function syncPicks() {
+    ['pickyou', 'pickfoe', 'pickdiff'].forEach(function (wid) {
+      var w = $(wid);
+      if (!w) return;
+      var key = wid === 'pickyou' ? 'you' : wid === 'pickfoe' ? 'foe' : 'diff';
+      Array.prototype.forEach.call(w.children, function (c) {
+        c.classList.toggle('on', c.dataset.id === vsel[key]);
+      });
+    });
+    var d = SH.versus.DIFF[vsel.diff];
+    $('difftag').textContent = d.tag;
+    $('prevyouname').textContent = SH.kitById(vsel.you).name;
+    $('prevfoename').textContent = vsel.foe === 'deathbringer' ? 'DEATHBRINGER' : SH.kitById(vsel.foe).name;
+    $('prevfoename').style.color = vsel.foe === 'deathbringer' ? '#ff7a12' : SH.kitById(vsel.foe).colors.accent;
+    $('prevyouname').style.color = SH.kitById(vsel.you).colors.accent;
+  }
+
+  H.showVersusSetup = function (on) {
+    el.vsetup.classList.toggle('hidden', !on);
+    if (on) {
+      sizePreview(el.prevYou);
+      sizePreview(el.prevFoe);
+      syncPicks();
+    }
+  };
+
+  function sizePreview(cv) {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var r = cv.getBoundingClientRect();
+    cv.width = Math.max(60, r.width * dpr);
+    cv.height = Math.max(80, r.height * dpr);
+  }
+
+  function tickPreviews(dt) {
+    if (!el.vsetup || el.vsetup.classList.contains('hidden')) return;
+    setupT += dt;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    [[el.prevYou, vsel.you, 1], [el.prevFoe, vsel.foe, -1]].forEach(function (pair) {
+      var cv = pair[0];
+      if (!cv || !cv.width) return;
+      var c = cv.getContext('2d');
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.clearRect(0, 0, cv.width, cv.height);
+      c.save();
+      if (pair[2] < 0) { c.translate(cv.width, 0); c.scale(-1, 1); }
+      SH.side.drawPreview(c, pair[1], cv.width, cv.height, setupT);
+      c.restore();
+    });
+  }
+
+  H.setVersus = function (on) {
+    el.hud.classList.toggle('versus', !!on);
+    el.vhud.classList.toggle('hidden', !on);
+    if (on) {
+      el.vL.name.textContent = SH.versus.you ? SH.versus.you.kit.name : '';
+      el.vR.name.textContent = SH.versus.foe ? (SH.versus.foe.displayName || '') : '';
+      el.vL.name.style.color = SH.versus.you ? SH.versus.you.kit.colors.accent : '#fff';
+      el.vR.name.style.color = SH.versus.foe ? (SH.versus.foe.accent || '#fff') : '#fff';
+    }
+  };
+
+  H.updateVersus = function (dt, vs) {
+    var you = vs.you, foe = vs.foe;
+    if (!you || !foe) return;
+    tickBanner(dt);
+
+    el.vL.hp.style.width = (U.clamp(you.hp / you.maxHp, 0, 1) * 100).toFixed(1) + '%';
+    el.vR.hp.style.width = (U.clamp(foe.hp / foe.maxHp, 0, 1) * 100).toFixed(1) + '%';
+    el.vL.sg.style.width = (U.clamp(you.form > 0 ? you.form / you.formDur : you.surge / you.maxSurge, 0, 1) * 100).toFixed(1) + '%';
+    el.vL.sg.className = you.form > 0 ? 'inform' : (you.surge >= you.maxSurge ? 'full' : '');
+    if (foe.isHero) {
+      el.vR.sg.parentNode.classList.remove('hidden');
+      el.vR.sg.style.width = (U.clamp(foe.form > 0 ? foe.form / foe.formDur : foe.surge / foe.maxSurge, 0, 1) * 100).toFixed(1) + '%';
+      el.vR.sg.className = foe.form > 0 ? 'inform' : (foe.surge >= foe.maxSurge ? 'full' : '');
+    } else {
+      el.vR.sg.parentNode.classList.add('hidden');
+    }
+    el.vR.hp.style.background = foe.isHero ? '#ff5b6e' : (foe.enraged ? '#ff3b12' : '#ff7a12');
+
+    el.vtimer.textContent = Math.ceil(vs.timer);
+    el.vtimer.classList.toggle('low', vs.timer < 11);
+    el.vround.textContent = 'ROUND ' + vs.round;
+    pips(el.vL.pips, vs.wins[0]);
+    pips(el.vR.pips, vs.wins[1]);
+
+    // the action buttons still belong to you
+    ['primary', 'a1', 'a2', 'dash'].forEach(function (k) {
+      var b = document.querySelector('[data-btn="' + k + '"]');
+      if (!b) return;
+      var v = you.cd[k] > 0 ? you.cd[k] / Math.max(0.01, you.cdMax[k]) : 0;
+      b.style.setProperty('--cd', v.toFixed(2));
+      var ch = you.ch[k];
+      var cnt = b.querySelector('.bcount');
+      if (ch) { cnt.classList.remove('hidden'); cnt.textContent = ch.n; }
+      else cnt.classList.add('hidden');
+      b.classList.toggle('empty', ch ? ch.n <= 0 : you.cd[k] > 0);
+    });
+    el.formBtn.classList.toggle('ready', you.surge >= you.maxSurge && you.form <= 0);
+    el.formBtn.classList.toggle('active', you.form > 0);
+    if (you.kit.resource) el.resFill.style.width = (U.clamp(you.charge / you.maxCharge, 0, 1) * 100).toFixed(1) + '%';
+    if (SH.game.opts.showFps) el.fps.textContent = Math.round(SH.game.fps) + ' FPS';
+  };
+
+  function pips(wrap, n) {
+    if (wrap.childElementCount !== 2) {
+      wrap.innerHTML = '<i></i><i></i>';
+    }
+    wrap.children[0].classList.toggle('on', n >= 1);
+    wrap.children[1].classList.toggle('on', n >= 2);
+  }
+
+  H.showVersusResult = function (on, vs) {
+    el.vresult.classList.toggle('hidden', !on);
+    if (!on) return;
+    var win = vs.result === 'win';
+    $('vresulttitle').textContent = win ? 'VICTORY' : 'DEFEAT';
+    $('vresulttitle').className = win ? 'good' : 'danger';
+    $('vresultsub').textContent =
+      (win ? 'You took ' : 'You lost ') + vs.wins[0] + ' — ' + vs.wins[1] +
+      ' against ' + (vs.foe.displayName || '') + ' on ' + SH.versus.DIFF[vs.difficulty].label + '.';
+  };
 
   H.showDowned = function (on, game) {
     el.downed.classList.toggle('hidden', !on);

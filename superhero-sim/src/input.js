@@ -14,7 +14,7 @@
     lastInputWasTouch: false
   });
 
-  var BTN_NAMES = ['primary', 'a1', 'a2', 'dash', 'form', 'force', 'extra'];
+  var BTN_NAMES = ['primary', 'a1', 'a2', 'dash', 'form', 'force', 'extra', 'jump', 'guard'];
 
   function mkBtn() {
     return { down: false, pressed: false, released: false, heldFor: 0, aimActive: false, aimX: 0, aimY: 0 };
@@ -150,6 +150,8 @@
       case 'q': case 'e': return IN.btns.form;
       case 'f': return IN.btns.force;
       case 'c': return IN.btns.extra;
+      case 'w': case 'arrowup': return SH.plane === 'side' ? IN.btns.jump : null;
+      case 's': case 'arrowdown': return SH.plane === 'side' ? IN.btns.guard : null;
       default: return null;
     }
   }

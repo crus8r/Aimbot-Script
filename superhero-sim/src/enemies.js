@@ -39,6 +39,12 @@
     color: '#e02fff', body: '#1e1226', knockResist: 0.6,
     desc: 'Blinks behind you, dodges, leaves clinging shadow.'
   };
+  TYPES.deathbringer = {
+    id: 'deathbringer', level: 6, name: 'DEATHBRINGER',
+    hp: 3400, speed: 74, r: 42, h: 112, score: 3000,
+    color: '#ff7a12', body: '#06050a', boss: true, knockResist: 0,
+    desc: 'A pitch-black ent slick with living mucus. Darkness and a death touch. Kills fast — dies faster than it should.'
+  };
   TYPES.colossus = {
     id: 'colossus', level: 5, name: 'COLOSSUS',
     hp: 3200, speed: 68, r: 44, h: 92, score: 900,
@@ -52,8 +58,9 @@
     var t = TYPES[typeId];
     if (!t) return null;
     opts = opts || {};
-    var mul = SH.game.difficultyMul();
+    var mul = (opts.hpScale || 1) * (opts.rawStats ? 1 : SH.game.difficultyMul());
     var e = {
+      dmgScale: opts.dmgScale || 1,
       type: typeId, def: t, level: t.level, name: t.name,
       x: x, y: y, z: 0, vx: 0, vy: 0, kvx: 0, kvy: 0,
       facing: U.rand(0, U.TAU),
@@ -330,6 +337,193 @@
     e.facing = U.angApproach(e.facing, U.angTo(e.x, e.y, p.x, p.y), dt * 1.8);
   }
 
+  /* ------------------------------------------------- DEATHBRINGER (lv 6)
+   * Pitch-black ent, orange eyes, dripping black mucus.
+   * Darkness manipulation + death touch. Every attack is telegraphed, but
+   * each one hurts badly — a challenge boss, not a health sponge.
+   */
+  function dbDmg(e, base) { return base * (e.dmgScale || 1) * (e.enraged ? 1.25 : 1); }
+
+  function aiDeathbringer(e, p, dt, dist) {
+    if (!e.enraged && e.hp < e.maxHp * 0.5) {
+      e.enraged = true;
+      e.speed *= 1.3;
+      FX.ring(e.x, e.y, 10, 10, 520, '#ff7a12', 1, 9);
+      FX.burst(e.x, e.y, e.h * 0.5, { n: 46, color: '#ff7a12', speed: 460, size: 8, life: 1 });
+      FX.shake(20);
+      SH.audio.play('boss');
+      SH.hud.banner('THE GROVE WAKES', '#ff7a12');
+      SH.setDarkness(0.5, 6);
+    }
+
+    if (e.state === 'lunge') {
+      e.stateT -= dt;
+      e.vx = Math.cos(e.chargeDir) * 720;
+      e.vy = Math.sin(e.chargeDir) * 720;
+      if (Math.random() < 0.8) {
+        FX.particle({
+          x: e.x + U.rand(-16, 16), y: e.y + U.rand(-10, 10), z: U.rand(4, e.h * 0.7),
+          life: 0.4, size: U.rand(5, 11), color: '#0b0910', mode: 'smoke', alpha: 0.7, drag: 2
+        });
+      }
+      if (!e.touched && p && !p.ko && U.within(e.x, e.y, p.x, p.y, e.r + p.radius + 34) && p.z < 96) {
+        e.touched = true;
+        C.hitPlayer(p, dbDmg(e, 44), { fromX: e.x, fromY: e.y });
+        C.status(p, 'wither', 6, { dps: dbDmg(e, 9) });
+        FX.text(p.x, p.y, p.z + 46, 'DEATH TOUCH', '#ff7a12', 17);
+        FX.burst(p.x, p.y, p.z + 20, { n: 20, color: '#1a0f22', speed: 260, size: 6, life: 0.7 });
+        FX.ring(p.x, p.y, p.z + 10, 8, 90, '#ff7a12', 0.5, 4);
+        FX.shake(12);
+        SH.audio.play('ko');
+      }
+      if (e.stateT <= 0) { e.state = 'idle'; e.atkCd = (e.enraged ? U.rand(1.1, 1.8) : U.rand(1.7, 2.6)) * (e.cdScale || 1); }
+      return;
+    }
+
+    if (e.state === 'wind') {
+      e.stateT -= dt;
+      brake(e, dt, 6);
+      e.facing = U.angApproach(e.facing, U.angTo(e.x, e.y, p.x, p.y), dt * 2.6);
+      if (e.stateT <= 0) {
+        e.state = 'idle';
+        e.atkCd = (e.enraged ? U.rand(1.0, 1.7) : U.rand(1.6, 2.4)) * (e.cdScale || 1);
+        resolveDeathbringer(e, p);
+      }
+      return;
+    }
+
+    if (e.atkCd <= 0) {
+      var roll = Math.random();
+      if (dist < 210 && roll < 0.42) {
+        e.state = 'wind'; e.windKind = 'touch'; e.stateT = 0.62;
+        telegraph(e, 'charge', 0.62, 0, '#ff7a12');
+      } else if (dist < 330 && roll < 0.6) {
+        e.state = 'wind'; e.windKind = 'grasp'; e.stateT = 0.85;
+        telegraph(e, 'wave', 0.85, 300, '#ff7a12');
+      } else if (roll < 0.8) {
+        e.state = 'wind'; e.windKind = 'roots'; e.stateT = 0.5;
+        telegraph(e, 'summon', 0.5, 130, '#ff7a12');
+      } else if (SH.darkness.t <= 0 && roll < 0.9) {
+        e.state = 'wind'; e.windKind = 'veil'; e.stateT = 0.8;
+        telegraph(e, 'summon', 0.8, 200, '#2a1030');
+      } else {
+        e.state = 'wind'; e.windKind = 'spit'; e.stateT = 0.55;
+        telegraph(e, 'aim', 0.55, 0, '#6b8f2a');
+      }
+      return;
+    }
+
+    if (dist > 150) moveToward(e, p.x, p.y, e.speed, dt, 420);
+    else brake(e, dt, 4);
+    e.facing = U.angApproach(e.facing, U.angTo(e.x, e.y, p.x, p.y), dt * 2);
+
+    // constant mucus drip
+    if (Math.random() < 0.5) {
+      FX.particle({
+        x: e.x + U.rand(-e.r * 0.8, e.r * 0.8), y: e.y + U.rand(-6, 10), z: U.rand(e.h * 0.3, e.h),
+        vz: -30, grav: 260, life: U.rand(0.5, 1), size: U.rand(2.5, 5),
+        color: '#0d0b14', mode: 'smoke', alpha: 0.85, drag: 0.4
+      });
+    }
+  }
+
+  function resolveDeathbringer(e, p) {
+    var d = SH.plane === 'side' ? 1 : 1;
+    switch (e.windKind) {
+      case 'touch': {
+        e.state = 'lunge'; e.stateT = 0.42; e.touched = false;
+        e.chargeDir = U.angTo(e.x, e.y, p.x, p.y);
+        FX.ring(e.x, e.y, e.h * 0.4, 10, 120, '#ff7a12', 0.4, 4);
+        SH.audio.play('heavy');
+        break;
+      }
+      case 'grasp': {
+        // tendrils erupt in a ring and root whatever they catch
+        SH.audio.play('boom');
+        FX.shake(11);
+        FX.ring(e.x, e.y, 6, 20, 300, '#2a1030', 0.5, 8);
+        for (var i = 0; i < 26; i++) {
+          var a = (i / 26) * U.TAU;
+          var rr = U.rand(80, 290);
+          FX.particle({
+            x: e.x + Math.cos(a) * rr, y: e.y + Math.sin(a) * rr, z: 0,
+            vz: U.rand(160, 300), life: U.rand(0.4, 0.75), size: U.rand(4, 9),
+            color: '#0b0910', mode: 'smoke', alpha: 0.9, drag: 1.4
+          });
+        }
+        if (p && !p.ko && U.within(e.x, e.y, p.x, p.y, 300 + p.radius) && p.z < 110) {
+          C.hitPlayer(p, dbDmg(e, 30), { fromX: e.x, fromY: e.y });
+          C.status(p, 'root', 0.9, {});
+          FX.text(p.x, p.y, p.z + 44, 'ROOTED', '#ff7a12', 15);
+        }
+        break;
+      }
+      case 'roots': {
+        // delayed black spears erupting from the ground, tracking where you stand
+        SH.audio.play('freeze');
+        var n = e.enraged ? 5 : 3;
+        for (var k = 0; k < n; k++) {
+          var tx = p.x + U.rand(-70, 70) + (k - n / 2) * 96;
+          var ty = SH.plane === 'side' ? p.y : p.y + U.rand(-70, 70);
+          (function (tx, ty, delay) {
+            SH.spawnHazard({
+              x: tx, y: ty, r: 74, life: 0.35, delay: delay, team: 'enemy', kind: 'root',
+              color: '#ff7a12', dmg: dbDmg(e, 34), owner: e,
+              data: { delayMax: delay },
+              onResolve: function (hz) {
+                FX.burst(hz.x, hz.y, 0, { n: 14, color: '#0b0910', speed: 200, size: 7, life: 0.6, vz: 320, grav: 420 });
+                FX.ring(hz.x, hz.y, 2, 8, 74, '#ff7a12', 0.35, 4);
+                SH.audio.play('heavy');
+              }
+            });
+          })(tx, ty, 0.75 + k * 0.16);
+        }
+        break;
+      }
+      case 'veil': {
+        SH.setDarkness(0.72, e.enraged ? 8 : 6);
+        SH.hud.banner('DARKNESS', '#b07cff');
+        SH.audio.play('form');
+        FX.ring(e.x, e.y, e.h * 0.4, 10, 460, '#2a1030', 0.9, 10);
+        var orbs = e.enraged ? 4 : 3;
+        for (var o = 0; o < orbs; o++) {
+          var oa = U.angTo(e.x, e.y, p.x, p.y) + U.rand(-0.8, 0.8);
+          SH.spawnProjectile({
+            x: e.x + Math.cos(oa) * 30, y: e.y + Math.sin(oa) * 30, z: e.h * 0.55,
+            vx: Math.cos(oa) * 210, vy: SH.plane === 'side' ? 0 : Math.sin(oa) * 210,
+            r: 15, dmg: dbDmg(e, 22), team: 'enemy', life: 5.5, type: 'shadeorb',
+            color: '#b07cff', size: 15, homing: 1.5, target: p, trailEvery: 0.04
+          });
+        }
+        break;
+      }
+      default: { // spit
+        SH.audio.play('shoot');
+        var sa = U.angTo(e.x, e.y, p.x, p.y);
+        var self = e;
+        SH.spawnProjectile({
+          x: e.x + Math.cos(sa) * 34, y: e.y + Math.sin(sa) * 34, z: e.h * 0.6,
+          vx: Math.cos(sa) * 380, vy: SH.plane === 'side' ? 0 : Math.sin(sa) * 380,
+          vz: 210, grav: 620, r: 16, dmg: dbDmg(e, 26), team: 'enemy', life: 4,
+          type: 'mucus', color: '#0d0b14', size: 16, spin: 4,
+          onExpire: function (pr) {
+            FX.burst(pr.x, pr.y, 4, { n: 14, color: '#0d0b14', speed: 190, size: 7, life: 0.6 });
+            SH.spawnHazard({
+              x: pr.x, y: pr.y, r: 92, life: 7, team: 'enemy', kind: 'mucus',
+              color: '#141021', dps: dbDmg(self, 10), tick: 0.4,
+              onTick: function (hz) {
+                var pl = SH.game.player();
+                if (pl && !pl.ko && pl.z < 40 && U.within(hz.x, hz.y, pl.x, pl.y, hz.r)) {
+                  pl.status.slow = { t: 0.5, amt: 0.5 };
+                }
+              }
+            });
+          }
+        });
+      }
+    }
+  }
+
   function countAdds(boss) {
     var n = 0, list = SH.ents.enemies;
     for (var i = 0; i < list.length; i++) if (!list[i].dead && list[i].summonedBy === boss) n++;
@@ -442,6 +636,7 @@
     var p = SH.game.player();
     for (var i = list.length - 1; i >= 0; i--) {
       var e = list[i];
+      if (e.isHero) continue;   // versus opponents drive themselves
       if (e.dead) { list.splice(i, 1); continue; }
 
       e.anim += dt;
@@ -471,13 +666,14 @@
 
       var dist = p ? U.dist(e.x, e.y, p.x, p.y) : 9999;
 
-      if (!frozen && !staggered && p && !p.ko) {
+      if (!frozen && !staggered && !e.ko && p && !p.ko) {
         switch (e.type) {
           case 'husk': aiHusk(e, p, dt, dist); break;
           case 'lancer': aiLancer(e, p, dt, dist); break;
           case 'bulwark': aiBulwark(e, p, dt, dist); break;
           case 'stalker': aiStalker(e, p, dt, dist); break;
           case 'colossus': aiColossus(e, p, dt, dist); break;
+          case 'deathbringer': aiDeathbringer(e, p, dt, dist); break;
         }
       } else {
         brake(e, dt, 6);

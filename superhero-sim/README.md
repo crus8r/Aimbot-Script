@@ -1,13 +1,16 @@
 # VANGUARD — Superhero Squad Simulator
 
 A browser-based, mobile-first superhero action game. Five custom heroes, one open
-city, temporary "Surge Forms". No engine, no build step, no assets — everything
-(city, characters, effects, sound) is generated procedurally in ~4,000 lines of
-plain JavaScript and drawn to a single 2D canvas.
+city, a tier-6 arch nemesis, and two ways to play: a top-down **Campaign** and a
+side-on **Versus** mode. No engine, no build step, no assets — everything (city,
+characters, effects, sound) is generated procedurally in plain JavaScript and
+drawn to a single 2D canvas.
 
-**First iteration / test build.** The goal was a large map, plenty of basic
-enemies at levels 1–5, instant hero swapping, easy respawning, and a button that
-force-triggers a hero's greater form on demand.
+**Test build.** The campaign wants a large map, plenty of basic enemies at
+levels 1–5, instant hero swapping, easy respawning, and a button that
+force-triggers a hero's greater form on demand. Versus mode shows the same
+fighters side-on, so you can actually see the character designs and their
+powers, and pits you against **Deathbringer** or one of your own squad.
 
 ---
 
@@ -27,6 +30,23 @@ Best on a phone in landscape, but portrait and desktop both work.
 
 ---
 
+## Two modes
+
+**CAMPAIGN** — top-down, open city, swarms of enemies, boss arenas.
+
+**VERSUS** — side-on 1v1, best of three rounds, MK-style. Pick your fighter,
+pick your opponent (Deathbringer by default, or any teammate), pick a
+difficulty. Both fighters are drawn full-body from the side, so every costume,
+weapon and Surge Form reads at a glance.
+
+The two modes share one engine. Entities already carried `x / y / z` and drew at
+`(x, y − z)`; Versus pins both fighters to a single `y` lane, which turns that
+same convention into a true side view. So the hero kits, damage, statuses,
+projectiles, hazards, VFX and even Deathbringer's AI are the *same code* in both
+modes — only the camera, the art and the round rules differ.
+
+---
+
 ## Controls
 
 ### Touch
@@ -40,11 +60,14 @@ Best on a phone in landscape, but portrait and desktop both work.
 | Portrait chips, top left | Swap hero instantly, any time |
 | ★ button | Surge Form (lit when the bar is full) |
 | ⚡ **FORCE** | Fills the Surge bar and triggers the form immediately — test-build override |
+| Stick **up** / **down** (Versus) | Jump / guard — guarding soaks ~78% of a hit and feeds Surge |
 
 ### Keyboard
 `WASD`/arrows move · `J`/`Space` attack · `K` ability 1 · `L` ability 2 ·
 `Shift` dash · `Q`/`E` Surge Form · `F` force form · `1`–`5` or `Tab` swap hero ·
 `C` extra action (Savior's element) · `Esc` pause
+
+In Versus, `W`/`↑` jumps and `S`/`↓` guards.
 
 ---
 
@@ -119,6 +142,26 @@ boss. Each tier has its own trick:
 | 3 | **Bulwark** | Front shield blocks ~88% of damage; flank it, or break it with heavy knockback |
 | 4 | **Stalker** | Blinks in behind you, dodges attacks, leaves slowing shadow pools |
 | 5 | **Colossus** | Boss: telegraphed slams, expanding shockwaves, summons adds, enrages at 50% HP |
+| 6 | **Deathbringer** | Arch nemesis. See below. Waits in **THE BLIGHT**, the grove on the east edge. |
+
+### DEATHBRINGER — tier 6
+
+A pitch-black ent the size of a house, sheeted in viscous living mucus that
+drips off him constantly, with two burning orange eyes set in a hollow face and
+a splintered maw. He manipulates darkness and kills by touch, and he is the arch
+nemesis of all five heroes.
+
+Deliberately **not** a health sponge — he is a challenge, not a slog. He hits
+far harder than the Colossus and dies sooner:
+
+- **Death Touch** — a telegraphed lunge. Heavy damage plus **Wither**: a rotting
+  damage-over-time that also cuts *all* your healing to 30% while it lasts.
+- **Grasp of the Grove** — tendrils erupt in a wide ring and **root** you in place.
+- **Root Surge** — black spears erupt from the ground where you're standing,
+  in a spreading pattern (five at once once he's enraged).
+- **Mucus Spit** — an arcing glob that leaves a black pool: damage over time and heavy slow.
+- **Darkness** — he blinds the arena, and shadow orbs hunt you through it.
+- At 50% HP the grove wakes: faster, harder, permanently dimmed.
 
 Airborne heroes clear buildings and dodge ground attacks — but ranged enemies
 lead their shots upward, so flight is an advantage, not immunity.
@@ -143,7 +186,9 @@ superhero-sim/
   src/heroes.js     the five kits, abilities and Surge Forms
   src/enemies.js    the five enemy tiers and their AI
   src/render.js     camera, 2.5D city, procedural character art, VFX
-  src/hud.js        DOM HUD, roster, minimap, menus
+  src/sideview.js   side-on stage art + the full-body fighter rig
+  src/versus.js     1v1 rounds, difficulty, and the opponent AI
+  src/hud.js        DOM HUD, roster, minimap, menus, versus HUD
   src/game.js       main loop, squad, spawn director
 ```
 
@@ -151,7 +196,18 @@ Plain `<script>` tags in dependency order, everything under a single `SH`
 namespace — no bundler, no dependencies. Performance is adaptive: the spawn cap
 lowers itself if the frame rate drops.
 
+## How the AI opponent works
+
+A hero is normally driven by the global input singleton. Each `Hero` now holds a
+reference to *a* controller instead, so an AI opponent gets a synthetic one and
+plays the identical kit — same cooldowns, same Surge, same forms — with no
+duplicated ability code. Difficulty scales its reaction time, aggression,
+damage and durability. Deathbringer instead reuses the campaign enemy AI
+verbatim, because his attacks are all range/AoE checks that work unchanged when
+everything shares a `y`.
+
 ## Possible next steps
 
 Real multiplayer, per-hero progression, mission objectives beyond "clear the
-zone", more enemy tiers, and squad AI for the benched heroes.
+zone", more enemy tiers, squad AI for the benched heroes, and per-character
+intro/win animations for Versus.

@@ -32,6 +32,28 @@
   var MAX_PARTICLES = 780;
   var pPool = [];
 
+  /* Deathbringer's darkness — dims the whole scene while it lasts */
+  SH.darkness = { t: 0, max: 0, amount: 0 };
+  SH.setDarkness = function (amount, dur) {
+    SH.darkness.amount = Math.max(SH.darkness.amount, amount);
+    SH.darkness.t = Math.max(SH.darkness.t, dur);
+    SH.darkness.max = SH.darkness.t;
+  };
+  SH.updateDarkness = function (dt) {
+    var d = SH.darkness;
+    if (d.t > 0) {
+      d.t -= dt;
+      if (d.t <= 0) { d.t = 0; d.amount = 0; }
+    }
+  };
+  SH.darknessLevel = function () {
+    var d = SH.darkness;
+    if (d.t <= 0) return 0;
+    // fade in over the first 0.4s and out over the last 0.8s
+    var fade = Math.min(1, d.t / 0.8);
+    return d.amount * fade;
+  };
+
   /* ======================================================================
    * FX
    * ==================================================================== */
@@ -45,6 +67,12 @@
     var p = alloc();
     p.x = o.x; p.y = o.y; p.z = o.z || 0;
     p.vx = o.vx || 0; p.vy = o.vy || 0; p.vz = o.vz || 0;
+    if (SH.plane === 'side') {
+      // depth motion has no meaning in the fighting plane — fold it into height
+      if (p.vy) { p.vz += p.vy; p.vy = 0; }
+      // effects authored around a top-down body sit at ankle height side-on
+      if (p.z > 8) p.z += 34;
+    }
     p.life = p.maxLife = o.life || 0.5;
     p.size = o.size || 3;
     p.size1 = o.size1 === undefined ? 0 : o.size1;
@@ -119,6 +147,7 @@
 
   FX.text = function (x, y, z, str, color, size, vy) {
     if (ents.texts.length > 44) ents.texts.shift();
+    if (SH.plane === 'side') z = (z || 0) + 96;   // float above the fighter's head
     ents.texts.push({
       x: x + U.rand(-8, 8), y: y, z: (z || 0) + 8, str: str, color: color || '#fff',
       size: size || 15, life: 0.85, maxLife: 0.85, vy: vy === undefined ? -46 : vy, vx: U.rand(-14, 14)
@@ -253,6 +282,7 @@
           if (p.z < e.z - 40 || p.z > e.z + e.h + 150) continue;
           if (!U.within(p.x, p.y, e.x, e.y, p.r + e.r)) continue;
 
+          if (p.owner && e.vsTeam !== undefined && p.owner.vsTeam === e.vsTeam) continue;
           if (p.sticky) {
             p.state = 'stuck'; p.stuckTo = e; p.stuckT = p.fuse;
             p.vx = p.vy = p.vz = 0;
@@ -529,6 +559,10 @@
   C.hitEnemy = function (e, dmg, opt) {
     opt = opt || {};
     if (!e || e.dead || e.spawning > 0 || dmg <= 0) return 0;
+    // versus: never damage your own side (this also stops self-hits)
+    if (opt.owner && e.vsTeam !== undefined && opt.owner.vsTeam === e.vsTeam) return 0;
+    // a hero taking a hit always goes through the hero damage path
+    if (e.isHero) { C.hitPlayer(e, dmg, opt); return dmg; }
     var blocked = false;
 
     // Bulwark's directional shield
@@ -583,10 +617,10 @@
       SH.audio.play(crit ? 'crit' : 'hit');
     }
 
-    // surge for the active hero
-    var hero = SH.game.player();
+    // surge for whoever landed the hit
+    var hero = (opt.owner && opt.owner.isHero) ? opt.owner : SH.game.player();
     if (hero && !opt.noSurge) {
-      SH.game.addSurge(dmg * (opt.dot ? 0.05 : 0.09) * (e.boss ? 1.6 : 1));
+      SH.game.gainSurge(hero, dmg * (opt.dot ? 0.05 : 0.09) * (e.boss ? 1.6 : 1));
       if (hero.kitId === 'vitality' && !opt.dot) C.healHero(hero, dmg * 0.035, true);
     }
     SH.game.stats.damage += dmg;
@@ -598,8 +632,16 @@
 
   C.killEnemy = function (e, opt) {
     if (e.dead) return;
-    e.dead = true;
     var col = e.color || '#fff';
+    if (e.vsTeam !== undefined) { // versus round KO — no loot, no score
+      FX.burst(e.x, e.y, e.h * 0.5, { n: 34, color: col, speed: 380, size: 6, life: 0.8, mode: 'shard' });
+      FX.ring(e.x, e.y, 4, e.r * 0.5, e.r * 5, col, 0.7, 6);
+      FX.shake(14);
+      SH.audio.play('boom');
+      SH.versus.onKO(e);
+      return;
+    }
+    e.dead = true;
     FX.burst(e.x, e.y, e.h * 0.5, { n: e.boss ? 44 : 12, color: col, speed: e.boss ? 460 : 240, size: e.boss ? 7 : 4, life: 0.7, mode: 'shard' });
     FX.ring(e.x, e.y, 4, e.r * 0.5, e.r * (e.boss ? 7 : 3), col, e.boss ? 0.8 : 0.4, e.boss ? 8 : 3);
     FX.flash(e.x, e.y, e.h * 0.5, e.r * (e.boss ? 5 : 2), col, 0.25);
@@ -696,9 +738,20 @@
   C.hitPlayer = function (h, dmg, opt) {
     opt = opt || {};
     if (!h || h.ko || h.dead) return false;
+    var isYou = h === SH.game.player();
+    if (opt.owner && opt.owner.aiDmg) dmg *= opt.owner.aiDmg;   // versus difficulty
     if (h.invuln > 0) {
       FX.text(h.x, h.y, h.z + 26, 'MISS', '#bbb', 12);
       return 'blocked';
+    }
+    // fighting-game guard: hold down / GUARD to soak most of a hit
+    if (h.guard) {
+      dmg *= 0.22;
+      FX.text(h.x, h.y, h.z + 34, 'GUARD', '#9fd8ff', 13);
+      FX.ring(h.x, h.y, h.z + 18, 26, 46, '#9fd8ff', 0.22, 3);
+      FX.burst(h.x, h.y, h.z + 20, { n: 4, color: '#9fd8ff', speed: 140, size: 3, life: 0.25 });
+      SH.audio.play('hit');
+      SH.game.gainSurge(h, dmg * 0.5);
     }
 
     // Savior: absorption field converts incoming damage into charge
@@ -731,22 +784,37 @@
     dmg *= h.dmgTakenMult || 1;
     h.hp -= dmg;
     h.hitFlash = 0.16;
+    if (h.vsTeam !== undefined && !opt.dot) {
+      h.hitstun = Math.max(h.hitstun || 0, h.guard ? 0.08 : 0.16);
+      if (opt.knock) {
+        var kd = opt.dir === undefined ? U.angTo(opt.fromX || h.x, opt.fromY || h.y, h.x, h.y) : opt.dir;
+        h.vx += Math.cos(kd) * opt.knock * (h.guard ? 0.15 : 0.5);
+      }
+    }
     h.lastHitAt = SH.game.time;
     h.combo = 0;
     if (!opt.dot) {
       FX.text(h.x, h.y, h.z + 30, '-' + Math.round(dmg), '#ff5b6e', 16);
       FX.burst(h.x, h.y, h.z + 16, { n: 6, color: '#ff5b6e', speed: 170, size: 3.4, life: 0.32 });
-      FX.shake(Math.min(9, 2 + dmg * 0.14));
       SH.audio.play('hurt');
-      if (navigator.vibrate) { try { navigator.vibrate(18); } catch (e) {} }
+      if (isYou) {
+        FX.shake(Math.min(9, 2 + dmg * 0.14));
+        if (navigator.vibrate) { try { navigator.vibrate(18); } catch (e) {} }
+      }
     }
-    SH.game.stats.taken += dmg;
-    if (h.hp <= 0) { h.hp = 0; SH.game.knockOut(h); }
+    if (isYou) SH.game.stats.taken += dmg;
+    if (h.hp <= 0) {
+      h.hp = 0;
+      if (h.vsTeam !== undefined) SH.versus.onKO(h);
+      else SH.game.knockOut(h);
+    }
     return true;
   };
 
   C.healHero = function (h, amt, silent) {
     if (!h || h.ko) return;
+    // the death touch rots healing away
+    if (h.status && h.status.wither && h.status.wither.t > 0) amt *= 0.3;
     var before = h.hp;
     h.hp = Math.min(h.maxHp, h.hp + amt);
     var gained = h.hp - before;

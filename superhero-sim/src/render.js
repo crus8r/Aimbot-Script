@@ -579,6 +579,7 @@
       case 'bulwark': drawBulwark(ctx, e, body, wob); break;
       case 'stalker': drawStalker(ctx, e, body, wob); break;
       case 'colossus': drawColossus(ctx, e, body, wob); break;
+      case 'deathbringer': drawDeathTree(ctx, e, body, wob); break;
     }
 
     ctx.restore();
@@ -756,6 +757,76 @@
     ctx.beginPath(); ctx.arc(r * 0.5, 0, r * 0.32, 0, U.TAU); ctx.fill();
     glow(ctx, r * 0.62, 0, r * 0.5, e.color, 0.8);
     ctx.restore();
+  }
+
+  /* Deathbringer from above: a black canopy, two burning eyes, dripping mucus */
+  function drawDeathTree(ctx, e, body, wob) {
+    var r = e.r;
+    var t = e.anim;
+    var rage = e.enraged ? 1 : 0;
+
+    // canopy of black branches
+    ctx.fillStyle = '#06050a';
+    ctx.beginPath();
+    for (var i = 0; i < 14; i++) {
+      var a = (i / 14) * U.TAU;
+      var rr = r * (1.28 + Math.sin(i * 2.7 + t * 0.6) * 0.3 + (i % 2 ? 0.34 : 0));
+      var px = Math.cos(a) * rr, py = Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // long branch arms reaching forward
+    ctx.strokeStyle = '#0d0b14';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = r * 0.3;
+    for (var s = -1; s <= 1; s += 2) {
+      var ba = s * 0.55 + Math.sin(t * 1.1 + s) * 0.08;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(Math.cos(ba) * r * 1.1, Math.sin(ba) * r * 1.1,
+        Math.cos(ba * 0.7) * r * 2.1, Math.sin(ba * 0.7) * r * 2.1);
+      ctx.stroke();
+      ctx.lineWidth = r * 0.12;
+      for (var c = -1; c <= 1; c++) {
+        var ca = ba * 0.7 + c * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(ba * 0.7) * r * 2.1, Math.sin(ba * 0.7) * r * 2.1);
+        ctx.lineTo(Math.cos(ca) * r * 2.7, Math.sin(ca) * r * 2.7);
+        ctx.stroke();
+      }
+      ctx.lineWidth = r * 0.3;
+    }
+
+    // trunk
+    ctx.fillStyle = body === '#ffffff' ? '#ffffff' : '#0a0810';
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.78, 0, U.TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,122,18,0.14)';
+    ctx.lineWidth = 2;
+    for (var g = 0; g < 4; g++) {
+      ctx.beginPath();
+      ctx.arc(0, 0, r * (0.28 + g * 0.16), 0.4 + g, 2.2 + g);
+      ctx.stroke();
+    }
+
+    // the eyes
+    var pulse = 0.7 + Math.sin(t * 3) * 0.14 + rage * 0.25;
+    glow(ctx, r * 0.42, -r * 0.24, r * 1.15, e.color, pulse);
+    glow(ctx, r * 0.42, r * 0.24, r * 1.15, e.color, pulse);
+    ctx.fillStyle = e.color;
+    ctx.beginPath(); ctx.ellipse(r * 0.42, -r * 0.24, r * 0.16, r * 0.11, 0, 0, U.TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(r * 0.42, r * 0.24, r * 0.16, r * 0.11, 0, 0, U.TAU); ctx.fill();
+
+    // mucus pooling around the roots
+    ctx.fillStyle = 'rgba(9,7,14,0.85)';
+    for (var m = 0; m < 5; m++) {
+      var ma = m * 1.9 + t * 0.3;
+      var md = r * (0.9 + (m % 3) * 0.25);
+      ctx.beginPath();
+      ctx.ellipse(Math.cos(ma) * md, Math.sin(ma) * md, r * 0.22, r * 0.15, ma, 0, U.TAU);
+      ctx.fill();
+    }
   }
 
   /* -------------------------------------------------------------- heroes */
@@ -1356,7 +1427,53 @@
   }
 
   /* ------------------------------------------------------- portraits */
+  /* shared with the side-view renderer */
+  R.glowAt = glow;
+  R.parts = drawParticles;
+  R.overheads = drawOverheads;
+  R.proj = drawProjectile;
+
   R.drawPortrait = function (ctx, kitId, size) {
+    var s0 = size / 64;
+    if (kitId === 'deathbringer') {
+      ctx.save();
+      ctx.scale(s0, s0);
+      var bg = ctx.createLinearGradient(0, 0, 0, 64);
+      bg.addColorStop(0, 'rgba(255,122,18,0.22)');
+      bg.addColorStop(1, 'rgba(0,0,0,0.6)');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, 64, 64);
+      ctx.strokeStyle = '#06050a';
+      ctx.lineWidth = 7; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(32, 64); ctx.lineTo(32, 26); ctx.stroke();
+      ctx.lineWidth = 4;
+      for (var b = 0; b < 5; b++) {
+        var a = -Math.PI / 2 + (b - 2) * 0.55;
+        ctx.beginPath();
+        ctx.moveTo(32, 30);
+        ctx.lineTo(32 + Math.cos(a) * 26, 30 + Math.sin(a) * 26);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#06050a';
+      ctx.beginPath(); ctx.ellipse(32, 36, 17, 20, 0, 0, U.TAU); ctx.fill();
+      glow(ctx, 25, 33, 15, '#ff7a12', 0.95);
+      glow(ctx, 39, 33, 15, '#ff7a12', 0.95);
+      ctx.fillStyle = '#ff7a12';
+      ctx.beginPath(); ctx.ellipse(25, 33, 4.4, 3.2, 0.2, 0, U.TAU); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(39, 33, 4.4, 3.2, -0.2, 0, U.TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,122,18,0.5)'; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (var m = 0; m < 6; m++) ctx.lineTo(24 + m * 3.4, 46 + (m % 2 ? 4 : 0));
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(10,8,16,0.9)';
+      for (var d = 0; d < 3; d++) {
+        ctx.beginPath();
+        ctx.ellipse(20 + d * 12, 52 + d * 3, 2.4, 5, 0, 0, U.TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+      return;
+    }
     var kit = SH.kitById(kitId);
     var K = kit.colors;
     var s = size / 64;

@@ -37,6 +37,18 @@
     this.kit = kit;
     this.kitId = kit.id;
     this.name = kit.name;
+    this.isHero = true;
+    this.in = SH.input;          // swapped for a synthetic controller when AI-driven
+    /* enemy-shaped fields so a hero can be a valid target in versus mode */
+    this.r = kit.radius;
+    this.h = 34;
+    this.kvx = 0; this.kvy = 0;
+    this.spawning = 0;
+    this.stagger = 0;
+    this.color = kit.colors.accent;
+    this.body = kit.colors.base;
+    this.level = 5;
+    this.type = 'hero';
     this.x = 0; this.y = 0; this.z = 0;
     this.vx = 0; this.vy = 0; this.vz = 0;
     this.facing = 0;
@@ -86,11 +98,17 @@
   Hero.prototype.setCd = function (k, t) { this.cd[k] = t; this.cdMax[k] = t; };
 
   Hero.prototype.getAim = function (btnName, range) {
-    var b = SH.input.btns[btnName];
+    // side view: everything is thrown straight down the lane
+    if (SH.plane === 'side') {
+      var foe = SH.versus && SH.versus.foeOf(this);
+      if (foe && !foe.dead) return foe.x >= this.x ? 0 : Math.PI;
+      return Math.abs(U.angDiff(0, this.facing)) < Math.PI / 2 ? 0 : Math.PI;
+    }
+    var b = this.in.btns[btnName];
     if (b && b.aimActive) return Math.atan2(b.aimY, b.aimX);
     var t = U.nearestEnemy(this.x, this.y, range || 400);
     if (t) return U.angTo(this.x, this.y, t.x, t.y);
-    if (SH.input.move.len > 0.12) return Math.atan2(SH.input.move.y, SH.input.move.x);
+    if (this.in.move.len > 0.12) return Math.atan2(this.in.move.y, this.in.move.x);
     return this.facing;
   };
 
@@ -164,7 +182,7 @@
   };
 
   Hero.prototype.update = function (dt) {
-    var IN = SH.input;
+    var IN = this.in;
     var kit = this.kit;
     this.anim.t += dt;
 
@@ -184,9 +202,31 @@
 
     // statuses
     var slow = 1;
+    this.rooted = false;
     if (this.status.slow && this.status.slow.t > 0) {
       this.status.slow.t -= dt;
       slow *= 1 - (this.status.slow.amt || 0.3);
+    }
+    if (this.status.wither && this.status.wither.t > 0) {
+      var w = this.status.wither;
+      w.t -= dt;
+      w.acc = (w.acc || 0) + dt;
+      if (w.acc >= 0.5) {
+        w.acc = 0;
+        C.hitPlayer(this, (w.dps || 8) * 0.5, { dot: true, fromX: this.x, fromY: this.y });
+      }
+      slow *= 0.88;
+      if (Math.random() < 0.4) {
+        FX.particle({
+          x: this.x + U.rand(-14, 14), y: this.y + U.rand(-8, 8), z: U.rand(6, 40),
+          vz: U.rand(14, 46), life: 0.6, size: U.rand(2.5, 5), color: '#7a4bb0',
+          mode: 'smoke', alpha: 0.75, drag: 1.2
+        });
+      }
+    }
+    if (this.status.root && this.status.root.t > 0) {
+      this.status.root.t -= dt;
+      this.rooted = true;
     }
 
     if (kit.resource && kit.resource.regen) {
@@ -207,7 +247,8 @@
     }
 
     /* ---- actions ---- */
-    var canAct = this.dashT <= 0 && !this.locked;
+    if (this.hitstun > 0) this.hitstun -= dt;
+    var canAct = this.dashT <= 0 && !this.locked && this.hitstun <= 0;
     if (canAct) {
       if (IN.btns.primary.down && this.cd.primary <= 0 && kit.primary) {
         kit.primary(this, this.getAim('primary', kit.aimRange || 360));
@@ -221,7 +262,7 @@
       if (IN.btns.dash.pressed && this.cd.dash <= 0) {
         if (kit.dash) kit.dash(this, this.getAim('dash', 200));
         else {
-          this.startDash(SH.input.move.len > 0.12 ? Math.atan2(SH.input.move.y, SH.input.move.x) : this.facing, 560, 0.26, 0.2);
+          this.startDash(IN.move.len > 0.12 ? Math.atan2(IN.move.y, IN.move.x) : this.facing, 560, 0.26, 0.2);
           this.setCd('dash', 1.1);
         }
       }
@@ -233,6 +274,26 @@
     var maxSp = this.speed * this.speedMul * slow;
     if (this.attackT > 0) maxSp *= this.attackMove;
     var tvx = mv.x * maxSp, tvy = mv.y * maxSp;
+
+    /* side-view fighting plane: one lane, plus jump and guard */
+    if (SH.plane === 'side') {
+      tvy = 0;
+      this.vy = 0;
+      this.guard = 0;
+      if (this.grounded && this.attackT <= 0 && this.dashT <= 0) {
+        if (mv.y < -0.45 || IN.btns.jump.pressed) {
+          this.vz = this.jumpPower || 640;
+          this.grounded = false;
+          SH.audio.play('leap');
+          FX.ring(this.x, this.y, 2, 4, 34, this.kit.colors.accent, 0.25, 2);
+        } else if (mv.y > 0.5 || IN.btns.guard.down) {
+          this.guard = 1;
+          tvx *= 0.3;
+        }
+      }
+      if (!this.grounded) tvx *= 0.85;
+    }
+    if (this.rooted) { tvx = 0; tvy = 0; }
 
     if (this.dashT > 0) {
       this.dashT -= dt;
@@ -279,11 +340,16 @@
     SH.world.collide(this, this.radius);
 
     /* ---- facing ---- */
-    var want = this.facing;
-    if (this.attackT > 0 && this.attackAim !== undefined) want = this.attackAim;
-    else if (Math.hypot(this.vx, this.vy) > 25) want = Math.atan2(this.vy, this.vx);
-    else if (SH.input.btns.primary.down) want = this.getAim('primary', 360);
-    this.facing = U.angApproach(this.facing, want, dt * 16);
+    if (SH.plane === 'side') {
+      // fighters always square up to their opponent
+      this.facing = (this.attackT > 0 && this.attackAim !== undefined) ? this.attackAim : this.getAim('primary', 900);
+    } else {
+      var want = this.facing;
+      if (this.attackT > 0 && this.attackAim !== undefined) want = this.attackAim;
+      else if (Math.hypot(this.vx, this.vy) > 25) want = Math.atan2(this.vy, this.vx);
+      else if (IN.btns.primary.down) want = this.getAim('primary', 360);
+      this.facing = U.angApproach(this.facing, want, dt * 16);
+    }
 
     if (kit.update) kit.update(this, dt);
   };
@@ -472,7 +538,7 @@
     },
 
     dash: function (h, aim) {
-      var d = SH.input.move.len > 0.12 ? Math.atan2(SH.input.move.y, SH.input.move.x) : aim;
+      var d = h.in.move.len > 0.12 ? Math.atan2(h.in.move.y, h.in.move.x) : aim;
       h.startDash(d, 620, 0.24, 0.2);
       h.setCd('dash', 1.05);
       for (var i = 0; i < 5; i++) {
@@ -489,7 +555,7 @@
     },
 
     update: function (h, dt) {
-      if (!SH.input.btns.a1.down && h.absorbing) { h.absorbing = 0; h.speedMul = 1; }
+      if (!h.in.btns.a1.down && h.absorbing) { h.absorbing = 0; h.speedMul = 1; }
       if (h.form > 0) {
         h.charge = Math.min(h.maxCharge, h.charge + 14 * dt);
         if (Math.random() < 0.6) {
@@ -570,7 +636,7 @@
         elem: frost ? 'ice' : 'lightning', maxTargets: 3, owner: h
       });
       if (hit) {
-        var t = U.nearestEnemy(h.x, h.y, 200);
+        var t = U.nearestEnemy(h.x, h.y, 200, function (e) { return e !== h; });
         if (t) C.chain(t.x, t.y, 8 * h.dmgMul, { jumps: 1, range: 170, owner: h, color: col, elem: frost ? 'ice' : 'lightning' });
       }
       SH.audio.play('swing');
@@ -650,7 +716,7 @@
     },
 
     dash: function (h, aim) {
-      var d = SH.input.move.len > 0.12 ? Math.atan2(SH.input.move.y, SH.input.move.x) : aim;
+      var d = h.in.move.len > 0.12 ? Math.atan2(h.in.move.y, h.in.move.x) : aim;
       h.startDash(d, 980, 0.17, 0.17);
       h.setCd('dash', 0.7);
       FX.after(h, 0.3, h.form > 0 ? '#8fd8ff' : h.kit.colors.accent);
@@ -659,7 +725,7 @@
     update: function (h, dt) {
       if (h._t === undefined) h._t = 0;
       h._t += dt;
-      if (!SH.input.btns.a1.down && h.blitz) { h.blitz = 0; h.speedMul = 1; }
+      if (!h.in.btns.a1.down && h.blitz) { h.blitz = 0; h.speedMul = 1; }
       var moving = Math.hypot(h.vx, h.vy) > 120;
       if (moving && !h.blitz) {
         h.trailT -= dt;
@@ -771,7 +837,7 @@
         return;
       }
       if (!h.grounded) return;
-      var d = SH.input.move.len > 0.12 ? Math.atan2(SH.input.move.y, SH.input.move.x) : aim;
+      var d = h.in.move.len > 0.12 ? Math.atan2(h.in.move.y, h.in.move.x) : aim;
       h.vz = 700;
       h.grounded = false;
       h.leapT = 1;
@@ -790,7 +856,7 @@
         h.gliding = 1;
         h.vz = Math.max(h.vz, -62);
         // air control
-        var mv = SH.input.move;
+        var mv = h.in.move;
         if (mv.len > 0.1) {
           h.vx = U.approach(h.vx, mv.x * h.speed * 1.5, 900 * dt);
           h.vy = U.approach(h.vy, mv.y * h.speed * 1.5, 900 * dt);
@@ -863,7 +929,7 @@
     },
 
     dash: function (h, aim) {
-      var d = SH.input.move.len > 0.12 ? Math.atan2(SH.input.move.y, SH.input.move.x) : aim;
+      var d = h.in.move.len > 0.12 ? Math.atan2(h.in.move.y, h.in.move.x) : aim;
       h.startDash(d, 620, 0.3, 0.24);
       h.setCd('dash', 1.6);
       h.onDashTick = function (hh, dt) {
@@ -1034,7 +1100,7 @@
     },
 
     dash: function (h, aim) {
-      var d = SH.input.move.len > 0.12 ? Math.atan2(SH.input.move.y, SH.input.move.x) : aim;
+      var d = h.in.move.len > 0.12 ? Math.atan2(h.in.move.y, h.in.move.x) : aim;
       h.startDash(d, 660, 0.22, 0.22);
       h.setCd('dash', 1.15);
       FX.after(h, 0.3, h.kit.colors.accent);
@@ -1081,7 +1147,7 @@
         x: h.x, y: h.y, r: 260, life: h.formDur, team: 'hero', kind: 'storm',
         color: h.kit.colors.formGlow, follow: h, tick: 0.55, owner: h,
         onTick: function (hz) {
-          var t = U.nearestEnemy(hz.x, hz.y, hz.r, function (e) { return Math.random() < 0.85; });
+          var t = U.nearestEnemy(hz.x, hz.y, hz.r, function (e) { return e !== self && Math.random() < 0.85; });
           if (!t) return;
           FX.bolt(t.x + U.rand(-40, 40), t.y - 520, t.x, t.y - t.h * 0.5, self.kit.colors.formGlow, 0.22, 20);
           FX.flash(t.x, t.y, t.h * 0.5, 60, self.kit.colors.formGlow, 0.2);
@@ -1199,7 +1265,7 @@
     },
 
     dash: function (h, aim) {
-      var d = SH.input.move.len > 0.12 ? Math.atan2(SH.input.move.y, SH.input.move.x) : aim;
+      var d = h.in.move.len > 0.12 ? Math.atan2(h.in.move.y, h.in.move.x) : aim;
       h.startDash(d, 600, 0.26, 0.22);
       h.setCd('dash', 1.05);
       for (var i = 0; i < 6; i++) {

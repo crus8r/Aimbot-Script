@@ -485,3 +485,165 @@ button:hover { filter: brightness(1.25); }
   font-size: 13px;
   text-align: center;
 }
+
+/* =====================================================================
+ * VERSUS
+ * =================================================================== */
+#hud.versus #topleft,
+#hud.versus #topmid,
+#hud.versus #minimap { display: none; }
+
+#vhud {
+  position: absolute;
+  top: calc(8px + var(--safeT));
+  left: calc(8px + var(--safeL));
+  right: calc(56px + var(--safeR));
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.vside { flex: 1; min-width: 0; }
+.vside.right { text-align: right; }
+.vtop { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.vside.right .vtop { justify-content: flex-end; }
+.vname {
+  font-size: clamp(10px, 2.4vw, 15px);
+  font-weight: 900; letter-spacing: .14em;
+  text-shadow: 0 2px 6px #000;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.vpips { display: flex; gap: 4px; flex: none; }
+.vpips i {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, .35);
+  background: transparent;
+}
+.vpips i.on { background: #ffd76a; border-color: #ffd76a; box-shadow: 0 0 8px #ffd76a; }
+
+.vbar {
+  height: 15px;
+  background: rgba(4, 8, 14, .82);
+  border: 2px solid rgba(160, 200, 255, .3);
+  border-radius: 4px;
+  overflow: hidden;
+  transform: skewX(-14deg);
+}
+.vbar i {
+  display: block; height: 100%; width: 100%;
+  background: linear-gradient(180deg, #6effb0, #24b06a);
+  transition: width .13s linear;
+}
+.vside.right .vbar { transform: skewX(14deg); }
+.vside.right .vbar i { float: right; }
+.vsg {
+  height: 5px; margin-top: 3px;
+  background: rgba(4, 8, 14, .8);
+  border-radius: 3px; overflow: hidden;
+  transform: skewX(-14deg);
+}
+.vside.right .vsg { transform: skewX(14deg); }
+.vsg i { display: block; height: 100%; width: 0; background: #5b86ff; transition: width .12s linear; }
+.vside.right .vsg i { float: right; }
+.vsg i.full { background: linear-gradient(90deg, var(--hero), #fff); box-shadow: 0 0 8px var(--heroglow); }
+.vsg i.inform { background: #fff; }
+
+.vmid { flex: none; text-align: center; width: 74px; }
+.vtimer {
+  font-size: clamp(20px, 5vw, 34px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-shadow: 0 2px 8px #000;
+}
+.vtimer.low { color: #ff5b6e; animation: pulse .6s infinite; }
+.vround { font-size: 8px; letter-spacing: .2em; color: var(--dim); margin-top: 2px; }
+
+/* ---- setup screen ---- */
+#vsetup {
+  position: absolute; inset: 0; z-index: 22;
+  background: radial-gradient(circle at 50% 40%, rgba(20, 8, 6, .9), rgba(2, 1, 4, .97));
+  display: grid; place-items: center;
+  padding: calc(10px + var(--safeT)) 10px calc(10px + var(--safeB));
+  overflow: auto;
+}
+.vh1 { background-image: linear-gradient(90deg, #ff7a12, #ffd76a, #ff5b6e); }
+.vsgrid { display: grid; gap: 10px; grid-template-columns: 1fr; margin-top: 8px; }
+@media (min-width: 780px) { .vsgrid { grid-template-columns: 1fr 1.05fr 1fr; align-items: start; } }
+.vscol h3 {
+  font-size: 9.5px; letter-spacing: .24em; color: var(--dim);
+  margin: 8px 0 6px; font-weight: 800;
+}
+.picker { display: flex; flex-wrap: wrap; gap: 5px; }
+.pick {
+  --accent: #8aa;
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 9px 5px 5px;
+  font-size: 10px; letter-spacing: .06em;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: rgba(14, 20, 32, .8);
+  flex: 1 1 140px;
+  min-width: 0;
+  text-align: left;
+}
+.pick canvas { width: 30px; height: 30px; border-radius: 6px; flex: none; }
+.pick span { display: flex; flex-direction: column; min-width: 0; }
+.pick b { font-size: 10.5px; letter-spacing: .08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick em {
+  font-style: normal; font-size: 7.5px; color: var(--dim); letter-spacing: .08em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pick.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, rgba(10, 14, 24, .9));
+  box-shadow: 0 0 14px -3px var(--accent);
+}
+.diffrow .diffpick { flex: 1 1 60px; justify-content: center; padding: 9px 4px; font-size: 9.5px; font-weight: 800; }
+.diffrow .diffpick.on { --accent: #ff7a12; }
+.difftag { font-size: 10px; color: var(--dim); margin: 7px 0 0; line-height: 1.4; }
+
+.vsstage {
+  display: flex; align-items: flex-end; justify-content: center; gap: 6px;
+  background: linear-gradient(180deg, rgba(255, 122, 18, .05), rgba(0, 0, 0, .35));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 6px 6px;
+  min-height: 190px;
+}
+.vsslot { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.vsslot canvas { width: 100%; height: 158px; display: block; }
+.vsslot {
+  background: radial-gradient(ellipse at 50% 92%, rgba(255, 255, 255, .07), transparent 62%);
+  border-radius: 10px;
+}
+.vslabel {
+  font-size: 9.5px; font-weight: 900; letter-spacing: .12em; margin-top: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.vsvs {
+  flex: none; font-size: 15px; font-weight: 900; letter-spacing: .1em;
+  color: #ff5b6e; text-shadow: 0 0 14px #ff5b6e; padding-bottom: 62px;
+}
+
+.mainbtns { display: flex; gap: 8px; margin-top: 14px; }
+.mainbtns button { flex: 1; padding: 15px 10px; font-size: 14px; }
+#playbtn { margin-top: 0; }
+#versusbtn {
+  background: linear-gradient(90deg, rgba(255, 122, 18, .24), rgba(255, 91, 110, .24));
+  border-color: rgba(255, 140, 60, .55);
+  color: #ffe6cf;
+}
+#fightbtn {
+  background: linear-gradient(90deg, rgba(255, 122, 18, .3), rgba(255, 91, 110, .3));
+  border-color: rgba(255, 140, 60, .6);
+  color: #fff1e2;
+}
+.ghost { flex: 0 0 34% !important; background: rgba(255, 255, 255, .05); }
+
+#vresult {
+  position: absolute; inset: 0; z-index: 24;
+  background: radial-gradient(circle at 50% 45%, rgba(14, 6, 4, .88), rgba(2, 1, 4, .97));
+  display: grid; place-items: center; padding: 16px;
+}
+#vresulttitle.good { color: #5affa8; }
+#vresulttitle.danger { color: #ff5b6e; }

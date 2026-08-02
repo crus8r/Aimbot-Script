@@ -19,8 +19,22 @@
     maxDist: 1
   });
 
-  W.THREAT_COLORS = ['#5ad1ff', '#5affa8', '#ffd76a', '#ff9a3c', '#ff4d5e'];
-  W.THREAT_NAMES = ['QUIET DISTRICT', 'CONTESTED BLOCKS', 'BREACH ZONE', 'DEEP FRACTURE', 'BOSS ARENA'];
+  W.THREAT_COLORS = ['#5ad1ff', '#5affa8', '#ffd76a', '#ff9a3c', '#ff4d5e', '#ff7a12'];
+  W.THREAT_NAMES = ['QUIET DISTRICT', 'CONTESTED BLOCKS', 'BREACH ZONE', 'DEEP FRACTURE', 'BOSS ARENA', 'THE BLIGHT'];
+
+  /* Versus mode borrows the world as a flat stage with no buildings */
+  W.enterStage = function (w, h) {
+    if (W._saved) return;
+    W._saved = { obstacles: W.obstacles, w: W.w, h: W.h };
+    W.obstacles = [];
+    W.w = w; W.h = h;
+  };
+  W.exitStage = function () {
+    if (!W._saved) return;
+    W.obstacles = W._saved.obstacles;
+    W.w = W._saved.w; W.h = W._saved.h;
+    W._saved = null;
+  };
 
   W.generate = function () {
     W.obstacles.length = 0;
@@ -36,7 +50,12 @@
       { x: W.cx, y: 520 }, { x: W.cx, y: W.h - 520 }
     ];
     arenaSpots.forEach(function (s, i) {
-      W.arenas.push({ x: s.x, y: s.y, r: 430, id: i, boss: null, respawn: 0, cleared: false });
+      W.arenas.push({ x: s.x, y: s.y, r: 430, id: i, boss: null, respawn: 0, cleared: false, type: 'colossus', threat: 5 });
+    });
+    // the tier-6 site — Deathbringer's grove
+    W.arenas.push({
+      x: W.w - 760, y: W.cy, r: 480, id: 90, boss: null, respawn: 0,
+      cleared: false, type: 'deathbringer', threat: 6
     });
 
     /* City blocks */
@@ -99,7 +118,7 @@
 
   W.threatAt = function (x, y) {
     for (var i = 0; i < W.arenas.length; i++) {
-      if (U.within(x, y, W.arenas[i].x, W.arenas[i].y, W.arenas[i].r)) return 5;
+      if (U.within(x, y, W.arenas[i].x, W.arenas[i].y, W.arenas[i].r)) return W.arenas[i].threat || 5;
     }
     var d = U.dist(x, y, W.cx, W.cy) / W.maxDist;
     return U.clamp(1 + Math.floor(d * 4.6), 1, 4);

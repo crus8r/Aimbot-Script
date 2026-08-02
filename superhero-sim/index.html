@@ -53,6 +53,24 @@
     <div id="fps" class="hidden">60 FPS</div>
   </div>
 
+  <!-- versus HUD -->
+  <div id="vhud" class="hidden">
+    <div class="vside left">
+      <div class="vtop"><span class="vname" id="vnameL">YOU</span><span class="vpips" id="vpipsL"></span></div>
+      <div class="vbar"><i id="vhpL"></i></div>
+      <div class="vsg"><i id="vsgL"></i></div>
+    </div>
+    <div class="vmid">
+      <div class="vtimer" id="vtimer">99</div>
+      <div class="vround" id="vround">ROUND 1</div>
+    </div>
+    <div class="vside right">
+      <div class="vtop"><span class="vpips" id="vpipsR"></span><span class="vname" id="vnameR">FOE</span></div>
+      <div class="vbar"><i id="vhpR"></i></div>
+      <div class="vsg"><i id="vsgR"></i></div>
+    </div>
+  </div>
+
   <div id="banner"></div>
   <div id="toast"></div>
 
@@ -104,7 +122,63 @@
       <p>Threat rises the further you travel from the central plaza — level 1 near the middle, level 4 at the edges. Six marked arenas hold a level 5 <b>Colossus</b>. Enemy tiers each have their own trick: swarms, ranged bolts, front-facing shields that must be flanked, blink-stalkers that dodge — and the boss.</p>
     </div>
 
-    <button id="playbtn">DEPLOY SQUAD</button>
+    <div class="mainbtns">
+      <button id="playbtn">DEPLOY SQUAD</button>
+      <button id="versusbtn">VERSUS MODE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= VERSUS SETUP ======================= -->
+<div id="vsetup" class="hidden">
+  <div class="sheet">
+    <header>
+      <h1 class="vh1">VERSUS</h1>
+      <p class="sub">Side-on, best of three. Stick up to jump, stick down to guard.</p>
+    </header>
+
+    <div class="vsgrid">
+      <div class="vscol">
+        <h3>YOUR FIGHTER</h3>
+        <div class="picker" id="pickyou"></div>
+      </div>
+
+      <div class="vsstage">
+        <div class="vsslot">
+          <canvas id="prevyou"></canvas>
+          <span class="vslabel" id="prevyouname"></span>
+        </div>
+        <div class="vsvs">VS</div>
+        <div class="vsslot">
+          <canvas id="prevfoe"></canvas>
+          <span class="vslabel" id="prevfoename"></span>
+        </div>
+      </div>
+
+      <div class="vscol">
+        <h3>OPPONENT</h3>
+        <div class="picker" id="pickfoe"></div>
+        <h3>DIFFICULTY</h3>
+        <div class="picker diffrow" id="pickdiff"></div>
+        <p class="difftag" id="difftag"></p>
+      </div>
+    </div>
+
+    <div class="mainbtns">
+      <button id="fightbtn">FIGHT</button>
+      <button id="vsbackbtn" class="ghost">BACK</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= VERSUS RESULT ======================= -->
+<div id="vresult" class="hidden">
+  <div class="panel">
+    <h2 id="vresulttitle">VICTORY</h2>
+    <p id="vresultsub"></p>
+    <button id="rematchbtn">REMATCH</button>
+    <button id="vschangebtn">CHANGE FIGHTER</button>
+    <button id="vsexitbtn">MAIN MENU</button>
   </div>
 </div>
 
@@ -144,6 +218,8 @@
 <script src="src/heroes.js"></script>
 <script src="src/enemies.js"></script>
 <script src="src/render.js"></script>
+<script src="src/sideview.js"></script>
+<script src="src/versus.js"></script>
 <script src="src/hud.js"></script>
 <script src="src/game.js"></script>
 </body>
