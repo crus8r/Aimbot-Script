@@ -154,6 +154,19 @@
     return best;
   };
 
+  /* three.js is 608KB and is only ever touched by the Versus fighters, so it
+     is fetched the moment the player heads that way rather than on boot.
+     A script TAG, not fetch: tags work from file://, fetch does not. Failure
+     needs no handler — sideview falls back to the canvas renderer. */
+  SH.loadThree = function () {
+    if (SH.loadThree.started || window.THREE) return;
+    SH.loadThree.started = true;
+    var s = document.createElement('script');
+    s.src = 'vendor/three.min.js';
+    s.async = true;
+    document.head.appendChild(s);
+  };
+
   U.formatNum = function (n) {
     n = Math.round(n);
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';

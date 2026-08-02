@@ -214,6 +214,13 @@ Plain `<script>` tags in dependency order, everything under a single `SH`
 namespace — no bundler, no build step. Performance is adaptive: the spawn cap
 lowers itself if the frame rate drops.
 
+three.js is the one thing not loaded up front. It is 608KB and nothing outside
+Versus touches it, so it is injected as a script tag the moment the player
+opens the fighter select — which keeps the campaign's first load at 418KB
+instead of just over 1MB. The side view falls back to the canvas renderer for
+any frame that arrives before the library does, so the transition is invisible,
+and the service worker precaches it, so Versus still works offline.
+
 ## How the 3D works
 
 Versus needed more presence than flat vector art could give, so it renders

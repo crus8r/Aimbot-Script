@@ -722,9 +722,13 @@
 
   function use3D() {
     if (!tried3D) {
+      /* three.js may still be in flight — draw with the canvas renderer this
+         frame and try again on the next. Latching here would strand the whole
+         session on the fallback just for arriving early. */
+      if (!SH.f3 || !SH.f3.available()) return false;
       tried3D = true;
       var c = document.getElementById('game3d');
-      has3D = !!(SH.f3 && c && SH.f3.init(c));
+      has3D = !!(c && SH.f3.init(c));
     }
     return has3D;
   }

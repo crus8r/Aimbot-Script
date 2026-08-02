@@ -33,8 +33,24 @@
 
   A.resume = function () {
     if (!A.ready) A.init();
-    if (A.ctx && A.ctx.state === 'suspended') A.ctx.resume();
+    rearm();
   };
+
+  /* Nudges an existing context; never creates one, so A.init stays
+     gesture-driven. WebKit has a fourth state nothing else has —
+     'interrupted', entered on a call, Siri, or the screen locking. Without
+     this the game goes permanently mute after the first interruption,
+     because a suspended-only check never fires again. 'closed' is
+     unrecoverable, so don't churn on it. */
+  function rearm() {
+    var c = A.ctx;
+    if (!c || typeof c.resume !== 'function') return;
+    if (c.state === 'running' || c.state === 'closed') return;
+    try {
+      var p = c.resume();
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+    } catch (err) {}
+  }
 
   A.setEnabled = function (on) {
     A.enabled = on;
@@ -133,4 +149,13 @@
     var fn = LIB[name];
     if (fn) fn();
   };
+
+  /* Bound once at load, outside A.init, so the retry paths in init can't
+     stack duplicates. rearm() only ever nudges a context that already
+     exists, so none of these can start audio outside a user gesture. */
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) rearm();
+  });
+  window.addEventListener('pageshow', rearm);
+  window.addEventListener('focus', rearm);
 })();

@@ -59,7 +59,7 @@
     el.prevFoe = $('prevfoe');
 
     mmCtx = el.minimap.getContext('2d');
-    el.minimap.width = 132; el.minimap.height = 99;
+    sizeMinimap();
 
     buildRoster();
     buildCards();
@@ -68,17 +68,42 @@
   };
 
   /* ------------------------------------------------------------ roster */
+  var chipCanvases = [];
+
+  /* Chip portraits are vector (drawPortrait scales by size/64), so allocate
+     the canvas at real device pixels and draw at that same size — sizing the
+     store alone would leave a small portrait in the corner of a big canvas. */
+  function sizeChips() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    for (var i = 0; i < chipCanvases.length; i++) {
+      var c = chipCanvases[i];
+      var css = c.el.getBoundingClientRect().width || 50;
+      var px = Math.max(48, Math.round(css * dpr));
+      if (c.cv.width === px) continue;
+      c.cv.width = c.cv.height = px;
+      SH.render.drawPortrait(c.cv.getContext('2d'), c.id, px);
+    }
+  }
+
+  /* Versus busts: follow the box up on dense screens, never below the
+     authored 72 (which would make them worse on desktop). */
+  function facePx(cv) {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var px = Math.max(72, Math.round((cv.getBoundingClientRect().width || 72) * dpr));
+    if (cv.width !== px) cv.width = cv.height = px;
+  }
+
   function buildRoster() {
     el.roster.innerHTML = '';
     chips = [];
+    chipCanvases = [];
     SH.KITS.forEach(function (kit, i) {
       var d = document.createElement('div');
       d.className = 'chip';
       d.style.setProperty('--accent', kit.colors.accent);
       var cv = document.createElement('canvas');
-      cv.width = 56; cv.height = 56;
-      SH.render.drawPortrait(cv.getContext('2d'), kit.id, 56);
       d.appendChild(cv);
+      chipCanvases.push({ el: d, cv: cv, id: kit.id });
       var bars = document.createElement('div');
       bars.className = 'chipbars';
       bars.innerHTML = '<div class="chiphp"><i></i></div><div class="chipsg"><i></i></div>';
@@ -99,6 +124,7 @@
       el.roster.appendChild(d);
       chips.push({ el: d, hp: bars.children[0].firstChild, sg: bars.children[1].firstChild, state: st });
     });
+    sizeChips();
   }
 
   /* -------------------------------------------------------- title cards */
@@ -159,7 +185,10 @@
       el.menu.classList.add('inpause');
       el.pause.classList.add('hidden');
     });
-    $('btnpause').addEventListener('pointerdown', function (ev) {
+    /* click, not pointerdown: it requires press and release on the same
+       element, so a finger sliding across the corner mid-fight can't pause,
+       and sliding off cancels */
+    $('btnpause').addEventListener('click', function (ev) {
       ev.preventDefault(); ev.stopPropagation();
       SH.game.togglePause();
     });
@@ -310,9 +339,30 @@
     if (game.opts.showFps) el.fps.textContent = Math.round(game.fps) + ' FPS · ' + SH.ents.enemies.length + 'E ' + SH.ents.particles.length + 'P';
   };
 
+  /* The minimap is 132x99 CSS px on desktop but 86x64 on a phone, and was
+     drawn at a fixed 132x99 backing store — upscaled then squashed. Size it
+     from what CSS actually gives us, times the device pixel ratio. */
+  function sizeMinimap() {
+    var r = el.minimap.getBoundingClientRect();
+    /* 0x0 while hidden — in Versus (#hud.versus #minimap is display:none) or
+       before the HUD is shown. A zero-wide store would silently kill the map,
+       so leave it alone and let drawMinimap retry. */
+    if (!r.width || !r.height) return;
+    mmScale = Math.min(window.devicePixelRatio || 1, 2);
+    el.minimap.width = Math.round(r.width * mmScale);
+    el.minimap.height = Math.round(r.height * mmScale);
+    mmSized = true;
+  }
+
+  var mmScale = 1, mmSized = false;
+
   function drawMinimap(game, h) {
     var W = SH.world, g = mmCtx;
-    var w = el.minimap.width, hh = el.minimap.height;
+    if (!mmSized) { sizeMinimap(); if (!mmSized) return; }
+    /* draw in CSS pixels so every marker radius below keeps its on-screen
+       size regardless of the backing store */
+    g.setTransform(mmScale, 0, 0, mmScale, 0, 0);
+    var w = el.minimap.width / mmScale, hh = el.minimap.height / mmScale;
     var sx = w / W.w, sy = hh / W.h;
     g.clearRect(0, 0, w, hh);
     g.fillStyle = 'rgba(6,10,18,0.72)';
@@ -487,6 +537,9 @@
   }
 
   H.showVersusSetup = function (on) {
+    /* the one choke point every route into Versus passes through: the menu
+       button, the ?mode=versus deep link, and CHANGE FIGHTER */
+    if (on) SH.loadThree();
     el.vsetup.classList.toggle('hidden', !on);
     if (on) {
       sizePreview(el.prevYou);
@@ -496,11 +549,36 @@
   };
 
   function sizePreview(cv) {
+    if (!cv) return;
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
     var r = cv.getBoundingClientRect();
-    cv.width = Math.max(60, r.width * dpr);
-    cv.height = Math.max(80, r.height * dpr);
+    var w = Math.max(60, Math.round(r.width * dpr));
+    var h = Math.max(80, Math.round(r.height * dpr));
+    /* assigning .width clears the backing store, and mobile fires resize on
+       every URL-bar nudge — so only touch it when it actually changed */
+    if (cv.width === w && cv.height === h) return;
+    cv.width = w;
+    cv.height = h;
   }
+
+  /* The fighter-select slots are fluid (one column below 780px, three above),
+     but were only ever measured once on open — so rotating the phone here,
+     the most likely moment to rotate, left both previews stretched. */
+  H.resizePreviews = function () {
+    if (!el.vsetup || el.vsetup.classList.contains('hidden')) return;
+    sizePreview(el.prevYou);
+    sizePreview(el.prevFoe);
+  };
+
+  /* Called from R.resize, which also runs on the delayed orientationchange
+     pass. Setting canvas.width clears the bitmap, so anything that isn't
+     redrawn every frame has to be repainted here. */
+  H.resizeCanvases = function () {
+    if (!el.minimap) return;
+    H.resizePreviews();
+    sizeMinimap();
+    sizeChips();
+  };
 
   function tickPreviews(dt) {
     if (!el.vsetup || el.vsetup.classList.contains('hidden')) return;
@@ -525,12 +603,14 @@
     if (on) {
       var vs = SH.versus;
       if (vs.you) {
-        SH.render.drawPortrait(el.faceL.getContext('2d'), vs.you.kitId, 72);
+        facePx(el.faceL);
+        SH.render.drawPortrait(el.faceL.getContext('2d'), vs.you.kitId, el.faceL.width);
         el.faceL.style.borderColor = vs.you.kit.colors.accent;
       }
       if (vs.foe) {
         var fid = vs.foe.isHero ? vs.foe.kitId : 'deathbringer';
-        SH.render.drawPortrait(el.faceR.getContext('2d'), fid, 72);
+        facePx(el.faceR);
+        SH.render.drawPortrait(el.faceR.getContext('2d'), fid, el.faceR.width);
         el.faceR.style.borderColor = vs.foe.accent || '#fff';
       }
       el.vL.name.textContent = SH.versus.you ? SH.versus.you.kit.name : '';

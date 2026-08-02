@@ -70,6 +70,10 @@
     sizeCanvas(c);
     for (var i = 0; i < R.layers.length; i++) sizeCanvas(R.layers[i]);
     R.cam.s = U.clamp(Math.min(R.vw, R.vh) / 400, 0.8, 1.7);
+    /* hooked here rather than on a private resize listener so it inherits the
+       delayed orientationchange pass above — iOS reports a stale rect on the
+       synchronous event */
+    if (SH.hud && SH.hud.resizeCanvases) SH.hud.resizeCanvases();
   };
 
   R.shake = function (amt) {
