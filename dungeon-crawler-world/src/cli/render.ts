@@ -1,5 +1,8 @@
 import type { GameState, Item, MapNode } from "../core/types.ts";
-import { SLOT_LABEL, SLOTS } from "../core/types.ts";
+import {
+  junkHaul, packView, PACK_FILTERS, PACK_SORTS,
+  type PackFilter, type PackSort,
+} from "../sim/pack.ts";
 import type { RenderedLine } from "../voice/narrator.ts";
 import { derive, carryCapacity, carriedWeight } from "../sim/character.ts";
 import { currentNode } from "../sim/map.ts";
@@ -363,121 +366,73 @@ export function sheet(state: GameState): string {
 const pad = (n: number) => String(n).padStart(2);
 const sign = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
 
-export type InvSort = "relevance" | "value" | "weight" | "rarity" | "name" | "recent";
-
-export function inventoryView(state: GameState, filter = "all", sort: InvSort = "relevance"): string {
+/**
+ * The terminal's inventory.
+ *
+ * Every decision here — which slice, what order, whether a thing beats what you
+ * are wearing — comes from `src/sim/pack.ts`, because those are decisions about
+ * the game and not about a terminal. This function only decides what colour
+ * they are. That split is why the browser client now has the same features
+ * instead of a flat list.
+ */
+export function inventoryView(state: GameState, filter = "all", sort: PackSort = "relevance"): string {
+  const view = packView(state, filter as PackFilter, sort);
   const out: string[] = [rule("inventory")];
-  const worn = SLOTS.map((slot) => {
-    const item = state.inventory.find((i) => i.equipped && i.slot === slot);
-    return `    ${dim(SLOT_LABEL[slot].padEnd(9))} ${item ? RARITY_COLOUR[item.rarity]!(item.name) : dim("—")}`;
-  });
+
   out.push(dim("  worn"));
-  out.push(...worn);
+  for (const w of view.worn) {
+    out.push(`    ${dim(w.label.padEnd(9))} ${w.item ? RARITY_COLOUR[w.item.rarity]!(w.item.name) : dim("\u2014")}`);
+  }
   out.push("");
-  // Numbers are the crawler-facing handle: `use 4`, `equip 11`, `lock 2`.
-  // After four floors of looting, nobody should be typing full item names.
-  const numbered = state.inventory.map((item, n) => ({ item, n: n + 1 }));
-  const matching = numbered.filter(({ item }) => !item.equipped && matchesFilter(item, filter));
-  const ordered = sortItems(state, matching, sort);
 
   out.push(
-    dim(`  carried — ${matching.length} of ${numbered.filter((x) => !x.item.equipped).length} shown`) +
-      dim(`  [filter: ${filter} · sort: ${sort}]`),
+    dim(`  carried \u2014 ${view.shownCount} of ${view.carriedCount} shown`) +
+      dim(`  [filter: ${view.filter} \u00b7 sort: ${view.sort}]`),
   );
-  if (!ordered.length) out.push(dim("    nothing here matches"));
-  for (const { item: i, n } of ordered) {
+  if (!view.rows.length) out.push(dim("    nothing here matches"));
+  for (const { item: i, n, comparison } of view.rows) {
     const colour = RARITY_COLOUR[i.rarity] ?? bone;
-    const better = comparison(state, i);
+    const verdict =
+      comparison.verdict === "better" || comparison.verdict === "empty"
+        ? jade(comparison.label)
+        : comparison.verdict === "none"
+          ? ""
+          : dim(comparison.label);
     out.push(
-      `  ${dim(String(n).padStart(3) + ")")} ${colour(i.name)}${i.qty > 1 ? amber(` ×${i.qty}`) : ""}` +
-        (i.locked ? amber(" 🔒") : "") +
-        dim(`  ${i.rarity} ${i.kind} · ${i.weight}kg · ${i.value}g`) +
-        (better ? "  " + better : ""),
+      `  ${dim(String(n).padStart(3) + ")")} ${colour(i.name)}${i.qty > 1 ? amber(` \u00d7${i.qty}`) : ""}` +
+        (i.locked ? amber(" \ud83d\udd12") : "") +
+        dim(`  ${i.rarity} ${i.kind} \u00b7 ${i.weight}kg \u00b7 ${i.value}g`) +
+        (verdict ? "  " + verdict : ""),
     );
     out.push(dim(wrap(i.desc, 8)));
   }
+
   if (state.boxes.length) {
     out.push("");
     out.push(dim("  unopened boxes ") + dim("(they open in a safe room, all at once, in tier order)"));
     for (const b of state.boxes) {
-      out.push(`    ${amber(b.tier)} ${bone(BOX_BY_ID[b.type]?.name ?? b.type)} ${dim(`— ${b.why}`)}`);
+      out.push(`    ${amber(b.tier)} ${bone(BOX_BY_ID[b.type]?.name ?? b.type)} ${dim(`\u2014 ${b.why}`)}`);
     }
   }
+
   out.push("");
-  out.push(dim(`  ${carriedWeight(state)} kg carried · lift ceiling ${carryCapacity(state)} kg`));
-  out.push(dim("  inv <weapons|armour|consumables|materials|junk|new|all> · sort <value|weight|rarity|name|recent> · equip best · drop junk · lock <n>"));
+  // The load bar, because a number against a ceiling is arithmetic and a bar is
+  // a glance. Over 90% is the point at which the next good thing does not fit.
+  const width = 24;
+  const full = Math.min(width, Math.round(view.load * width));
+  const barColour = view.load > 0.9 ? blood : view.load > 0.7 ? amber : dim;
+  out.push(
+    `  ${barColour("\u2588".repeat(full))}${dim("\u2591".repeat(Math.max(0, width - full)))}  ` +
+      dim(`${view.kg} kg of ${view.ceiling} kg`),
+  );
+  const junk = junkHaul(state);
+  if (junk.items.length) {
+    out.push(dim(`  drop junk would put down ${junk.items.length} things and ${junk.kg} kg; selling them is about ${junk.gold}g`));
+  }
+  out.push(
+    dim(`  inv <${PACK_FILTERS.map((f) => f.id).join("|")}> \u00b7 sort <${PACK_SORTS.map((x) => x.id).join("|")}> \u00b7 equip best \u00b7 drop junk \u00b7 lock <n>`),
+  );
   return out.join("\n");
-}
-
-function matchesFilter(item: Item, filter: string): boolean {
-  switch (filter) {
-    case "weapons":
-      return item.kind === "weapon" || item.kind === "explosive";
-    case "armour":
-    case "armor":
-      return item.kind === "armor" || item.kind === "jewelry";
-    case "consumables":
-      return item.kind === "potion" || item.kind === "food" || !!item.use;
-    case "materials":
-      return item.kind === "material" || item.tags.includes("craft");
-    case "junk":
-      return item.rarity === "junk" && !item.use;
-    case "new":
-      return item.rarity !== "junk";
-    default:
-      return true;
-  }
-}
-
-function sortItems(
-  state: GameState,
-  rows: { item: Item; n: number }[],
-  sort: InvSort,
-): { item: Item; n: number }[] {
-  const rarityRank = (i: Item) =>
-    ["junk", "common", "uncommon", "rare", "epic", "legendary", "celestial"].indexOf(i.rarity);
-  const copy = rows.slice();
-  switch (sort) {
-    case "value":
-      return copy.sort((a, b) => b.item.value - a.item.value);
-    case "weight":
-      return copy.sort((a, b) => b.item.weight - a.item.weight);
-    case "rarity":
-      return copy.sort((a, b) => rarityRank(b.item) - rarityRank(a.item));
-    case "name":
-      return copy.sort((a, b) => a.item.name.localeCompare(b.item.name));
-    case "recent":
-      return copy.reverse();
-    default: {
-      // Relevance: things you could wear right now, then healing when hurt,
-      // then rarity. Built for a bag with two hundred things in it.
-      const hurt = state.crawler.hp / Math.max(1, state.crawler.hpMax) < 0.7;
-      const score = (i: Item) => {
-        let v = rarityRank(i) * 10;
-        if (i.slot && !state.inventory.some((x) => x.equipped && x.slot === i.slot)) v += 60;
-        if (hurt && i.use?.effect === "heal") v += 80;
-        if (i.use) v += 20;
-        if (i.rarity === "junk") v -= 40;
-        return v;
-      };
-      return copy.sort((a, b) => score(b.item) - score(a.item));
-    }
-  }
-}
-
-/** A one-glance answer to "is this better than what I have on?". */
-function comparison(state: GameState, item: Item): string {
-  if (!item.slot) return "";
-  const worn = state.inventory.find((i) => i.equipped && i.slot === item.slot);
-  if (!worn) return jade("empty slot");
-  const score = (i: Item) => {
-    const mods = (i.mods ?? []).reduce((n, m) => n + (typeof (m as { v?: number }).v === "number" ? (m as { v: number }).v : 0), 0);
-    const dice = i.damage ? (parseInt(i.damage.split("d")[0] || "1", 10) * (parseInt(i.damage.split("d")[1] || "4", 10) + 1)) / 2 : 0;
-    return mods + dice * 1.6;
-  };
-  const delta = score(item) - score(worn);
-  if (Math.abs(delta) < 0.5) return dim(`≈ ${worn.name}`);
-  return delta > 0 ? jade(`▲ better than ${worn.name}`) : dim(`▼ worse than ${worn.name}`);
 }
 
 /** Skills, with the minted ones called out — they are the record of what this

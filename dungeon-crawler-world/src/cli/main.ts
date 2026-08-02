@@ -6,6 +6,7 @@ import type { GameState, StatKey } from "../core/types.ts";
 import { ProceduralNarrator } from "../voice/narrator.ts";
 import { LlmNarrator } from "../voice/llm.ts";
 import { LlmProposer, NoProposer, type Proposer } from "../voice/proposer.ts";
+import { PACK_SORTS, type PackSort } from "../sim/pack.ts";
 import { Rng } from "../core/rng.ts";
 import { RACES, CLASSES } from "../data/paths.ts";
 import { SPONSOR_BY_ID } from "../data/sponsors.ts";
@@ -30,7 +31,6 @@ import {
   skillsView,
   spellsView,
   wrap,
-  type InvSort,
 } from "./render.ts";
 
 /**
@@ -265,7 +265,7 @@ async function runIntake(): Promise<Partial<Intake>> {
 
 async function loop(game: Game): Promise<void> {
   let invFilter = "all";
-  let invSort: InvSort = "relevance";
+  let invSort: PackSort = "relevance";
 
   for (;;) {
     const s = game.state;
@@ -318,7 +318,7 @@ async function loop(game: Game): Promise<void> {
       continue;
     }
     if (v === "sort") {
-      const legal: InvSort[] = ["relevance", "value", "weight", "rarity", "name", "recent"];
+      const legal = PACK_SORTS.map((x) => x.id);
       const picked = legal.find((x) => x.startsWith(arg.toLowerCase()));
       if (picked) invSort = picked;
       say(inventoryView(s, invFilter, invSort));
