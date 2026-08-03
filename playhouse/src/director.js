@@ -148,6 +148,34 @@ export function direct(script, opts = {}) {
       }
 
       if (beat.type === 'action' || beat.type === 'cue') {
+        // The parser marked this line as camera language ("A shot of it
+        // rolling to the ground") — cover it as an insert, not as blocking.
+        // NOTE: `sinceWide` deliberately keeps climbing; an insert is not
+        // coverage of the room, so the director re-establishes soon after.
+        if (beat.shotHint === 'INSERT' && beat.insert?.subject) {
+          const onProp = beat.insert.subjectKind === 'prop';
+          shots.push({
+            id: beat.id, scene: scene.index, beat, start: clock, duration: dur,
+            // `size` stays on the ladder (ECU..EWS) so director notes can
+            // still walk it; `insert` + `subjectProp` carry the real intent.
+            size: 'CU',
+            subject: onProp ? null : beat.insert.subject,
+            secondary: null,
+            subjectProp: onProp ? beat.insert.subject : null,
+            move: beat.insert.motion ? 'push' : 'static',
+            side,
+            height: onProp ? 'low' : 'eye',
+            insert: onProp,
+            action: true,
+          });
+          clock += dur;
+          sinceWide += 1;
+          lastSize = 'CU';
+          if (!onProp) lastSubject = beat.insert.subject;
+          beatIndex++;
+          continue;
+        }
+
         const hasMagic = (beat.cues || []).length > 0 || beat.kind === 'ability';
         const actor = beat.actor || (beat.cues && beat.cues[0]?.actor) || lastSubject || principals[0];
         shots.push({
@@ -267,6 +295,21 @@ function forwardOf(object) {
   return _fwd.set(Math.sin(object.rotation.y), 0, Math.cos(object.rotation.y));
 }
 
+/**
+ * Look a prop up on the built stage by registry name. Shared by the insert
+ * solver here and production's cue targeting / hand attachment, so the lookup
+ * rule lives in exactly one place.
+ * @param {THREE.Group|null} stage from buildStage
+ * @param {string|null} name PROPS registry name, e.g. 'apple'
+ * @returns {THREE.Object3D|null}
+ */
+export function findStageProp(stage, name) {
+  if (!stage || !name) return null;
+  const key = String(name).toLowerCase();
+  return (stage.userData.props || [])
+    .find((p) => p.userData.propName?.toLowerCase() === key) || null;
+}
+
 function aimPoint(character, aim) {
   const ud = character.userData;
   const base = character.position;
@@ -292,6 +335,37 @@ export function solveShot(shot, cast, stage, t = 0, elapsed = 0) {
   const subject = shot.subject ? cast.get(shot.subject) : null;
   const secondary = shot.secondary ? cast.get(shot.secondary) : null;
   const bounds = stage.userData.bounds;
+
+  // --- Insert: a close-up on a thing, not a person -------------------------
+  // Aims at an explicit world-space point (shot.worldTarget) or at the named
+  // prop wherever it currently is — including riding in a character's hand.
+  if (shot.insert) {
+    let centre = shot.worldTarget ? shot.worldTarget.clone() : null;
+    if (!centre) {
+      const prop = findStageProp(stage, shot.subjectProp);
+      if (prop) {
+        centre = prop.getWorldPosition(new THREE.Vector3());
+        centre.y += (prop.userData.size?.[1] ?? 0.3) * 0.55;
+      }
+    }
+    if (centre) {
+      // Tighter than the equivalent human framing: props are small.
+      const dist = Math.max(0.45, spec.dist * 0.55);
+      const off = new THREE.Vector3(0.7 * (shot.side || 1), 0.55, 0.9).normalize();
+      const position = centre.clone().addScaledVector(off, dist);
+      if (shot.move === 'push') {
+        position.addScaledVector(centre.clone().sub(position).normalize(), t * dist * 0.25);
+      }
+      return { position, lookAt: centre, fov: 46 };
+    }
+    // Named prop absent from the set: read as "looking at the ground" rather
+    // than an unmotivated mid-room master.
+    return {
+      position: new THREE.Vector3(1.1 * (shot.side || 1), 0.9, 1.5),
+      lookAt: new THREE.Vector3(0, 0.15, -0.2),
+      fov: 40,
+    };
+  }
 
   // Fall back to a general stage view when there's nobody to point at.
   if (!subject) {
@@ -415,10 +489,11 @@ export function shotAt(shots, time) {
 /** Human-readable slate, shown in the UI. */
 export function describeShot(shot) {
   if (!shot) return '';
-  const bits = [shot.size];
+  const bits = [shot.insert ? 'INSERT' : shot.size];
   if (shot.ots) bits.push('OTS');
-  if (shot.height !== 'eye') bits.push(shot.height);
+  if (shot.height !== 'eye' && !shot.insert) bits.push(shot.height);
   if (shot.move !== 'static') bits.push(shot.move);
   if (shot.subject) bits.push(`— ${shot.subject}`);
+  else if (shot.insert && shot.subjectProp) bits.push(`— ${shot.subjectProp}`);
   return bits.join(' · ');
 }

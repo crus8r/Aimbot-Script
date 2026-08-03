@@ -12,10 +12,12 @@ import { castCharacter, createCharacter, headPosition } from './human.js';
 import { buildStage, propsForScene } from './stage.js';
 import { Animator, Mover, poseForBeat } from './anim.js';
 import { VFXSystem, ABILITY_DEFAULTS } from './vfx.js';
-import { direct, solveShot, shotAt, describeShot } from './director.js';
+import { direct, solveShot, shotAt, describeShot, findStageProp } from './director.js';
 import { disposeObject } from './engine.js';
 import { MAGIC_COLOURS } from './human.js';
 import { loadAvatar, Retargeter, measureRestPose } from './avatar.js';
+import { NoteStack, applyNotes } from './notes.js';
+import { createProp, attachToHand, detachFromHand, propsMentioned, PROP_NAMES } from './props.js';
 
 const _v = new THREE.Vector3();
 
@@ -79,6 +81,26 @@ export class Production {
 
     this.onSceneChange = null;
     this.onBeatChange = null;
+
+    // Director notes: the UI owns the stack's contents; playback overlays it.
+    this.notes = new NoteStack();
+    this.notesRev = 0;        // bumped via noteStackChanged() on every edit
+    this._noteCache = null;   // { src: shot, rev, out } — one overlay per shot
+    this._propRev = -1;       // last rev the hands sync ran against
+    this._propT = null;       // last time the hands sync ran at
+    this._wildcardId = 0;     // "empty hands" note already applied
+
+    this._held = new Set();   // prop groups currently riding a hand
+  }
+
+  /**
+   * Tell playback the note stack changed (add/remove/toggle/undo/redo/replace)
+   * so the per-shot overlay cache and the prop-hands sync recompute.
+   */
+  noteStackChanged() {
+    this.notesRev++;
+    this._noteCache = null;
+    this._propT = null;
   }
 
   // -------------------------------------------------------------------------
@@ -120,6 +142,9 @@ export class Production {
       this.movers.set(record.name, new Mover(character, this.animators.get(record.name)));
     });
 
+    // Props go home before their stages are disposed of.
+    this.#dropAllHeld();
+
     // Stage geometry depends on the script, so invalidate the cache.
     for (const stage of this.stageCache.values()) {
       if (stage !== this.stage) disposeObject(stage);
@@ -143,6 +168,11 @@ export class Production {
   #destroyCharacter(name) {
     const c = this.cast.get(name);
     if (!c) return;
+    // A held prop is parented under the hand bone — rescue it before the
+    // whole group is disposed, or the prop's geometry dies with the body.
+    for (const prop of [...this._held]) {
+      if (prop.userData.heldBy === c) this.#releaseHome(prop);
+    }
     this.engine.scene.remove(c);
     disposeObject(c);
     this.cast.delete(name);
@@ -255,6 +285,10 @@ export class Production {
     const scene = this.script.scenes[index];
     if (!scene) return;
 
+    // Hands empty at the door: the cast persists across scenes, so a prop
+    // still parented to a hand would ride into a set it doesn't belong to.
+    this.#dropAllHeld();
+
     if (this.stage) this.engine.scene.remove(this.stage);
 
     let stage = this.stageCache.get(index);
@@ -341,8 +375,13 @@ export class Production {
   seek(time) {
     this.time = THREE.MathUtils.clamp(time, 0, Math.max(0.001, this.duration));
     const shot = shotAt(this.plan.shots, this.time);
+    // Crossing into another beat resets hands (the staging that filled them
+    // will re-fire); scrubbing within the current beat keeps the prop held.
+    if (shot && shot.beat !== this.currentBeat) this.#dropAllHeld();
     if (shot) this.#ensureScene(shot.scene);
     this.currentShot = null; // force a fresh camera snap
+    this._noteCache = null;
+    this._propT = null;
     this.firedCues.clear();
     this.vfx.clear();
   }
@@ -371,15 +410,19 @@ export class Production {
 
     if (shot.scene !== this.sceneIndex) this.#ensureScene(shot.scene);
 
+    // Director notes season the pristine shot; cut detection stays on the raw
+    // shot object so toggling a note mid-shot never re-triggers a cut.
+    const staged = this.#notedShot(shot);
+
     const isCut = shot !== this.currentShot;
     if (isCut) {
       this.currentShot = shot;
-      this.slate = describeShot(shot);
       this.cutFlash = 1;
-      this.#onShotStart(shot);
+      this.#onShotStart(staged);
     }
+    this.slate = describeShot(staged);
 
-    const t = THREE.MathUtils.clamp((this.time - shot.start) / Math.max(0.001, shot.duration), 0, 1);
+    const t = THREE.MathUtils.clamp((this.time - staged.start) / Math.max(0.001, staged.duration), 0, 1);
 
     // --- Beat state -------------------------------------------------------
     if (shot.beat !== this.currentBeat) {
@@ -387,6 +430,7 @@ export class Production {
       this.#onBeatStart(shot.beat, shot);
     }
     this.caption = this.#captionFor(shot);
+    this.#syncNoteProps();
 
     // --- Performers -------------------------------------------------------
     for (const [name, animator] of this.animators) {
@@ -409,7 +453,7 @@ export class Production {
     }
 
     // --- Camera -----------------------------------------------------------
-    const solved = solveShot(shot, this.cast, this.stage, t, elapsed);
+    const solved = solveShot(staged, this.cast, this.stage, t, elapsed);
     if (isCut) {
       this.camPos.copy(solved.position);
       this.camLook.copy(solved.lookAt);
@@ -498,6 +542,13 @@ export class Production {
       }
     }
 
+    // Staging directions lifted from the prose: arcs, grips, releases.
+    for (const entry of beat.staging || []) {
+      if (entry.kind === 'orbit') this.#stageOrbit(entry);
+      else if (entry.kind === 'hold') this.#stageHold(entry);
+      else if (entry.kind === 'release') this.#stageRelease(entry);
+    }
+
     // Fire any magic cues attached to this beat.
     const cues = beat.cues || (beat.kind === 'ability' ? [beat] : []);
     for (const cue of cues) {
@@ -538,10 +589,11 @@ export class Production {
       if (targetChar) {
         target = headPosition(targetChar);
       } else {
-        const prop = (this.stage?.userData.props || [])
-          .find((p) => p.userData.propName?.toLowerCase() === cue.target.toLowerCase());
+        const prop = findStageProp(this.stage, cue.target);
         if (prop) {
-          target = prop.position.clone().setY(prop.position.y + 0.4);
+          // World position, not local — the prop may be riding in a hand.
+          target = prop.getWorldPosition(new THREE.Vector3());
+          target.y += 0.4;
           targetObject = prop;
         }
       }
@@ -558,6 +610,247 @@ export class Production {
     // A clock in the room should answer a spell — small, but it sells a world.
     if (this.stage?.userData.clock && (ability === 'teleport' || ability === 'shadow')) {
       this.stage.userData.clock.userData.chime?.();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Staging: arcs and hands
+  // -------------------------------------------------------------------------
+
+  /** "MARA walks around JON" — a slow multi-waypoint arc, not a beeline. */
+  #stageOrbit(entry) {
+    const mover = this.movers.get(entry.actor);
+    const actor = this.cast.get(entry.actor);
+    if (!mover || !actor?.parent) return;
+
+    let centre = null;
+    if (entry.targetKind === 'prop') {
+      const prop = findStageProp(this.stage, entry.target);
+      if (prop) centre = prop.getWorldPosition(new THREE.Vector3()).setY(0);
+    } else {
+      const other = this.cast.get(entry.target);
+      if (other?.parent) centre = other.position.clone().setY(0);
+    }
+    if (!centre) return;
+
+    const dx = actor.position.x - centre.x;
+    const dz = actor.position.z - centre.z;
+    const r = THREE.MathUtils.clamp(Math.hypot(dx, dz) || 1.2, 1.0, 2.2);
+    const a0 = Math.atan2(dx, dz);
+    // Sweep toward downstage first so the mover crosses in front of the lens.
+    const sign = dx >= 0 ? -1 : 1;
+    const points = [];
+    for (let k = 1; k <= 4; k++) {
+      const a = a0 + sign * Math.PI * 0.9 * (k / 4);
+      points.push(new THREE.Vector3(centre.x + Math.sin(a) * r, 0, centre.z + Math.cos(a) * r));
+    }
+    mover.followPath(points, null, 0.8);
+  }
+
+  /** "picks up the apple" — parent the named prop to the actor's hand. */
+  #stageHold(entry) {
+    if (!entry.prop) return; // objectWord-only: honest "no model", nothing to lift
+    const prop = this.#propForHand(entry.prop, true);
+    if (!prop) return;
+    if (this.#holdProp(prop, entry.actor, entry.hand || 'R')) {
+      const animator = this.animators.get(entry.actor);
+      animator?.setPose('reach');
+      animator?.gesture(0.5);
+    }
+  }
+
+  /** "sets it down" — back out of the hand, settled at the actor's feet. */
+  #stageRelease(entry) {
+    const prop = this.#heldPropNamed(entry.prop);
+    if (prop) this.#releaseProp(prop);
+  }
+
+  /**
+   * A prop instance to put in a hand: an unheld one from the set, the held
+   * one as a fallback, or — when the script/notes call for something the set
+   * doesn't have — a freshly built one.
+   */
+  #propForHand(name, create = false) {
+    const key = String(name).toLowerCase();
+    const all = (this.stage?.userData.props || [])
+      .filter((p) => p.userData.propName?.toLowerCase() === key);
+    let prop = all.find((p) => !p.userData.heldBy) || all[0] || null;
+    if (!prop && create && this.stage) {
+      prop = createProp(name);
+      if (prop) {
+        this.stage.add(prop);
+        this.stage.userData.props.push(prop);
+        if (prop.userData.update) this.stage.userData.animated.push(prop);
+      }
+    }
+    return prop;
+  }
+
+  #heldPropNamed(name) {
+    if (!name) return null;
+    const key = String(name).toLowerCase();
+    for (const p of this._held) {
+      if (p.userData.propName?.toLowerCase() === key) return p;
+    }
+    return null;
+  }
+
+  #holdProp(prop, actorName, hand = 'R') {
+    const character = this.cast.get(actorName);
+    if (!character || !prop) return false;
+    if (prop.userData.heldBy === character) return true; // idempotent re-fire
+    if (prop.userData.heldBy) detachFromHand(prop);
+    if (!prop.userData.home) {
+      // First lift: remember where it lives so seeks can put it back.
+      prop.userData.home = {
+        parent: prop.parent,
+        pos: prop.position.clone(),
+        rot: prop.rotation.clone(),
+        scale: prop.scale.clone(),
+      };
+    }
+    if (!attachToHand(character, prop, hand)) return false;
+    this._held.add(prop);
+    return true;
+  }
+
+  /** Let go and settle the prop on the floor at the holder's feet. */
+  #releaseProp(prop) {
+    if (!prop?.userData?.heldBy) return;
+    const holder = prop.userData.heldBy;
+    detachFromHand(prop);
+    this._held.delete(prop);
+    prop.userData.noteHeld = false;
+    const yaw = holder.rotation?.y || 0;
+    prop.position.set(
+      holder.position.x + Math.sin(yaw) * 0.45,
+      0,
+      holder.position.z + Math.cos(yaw) * 0.45,
+    );
+    prop.rotation.set(0, prop.rotation.y, 0);
+    if (prop.userData.home) prop.scale.copy(prop.userData.home.scale);
+  }
+
+  /** Put a held prop back exactly where the set dresser left it. */
+  #releaseHome(prop) {
+    if (!prop) return;
+    if (prop.userData.heldBy) detachFromHand(prop);
+    this._held.delete(prop);
+    prop.userData.noteHeld = false;
+    const home = prop.userData.home;
+    if (home?.parent) {
+      home.parent.add(prop);
+      prop.position.copy(home.pos);
+      prop.rotation.copy(home.rot);
+      prop.scale.copy(home.scale);
+    }
+  }
+
+  #dropAllHeld() {
+    for (const prop of [...this._held]) this.#releaseHome(prop);
+    this._held.clear();
+  }
+
+  // -------------------------------------------------------------------------
+  // Director notes
+  // -------------------------------------------------------------------------
+
+  /** Camera-note overlay for a shot, cached until the shot or the stack changes. */
+  #notedShot(shot) {
+    const stack = this.notes;
+    if (!stack || !stack.notes.length) return shot;
+    const c = this._noteCache;
+    if (c && c.src === shot && c.rev === this.notesRev) return c.out;
+    const active = stack.notesAt(this.time, this.plan.shots);
+    const out = applyNotes(shot, active);
+    this._noteCache = { src: shot, rev: this.notesRev, out };
+    return out;
+  }
+
+  /** Free note text -> a PROPS registry name, or null when we have no model. */
+  #resolveNoteProp(text) {
+    const t = String(text || '').toLowerCase().trim();
+    if (!t) return null;
+    if (PROP_NAMES.includes(t)) return t;
+    return propsMentioned(t)[0] || null;
+  }
+
+  /**
+   * Make hands match the prop notes in force at the current time. Notes
+   * persist "until changed", so this runs as reconciliation — cheap (throttled
+   * to ~4Hz and on stack edits), and reality-based rather than bookkept, so a
+   * recast or scene swap self-heals on the next pass.
+   */
+  #syncNoteProps() {
+    if (!this.stage || !this.plan) return;
+    const t = this.time;
+    const stale = this._propT === null || this.notesRev !== this._propRev
+      || t < this._propT || t - this._propT >= 0.25;
+    if (!stale) return;
+    this._propRev = this.notesRev;
+    this._propT = t;
+
+    const stack = this.notes;
+    const active = stack && stack.notes.length
+      ? stack.notesAt(t, this.plan.shots).filter((n) => n.directive.kind === 'prop')
+      : [];
+
+    let wildcard = null;
+    const wantHeld = new Map(); // prop name -> actor name
+    const wantFree = new Set(); // prop names that must leave hands
+    for (const n of active) {
+      const d = n.directive;
+      if (d.action === 'release' && !d.prop) { wildcard = n; continue; }
+      const name = this.#resolveNoteProp(d.prop);
+      if (!name) continue; // honest miss — the notes panel already said so
+      if (d.action === 'hold') {
+        const actor = (d.character && this.cast.has(d.character) ? d.character : null)
+          || this.currentShot?.subject
+          || this.currentBeat?.character
+          || [...this.cast.keys()][0];
+        if (actor && this.cast.get(actor)?.parent) {
+          wantHeld.set(name, actor);
+          wantFree.delete(name);
+        }
+      } else {
+        wantHeld.delete(name);
+        wantFree.add(name);
+      }
+    }
+
+    // "Drop everything" empties every hand once, staged holds included.
+    if (wildcard) {
+      if (this._wildcardId !== wildcard.id) {
+        this.#dropAllHeld();
+        this._wildcardId = wildcard.id;
+      }
+    } else {
+      this._wildcardId = 0;
+    }
+
+    // Note-held props the notes no longer command: let go.
+    for (const prop of [...this._held]) {
+      if (!prop.userData.noteHeld) continue;
+      const name = prop.userData.propName?.toLowerCase();
+      const wanted = name ? wantHeld.get(name) : null;
+      if (!wanted || this.cast.get(wanted) !== prop.userData.heldBy) {
+        this.#releaseProp(prop);
+      }
+    }
+    // Explicit releases countermand staged holds too ("put down the lamp").
+    for (const name of wantFree) {
+      const prop = this.#heldPropNamed(name);
+      if (prop) this.#releaseProp(prop);
+    }
+    for (const [name, actor] of wantHeld) {
+      const character = this.cast.get(actor);
+      const current = this.#heldPropNamed(name);
+      if (current && current.userData.heldBy === character) {
+        current.userData.noteHeld = true; // adopt a staged hold as noted
+        continue;
+      }
+      const prop = this.#propForHand(name, true);
+      if (prop && this.#holdProp(prop, actor, 'R')) prop.userData.noteHeld = true;
     }
   }
 

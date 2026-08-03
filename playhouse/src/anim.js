@@ -186,6 +186,7 @@ export class Animator {
     this.talking = 0;
     this.mouthOpen = 0;
     this.mouthTarget = 0;
+    this.externalMouth = false;
     this.lookTarget = null;
     this.lookWeight = 0;
     this.blinkTimer = 1 + Math.random() * 3;
@@ -222,6 +223,13 @@ export class Animator {
 
   /** 0..1 — drive from audio RMS for real lip sync, or leave to the talk layer. */
   setMouthOpen(v) { this.mouthTarget = THREE.MathUtils.clamp(v, 0, 1); }
+
+  /**
+   * While an external mouth source (a recording's RMS, TTS envelope) is live,
+   * it must OWN mouthTarget — otherwise the procedural talk layer floors the
+   * value with an uncorrelated envelope and the jaw never fully closes.
+   */
+  setExternalMouth(on) { this.externalMouth = !!on; }
 
   setTalking(on, intensity = 0.5) {
     this.talking = on ? Math.max(0.25, intensity) : 0;
@@ -307,7 +315,12 @@ export class Animator {
       // Syllabic envelope. Layered primes avoid an audible loop.
       const syl = (Math.sin(t * 11.0) * 0.5 + 0.5) * (Math.sin(t * 6.3) * 0.5 + 0.5);
       const emphasis = (Math.sin(t * 2.7) * 0.5 + 0.5);
-      this.mouthTarget = Math.max(this.mouthTarget, syl * (0.35 + this.talking * 0.55) * (0.6 + emphasis * 0.6));
+      // Only the mouth is guarded — the head micro-motion below must keep
+      // running while an external source drives the jaw, or the speaker
+      // freezes into a ventriloquist's dummy.
+      if (!this.externalMouth) {
+        this.mouthTarget = Math.max(this.mouthTarget, syl * (0.35 + this.talking * 0.55) * (0.6 + emphasis * 0.6));
+      }
       if (this.bones.head) {
         this.bones.head.rotation.x += Math.sin(t * 5.1) * 0.020 * this.talking;
         this.bones.head.rotation.y += Math.sin(t * 3.3) * 0.032 * this.talking;
@@ -385,20 +398,34 @@ export class Mover {
     this.character = character;
     this.animator = animator;
     this.destination = null;
+    this.path = [];      // waypoints walked after `destination` is reached
     this.facing = null;
     this.speed = 1.15;
   }
 
   moveTo(position, facing = null, speed = 1.15) {
     this.destination = position.clone();
+    this.path = [];
     this.facing = facing;
     this.speed = speed;
+  }
+
+  /**
+   * Walk a multi-point route — what makes "walks around JON" read as an arc
+   * on screen instead of a straight cut across the circle.
+   * @param {THREE.Vector3[]} points waypoints in order
+   */
+  followPath(points, facing = null, speed = 1.0) {
+    if (!points || !points.length) return;
+    this.moveTo(points[0], facing, speed);
+    this.path = points.slice(1).map((p) => p.clone());
   }
 
   snapTo(position, facing = 0) {
     this.character.position.copy(position);
     this.character.rotation.y = facing;
     this.destination = null;
+    this.path = [];
     this.animator.setWalking(0);
   }
 
@@ -419,6 +446,11 @@ export class Mover {
     const flat = this.destination.clone().setY(pos.y);
     const dist = pos.distanceTo(flat);
     if (dist < 0.06) {
+      if (this.path.length) {
+        // Keep walking: pop the next waypoint without dropping to idle.
+        this.destination = this.path.shift();
+        return false;
+      }
       this.destination = null;
       this.animator.setWalking(0);
       return true;

@@ -12,6 +12,9 @@ import {
 import { direct } from './director.js';
 import { ABILITIES, parseScript } from './parser.js';
 import { saveAvatarFile, loadStoredAvatars, clearStoredAvatar } from './avatar.js';
+import { SpeechDirector } from './speech.js';
+import { NoteStack, parseNote } from './notes.js';
+import { propsMentioned } from './props.js';
 
 const SAMPLE = `Title: The Lamplighter's Hour
 Author: a Playhouse demo
@@ -68,6 +71,9 @@ const canvas = document.getElementById('view');
 const engine = new Engine(canvas);
 const production = new Production(engine);
 const audio = new AudioTrack();
+// Speak dialogue by default — a silent play was the app's biggest reported
+// surprise. Lyrics stay silent unless opted in (spoken TTS undercuts a song).
+const speech = new SpeechDirector();
 
 const ui = {
   boot: document.getElementById('boot'),
@@ -98,7 +104,10 @@ const state = {
   // The last staging result, kept out of the DOM so it survives the panel
   // being torn down and rebuilt.
   scriptStatus: null,      // { text, tone: 'ok' | 'warn' | 'error' }
+  noteStatus: null,        // { text, tone } — last notes-panel action result
+  notesKey: null,          // localStorage key for the staged script's notes
   overrides: {},
+  voices: {},              // character -> pinned voiceURI, persisted
   panel: null,
   importing: new Map(),    // character -> filename currently being loaded
   audioMaster: false,
@@ -134,6 +143,9 @@ fitCanvas();
 // ---------------------------------------------------------------------------
 
 const SCRIPT_KEY = 'playhouse.script';
+const SPEECH_KEY = 'playhouse.speech';
+const VOICE_KEY = 'playhouse.voices';
+const HINT_KEY = 'playhouse.hint.notes';
 
 /** localStorage is unavailable in some privacy modes; never fail over it. */
 function remember(key, value) {
@@ -141,6 +153,58 @@ function remember(key, value) {
 }
 function recall(key) {
   try { return localStorage.getItem(key) || ''; } catch { return ''; }
+}
+
+/** FNV-1a — a private copy per module is the established pattern here. */
+function fnv(str) {
+  let h = 2166136261;
+  const s = String(str);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+// --- Speech preferences ------------------------------------------------------
+
+function saveSpeechPrefs() {
+  remember(SPEECH_KEY, JSON.stringify({ enabled: speech.enabled, speakLyrics: speech.speakLyrics }));
+}
+try {
+  const prefs = JSON.parse(recall(SPEECH_KEY) || '{}');
+  if (typeof prefs.enabled === 'boolean') speech.enabled = prefs.enabled;
+  if (typeof prefs.speakLyrics === 'boolean') speech.speakLyrics = prefs.speakLyrics;
+} catch { /* corrupt prefs: defaults stand */ }
+try {
+  state.voices = JSON.parse(recall(VOICE_KEY) || '{}') || {};
+  // Unknown URIs (the voice list changed since) are ignored gracefully inside.
+  for (const [name, uri] of Object.entries(state.voices)) speech.setVoiceOverride(name, uri);
+} catch { state.voices = {}; }
+
+// --- Director notes, kept per script -----------------------------------------
+
+function saveNotes() {
+  if (!state.notesKey) return;
+  try { remember(state.notesKey, JSON.stringify(production.notes.toJSON())); } catch { /* fine */ }
+}
+
+/** Swap in the note stack saved for this script text (or a fresh one). */
+function loadNotes(text) {
+  state.notesKey = `playhouse.notes.${fnv(text)}`;
+  let stack = null;
+  try {
+    const raw = recall(state.notesKey);
+    if (raw) stack = NoteStack.fromJSON(JSON.parse(raw));
+  } catch { /* corrupt snapshot: start clean */ }
+  production.notes = stack || new NoteStack();
+  production.noteStackChanged();
+}
+
+/** Every mutation funnels through here: playback overlay + persistence. */
+function notesChanged() {
+  production.noteStackChanged();
+  saveNotes();
 }
 
 // ---------------------------------------------------------------------------
@@ -157,13 +221,19 @@ function stageScript(text) {
   // Kept so a reload comes back to the writer's script rather than the demo —
   // which is also what lets imported avatars find their character again.
   remember(SCRIPT_KEY, text);
+  speech.cancel();
   const script = production.load(text, state.overrides);
+  // Fire-and-forget: a provisional plan lands synchronously, the real voices
+  // land when the list resolves. Pinned voices survive re-assignment.
+  speech.assignVoices(script.characters, production.specs);
+  loadNotes(text);
   ui.prodTitle.textContent = script.meta.title || 'Playhouse';
   document.title = `${script.meta.title || 'Playhouse'} — Playhouse`;
   state.lyricTimings = [];
   drawSceneMarks();
   if (state.panel === 'cast') renderPanel('cast');
   if (state.panel === 'audio') renderPanel('audio');
+  if (state.panel === 'notes') renderPanel('notes');
   return script;
 }
 
@@ -187,6 +257,11 @@ function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   elapsed += dt;
 
+  // A loaded recording silences TTS outright: the recording is the
+  // performance, and two clocks fighting is worse than either alone.
+  speech.suppressed = state.audioMaster && audio.loaded;
+  speech.update(dt);
+
   // When a recording is loaded it is the master clock — the performance
   // follows the music, never the other way round.
   let external = null;
@@ -195,18 +270,45 @@ function frame() {
     if (!production.playing && audio.playing) audio.pause();
     if (audio.playing) external = audio.currentTime;
   }
+  // An overrunning spoken line stalls the plan clock (bounded, inside speech):
+  // passing production.time back as the external clock freezes it exactly.
+  // The recording's clock outranks the stall — it was checked first.
+  if (external === null && speech.holding) external = production.time;
 
   production.update(dt, elapsed, external);
 
-  // Live lip sync from the recording's amplitude.
-  if (audio.playing && production.currentBeat?.character) {
-    const animator = production.animators.get(production.currentBeat.character);
-    if (animator) animator.setMouthOpen(audio.level() * 0.9);
+  // Live lip sync — the recording's amplitude wins, then the TTS envelope.
+  // Must run EVERY frame: mouthTarget decays per frame inside the Animator.
+  const speakerName = production.currentBeat?.character;
+  const animator = speakerName ? production.animators.get(speakerName) : null;
+  if (animator) {
+    const src = audio.playing
+      ? audio.level() * 0.9
+      : (speech.speaking && speech.character === speakerName ? speech.level() : null);
+    // While an external source is live it owns the jaw; otherwise the
+    // procedural talk layer takes back over (e.g. speech off or un-armed).
+    animator.setExternalMouth(src !== null);
+    if (src !== null) animator.setMouthOpen(src);
   }
 
   engine.render(elapsed);
   updateTransport();
 }
+
+// Speak once per BEAT — dialogue beats subdivide into up to three shots that
+// share one beat object, and production fires this exactly once per beat.
+let lastSpeaker = null;
+production.onBeatChange = (beat) => {
+  if (lastSpeaker && lastSpeaker !== beat?.character) {
+    production.animators.get(lastSpeaker)?.setExternalMouth(false);
+  }
+  lastSpeaker = beat?.character || null;
+  if (!beat) return;
+  if (state.audioMaster && audio.loaded) return; // the recording is the voice
+  // Mirrors director.js's slot maths exactly; speakBeat rate-fits into it.
+  const slot = Math.max(0.8, (beat.duration || 1.5) / (production.pace ?? 1));
+  speech.speakBeat(beat, production.specs.get(beat.character), { slotSeconds: slot });
+};
 
 function updateTransport() {
   const d = production.duration || 1;
@@ -240,6 +342,9 @@ function fmt(s) {
 // ---------------------------------------------------------------------------
 
 ui.btnPlay.addEventListener('click', async () => {
+  // MUST be the first statement: on Safari an `await` before this breaks the
+  // gesture chain and every later speechSynthesis.speak() is silently dropped.
+  speech.unlock();
   if (!production.playing) {
     await audio.resume();
     production.play();
@@ -247,6 +352,8 @@ ui.btnPlay.addEventListener('click', async () => {
   } else {
     production.pause();
     if (audio.playing) audio.pause();
+    // cancel, never speechSynthesis.pause() — pause/resume is broken on iOS.
+    speech.cancel();
   }
 });
 
@@ -254,6 +361,7 @@ let scrubbing = false;
 function scrubTo(clientX) {
   const rect = ui.scrub.getBoundingClientRect();
   const t = THREE.MathUtils.clamp((clientX - rect.left) / rect.width, 0, 1);
+  speech.cancel(); // a scrubbed-into line restarts from its own top
   production.seek(t * production.duration);
   if (audio.loaded && state.audioMaster) audio.seek(production.time);
 }
@@ -284,8 +392,9 @@ ui.btnLetterbox.addEventListener('click', () => {
   toast(['Full frame', '1.85:1', '2.39:1'][letterboxIndex]);
 });
 
-// Tap the picture to hide the interface.
+// Tap the picture to hide the interface. Any first touch also arms speech.
 canvas.addEventListener('click', () => {
+  speech.unlock();
   state.chromeHidden = !state.chromeHidden;
   ui.chrome.classList.toggle('hidden', state.chromeHidden);
 });
@@ -293,8 +402,15 @@ canvas.addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
   if (e.code === 'Space') { e.preventDefault(); ui.btnPlay.click(); }
-  if (e.code === 'ArrowRight') production.seek(production.time + 5);
-  if (e.code === 'ArrowLeft') production.seek(production.time - 5);
+  if (e.code === 'ArrowRight') { speech.cancel(); production.seek(production.time + 5); }
+  if (e.code === 'ArrowLeft') { speech.cancel(); production.seek(production.time - 5); }
+});
+
+// Mobile browsers cancel utterances unreliably on navigation — without these
+// the voice keeps talking after the user has left the page.
+window.addEventListener('pagehide', () => speech.cancel());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') speech.cancel();
 });
 
 // ---------------------------------------------------------------------------
@@ -303,9 +419,15 @@ document.addEventListener('keydown', (e) => {
 
 function openPanel(name) {
   if (state.panel === name) { closeSheet(); return; }
+  // Giving a note means standing still on the moment being noted.
+  if (name === 'notes' && production.playing) {
+    production.pause();
+    if (audio.playing) audio.pause();
+    speech.cancel();
+  }
   state.panel = name;
   ui.sheet.classList.add('open');
-  ui.sheetTitle.textContent = name;
+  ui.sheetTitle.textContent = name === 'notes' ? 'Director notes' : name;
   ui.tabs.forEach((t) => t.classList.toggle('active', t.dataset.panel === name));
   renderPanel(name);
 }
@@ -314,7 +436,10 @@ function closeSheet() {
   ui.sheet.classList.remove('open');
   ui.tabs.forEach((t) => t.classList.remove('active'));
 }
-ui.tabs.forEach((t) => t.addEventListener('click', () => openPanel(t.dataset.panel)));
+ui.tabs.forEach((t) => t.addEventListener('click', () => {
+  speech.unlock(); // any first touch arms the speech engine
+  openPanel(t.dataset.panel);
+}));
 ui.btnCloseSheet.addEventListener('click', closeSheet);
 
 function renderPanel(name) {
@@ -324,6 +449,7 @@ function renderPanel(name) {
   else if (name === 'cast') renderCastPanel(body);
   else if (name === 'audio') renderAudioPanel(body);
   else if (name === 'look') renderLookPanel(body);
+  else if (name === 'notes') renderNotesPanel(body);
 }
 
 // --- Script -----------------------------------------------------------------
@@ -454,7 +580,10 @@ function renderScriptPanel(body) {
     <p><strong>Magic.</strong> Write <code>[[fire: MIREN -&gt; DOOR]]</code> for an explicit cue, or just
     describe it — "the lamp flares", "shadow gathers" — and it will be inferred.
     Abilities: ${ABILITIES.join(', ')}.</p>
-    <p><strong>Props</strong> named in action lines get built into the set automatically.</p>`;
+    <p><strong>Props</strong> named in action lines get built into the set automatically, and
+    "picks up the apple" / "sets it down" put them in and out of hands.</p>
+    <p><strong>Notes.</strong> Pause playback and tap <code>+ Note</code> to direct any moment in
+    plain words — "wider", "closer on a name", "make it handheld", "she carries the lantern".</p>`;
   body.appendChild(hint);
 }
 
@@ -627,6 +756,31 @@ function renderCastPanel(body) {
     }
     card.appendChild(avatarRow);
 
+    // Voice pick applies to imported and procedural bodies alike.
+    if (speech.supported) {
+      const sel = document.createElement('select');
+      const plan = speech.planFor(record.name);
+      const auto = document.createElement('option');
+      auto.value = '';
+      auto.textContent = `Auto${plan?.voice ? ` — ${plan.voice.name}` : ''}`;
+      sel.appendChild(auto);
+      for (const v of speech.voices) {
+        const opt = document.createElement('option');
+        opt.value = v.voiceURI;
+        opt.textContent = `${v.name} (${v.lang})`;
+        if (state.voices[record.name] === v.voiceURI) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.onchange = () => {
+        const uri = sel.value || null;
+        if (uri) state.voices[record.name] = uri;
+        else delete state.voices[record.name];
+        remember(VOICE_KEY, JSON.stringify(state.voices));
+        speech.setVoiceOverride(record.name, uri);
+      };
+      card.appendChild(field('Voice', sel));
+    }
+
     // Procedural controls only matter when there's no imported body.
     if (imported) {
       const note = document.createElement('div');
@@ -711,6 +865,49 @@ function rangeField(label, min, max, step, value, onChange) {
 // --- Audio ------------------------------------------------------------------
 
 function renderAudioPanel(body) {
+  // --- Spoken dialogue (browser TTS) --------------------------------------
+  const voicesCard = document.createElement('div');
+  voicesCard.className = 'card';
+  voicesCard.innerHTML = '<h4>Spoken dialogue</h4>';
+  if (!speech.supported) {
+    const no = document.createElement('div');
+    no.className = 'hint';
+    no.textContent = 'This browser has no speech synthesis — captions and the performance still play.';
+    voicesCard.appendChild(no);
+  } else {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.style.marginBottom = '8px';
+    hint.textContent = 'Characters read their lines with browser voices, cast by build and height '
+      + '(pick a voice per character in the Cast panel). Speech is a separate output from a loaded '
+      + 'recording — it cannot be mixed into it, and iPhones ignore its volume (use the hardware '
+      + 'buttons). Press play once to let the browser start speaking.';
+    voicesCard.appendChild(hint);
+
+    const toggles = document.createElement('div');
+    toggles.className = 'row';
+    const mkToggle = (label, get, set) => {
+      const b = document.createElement('button');
+      b.className = 'btn';
+      const paint = () => { b.textContent = get() ? `${label} ✓` : label; };
+      paint();
+      b.onclick = () => { set(!get()); paint(); saveSpeechPrefs(); };
+      return b;
+    };
+    toggles.append(
+      mkToggle('Speak dialogue', () => speech.enabled, (v) => {
+        speech.enabled = v;
+        if (!v) speech.cancel();
+      }),
+      // Honest label: SpeechSynthesis has no melody — this reads, it never sings.
+      mkToggle('Read lyrics aloud (spoken, not sung)', () => speech.speakLyrics, (v) => {
+        speech.speakLyrics = v;
+      }),
+    );
+    voicesCard.appendChild(toggles);
+  }
+  body.appendChild(voicesCard);
+
   const info = document.createElement('div');
   info.className = 'hint';
   info.innerHTML = audio.loaded
@@ -926,6 +1123,167 @@ function renderLookPanel(body) {
   body.appendChild(perf);
 }
 
+// --- Director notes ---------------------------------------------------------
+
+/** Human echo of a parsed directive, so the user sees what was understood. */
+function describeDirective(d) {
+  if (!d || d.error) return d?.error || 'Nothing understood';
+  if (d.kind === 'prop') {
+    const who = d.character || 'whoever is in shot';
+    if (d.action === 'hold') {
+      const known = d.prop && propsMentioned(d.prop).length;
+      return `${who} holds the ${d.prop}`
+        + (known ? '' : ` — no model for “${d.prop}”, so nothing will appear`);
+    }
+    return d.prop ? `${who} puts down the ${d.prop}` : `${who}: hands emptied`;
+  }
+  const bits = [];
+  if (d.size) bits.push(`shot size → ${d.size}`);
+  if (d.sizeStep) {
+    bits.push(`${d.sizeStep > 0 ? 'wider' : 'closer'} → shot size ${d.sizeStep > 0 ? '+' : ''}${d.sizeStep}`);
+  }
+  if (d.move) bits.push(`camera → ${d.move}`);
+  if (d.height) bits.push(`${d.height} angle`);
+  if (d.subject) bits.push(`frame ${d.subject}`);
+  if (d.cut) bits.push('cut to them');
+  if (d.durationScale) bits.push(`hold ×${d.durationScale}`);
+  return bits.join(' · ') || 'no change';
+}
+
+function renderNotesPanel(body) {
+  const cast = production.script?.characters.map((c) => c.name) ?? [];
+
+  const intro = document.createElement('div');
+  intro.className = 'hint';
+  intro.style.marginBottom = '8px';
+  intro.innerHTML = `Pinned to <strong>${fmt(production.time)}</strong> — scrub first if the moment
+    is elsewhere. Camera notes season the shot they land on: <code>wider</code>,
+    <code>closer on ${cast[0] || 'MIREN'}</code>, <code>low angle</code>, <code>make it shake</code>,
+    <code>hold this shot longer</code>. Prop notes stick until changed:
+    <code>${cast[0] || 'she'} carries the lantern</code>, <code>put it down</code>.`;
+  body.appendChild(intro);
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Give a note…';
+  input.style.cssText = 'flex:1;min-width:0;background:var(--panel);color:var(--ink);'
+    + 'border:1px solid var(--line);border-radius:8px;padding:9px;font-size:13px';
+  const add = document.createElement('button');
+  add.className = 'btn primary';
+  add.textContent = 'Add';
+  row.append(input, add);
+  body.appendChild(row);
+
+  // Live echo: the parsed interpretation (or the honest failure) as they type.
+  const echo = document.createElement('div');
+  echo.className = 'hint';
+  echo.style.margin = '0 0 10px';
+  const setEcho = (text, tone = 'ok') => {
+    state.noteStatus = text ? { text, tone } : null;
+    echo.textContent = text || '';
+    echo.style.color = STATUS_COLOURS[tone] || STATUS_COLOURS.ok;
+  };
+  if (state.noteStatus) setEcho(state.noteStatus.text, state.noteStatus.tone);
+  body.appendChild(echo);
+
+  input.oninput = () => {
+    const text = input.value.trim();
+    if (!text) { setEcho(''); return; }
+    const d = parseNote(text, cast);
+    if (d.error) setEcho(d.error, 'warn');
+    else setEcho(`Reads as: ${describeDirective(d)}`, 'ok');
+  };
+
+  const commit = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    const note = production.notes.addNote(production.time, production.sceneIndex, text, cast);
+    if (note.error) {
+      setEcho(`${note.error}. Try camera words (wider, closer on a name, low angle, handheld) `
+        + 'or prop words (carries the lantern, puts it down).', 'error');
+      return;
+    }
+    notesChanged();
+    input.value = '';
+    setEcho(`Pinned at ${fmt(note.time)} — ${describeDirective(note.directive)}`, 'ok');
+    renderPanel('notes');
+  };
+  add.onclick = commit;
+  input.onkeydown = (e) => { if (e.key === 'Enter') commit(); };
+
+  const historyRow = document.createElement('div');
+  historyRow.className = 'row';
+  const mkHistory = (label, fn) => {
+    const b = document.createElement('button');
+    b.className = 'btn small';
+    b.textContent = label;
+    b.onclick = () => {
+      const n = fn();
+      if (!n) { setEcho(`Nothing to ${label.toLowerCase()}`, 'warn'); return; }
+      notesChanged();
+      setEcho(`${label.replace(/o$/, 'i')}d: “${n.text}”`, 'ok');
+      renderPanel('notes');
+    };
+    return b;
+  };
+  historyRow.append(
+    mkHistory('Undo', () => production.notes.undo()),
+    mkHistory('Redo', () => production.notes.redo()),
+  );
+  body.appendChild(historyRow);
+
+  const notes = production.notes.list();
+  if (!notes.length) {
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.textContent = 'No notes yet. They save with this script and replay every time.';
+    body.appendChild(empty);
+    return;
+  }
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<h4>${notes.length} note${notes.length === 1 ? '' : 's'}</h4>`;
+  for (const note of notes) {
+    const r = document.createElement('div');
+    r.className = 'lyricrow';
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = fmt(note.time);
+    const x = document.createElement('div');
+    x.className = 'x';
+    const line = document.createElement('div');
+    line.textContent = note.text;
+    const sub = document.createElement('div');
+    sub.style.cssText = 'font-size:11px;color:var(--ink-dim)';
+    sub.textContent = describeDirective(note.directive);
+    x.append(line, sub);
+    if (!note.enabled) x.style.opacity = '0.4';
+
+    const onoff = document.createElement('button');
+    onoff.className = 'btn small';
+    onoff.textContent = note.enabled ? 'On' : 'Off';
+    onoff.onclick = () => {
+      production.notes.toggle(note.id);
+      notesChanged();
+      renderPanel('notes');
+    };
+    const del = document.createElement('button');
+    del.className = 'btn small';
+    del.textContent = '✕';
+    del.onclick = () => {
+      production.notes.remove(note.id);
+      notesChanged();
+      renderPanel('notes');
+    };
+    r.append(t, x, onoff, del);
+    card.appendChild(r);
+  }
+  body.appendChild(card);
+}
+
 // ---------------------------------------------------------------------------
 // Go
 // ---------------------------------------------------------------------------
@@ -967,10 +1325,16 @@ try {
   frame();
   // Async on purpose: a slow IndexedDB read must not hold the curtain.
   restoreAvatars().catch((err) => console.error('Avatar restore failed', err));
+  // Say what's new exactly once, after the curtain is up.
+  if (!recall(HINT_KEY)) {
+    remember(HINT_KEY, '1');
+    setTimeout(() => toast('New: the cast now speaks their lines — and you can pause '
+      + 'and tap “+ Note” to direct the camera and props in plain words.', 7000), 1600);
+  }
 } catch (err) {
   ui.bootMsg.innerHTML = `Failed to start.<br><span style="font-size:11px;color:#c88">${err.message}</span>`;
   console.error(err);
 }
 
 // Expose for debugging from a device console.
-window.playhouse = { engine, production, audio, stageScript, THREE };
+window.playhouse = { engine, production, audio, speech, stageScript, THREE };
