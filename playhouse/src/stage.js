@@ -272,8 +272,23 @@ const ARCHETYPES = {
     dressing: [['oilLamp', 'floor-side', 2]],
     drapes: true,
   },
+  // Declared before `forest` on purpose: both list the bare 'tree' keyword and
+  // ties break on declaration order, so "BY A TREE" lands under fruit trees.
+  orchard: {
+    match: ['orchard', 'orchards', 'apple', 'apples', 'apple tree', 'apple trees',
+      'fruit tree', 'fruit trees', 'apple grove', 'pear tree', 'plum tree',
+      'cherry tree', 'tree', 'trees'],
+    exterior: true, size: [28, 0, 28], ground: 'grass',
+    dressing: [
+      ['tree', 'rows', 8, { fruit: '#a8231f' }],
+      ['fence', 'perimeter', 10],
+      ['basket', 'floor-centre', 1, { apples: 3 }],
+      ['crate', 'scatter', 2],
+      ['barrel', 'scatter', 1],
+    ],
+  },
   forest: {
-    match: ['forest', 'wood', 'woods', 'glade', 'grove', 'clearing'],
+    match: ['forest', 'wood', 'woods', 'glade', 'grove', 'clearing', 'tree', 'trees'],
     exterior: true, size: [26, 0, 26], ground: 'grass',
     dressing: [['tree', 'scatter', 9]],
   },
@@ -289,19 +304,169 @@ const ARCHETYPES = {
   },
 };
 
-function chooseArchetype(location, interior) {
-  const low = String(location).toLowerCase();
-  let best = null;
-  let bestLen = 0;
-  for (const [key, arch] of Object.entries(ARCHETYPES)) {
-    for (const m of arch.match) {
-      if (low.includes(m) && m.length > bestLen) { best = key; bestLen = m.length; }
+// ---------------------------------------------------------------------------
+// Forgiving location matching
+// ---------------------------------------------------------------------------
+
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'by', 'at', 'in', 'on', 'near', 'under',
+  'and', 'to', 'from', 'with', 'some',
+]);
+
+/**
+ * Words that testify the writer meant outdoors/indoors regardless of the
+ * INT./EXT. prefix — a mistyped "INT. OUTSIDE BY A TREE" is far more common
+ * than a screenplay that genuinely stages a tree inside a parlour.
+ */
+const EXTERIOR_SIGNALS = new Set([
+  'outside', 'outdoors', 'outdoor', 'tree', 'trees', 'apple', 'apples',
+  'orchard', 'garden', 'field', 'meadow', 'hill', 'hillside', 'river',
+  'stream', 'brook', 'lake', 'pond', 'sky', 'forest', 'wood', 'woods',
+  'grove', 'beach', 'shore', 'mountain', 'cliff', 'path', 'road', 'lane',
+  'street', 'yard', 'courtyard', 'grass', 'farm', 'moor', 'bridge',
+  'branches', 'roots',
+]);
+const INTERIOR_SIGNALS = new Set([
+  'room', 'indoors', 'inside', 'parlour', 'parlor', 'hall', 'hallway',
+  'corridor', 'kitchen', 'chamber', 'bedroom', 'library', 'study', 'attic',
+  'cellar', 'basement', 'landing',
+]);
+
+const tokenise = (s) => String(s).toLowerCase()
+  .replace(/[^a-z0-9' ]+/g, ' ')
+  .split(/\s+/)
+  .filter(Boolean);
+
+/**
+ * Typo repair only ever targets this curated vocabulary — repairing against
+ * arbitrary English would manufacture matches out of noise.
+ */
+const FUZZY_VOCAB = [...new Set([
+  ...Object.values(ARCHETYPES).flatMap((a) => a.match.flatMap((m) => m.split(' '))),
+  ...EXTERIOR_SIGNALS,
+  ...INTERIOR_SIGNALS,
+])];
+const VOCAB_SET = new Set(FUZZY_VOCAB);
+
+/** Damerau-Levenshtein: substitutions, indels, and adjacent transpositions. */
+function editDistance(a, b) {
+  const al = a.length;
+  const bl = b.length;
+  const d = [];
+  for (let i = 0; i <= al; i++) d[i] = [i];
+  for (let j = 0; j <= bl; j++) d[0][j] = j;
+  for (let i = 1; i <= al; i++) {
+    for (let j = 1; j <= bl; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, d[i - 2][j - 2] + 1);
+      }
+      d[i][j] = v;
     }
   }
-  if (best) return { key: best, ...ARCHETYPES[best] };
-  return interior
-    ? { key: 'cottage', ...ARCHETYPES.cottage }
-    : { key: 'village', ...ARCHETYPES.village };
+  return d[al][bl];
+}
+
+/**
+ * Map a token onto the nearest vocabulary word within a length-scaled edit
+ * budget. The 3-character prefix guard is what keeps a distance-2 budget from
+ * producing garbage on 7-letter words ("outsifr" -> "outside" passes, a random
+ * word does not).
+ */
+function canonicalise(token) {
+  if (STOPWORDS.has(token) || VOCAB_SET.has(token)) return { word: token, repaired: false };
+  const budget = token.length >= 7 ? 2 : token.length >= 4 ? 1 : 0;
+  if (!budget) return { word: token, repaired: false };
+  let best = null;
+  let bestD = budget + 1;
+  const prefix = token.slice(0, 3);
+  for (const w of FUZZY_VOCAB) {
+    if (Math.abs(w.length - token.length) > budget) continue;
+    if (w.slice(0, 3) !== prefix) continue;
+    const dist = editDistance(token, w);
+    if (dist < bestD) { bestD = dist; best = w; }
+  }
+  return best ? { word: best, repaired: true } : { word: token, repaired: false };
+}
+
+/**
+ * Pick a location archetype for a heading.
+ *
+ * Token-based (no substring hits like 'hall' inside "SHALLOW"), typo-tolerant
+ * via `canonicalise`, and signal-scored: nature words anywhere in the heading
+ * override a mistyped INT. prefix. Action prose, when supplied, reinforces the
+ * interior/exterior call at quarter weight but never picks the archetype — a
+ * chair in the dialogue must not relocate the scene to a parlour.
+ *
+ * @param {string} location heading body, e.g. "OUTSIFR BY A TREE"
+ * @param {boolean} interior from the INT./EXT. prefix
+ * @param {object} [extras] `{ prose }` joined action/lyric text of the scene
+ */
+function chooseArchetype(location, interior, { prose = '' } = {}) {
+  const canon = tokenise(location).map(canonicalise);
+  const words = canon.map((c) => c.word);
+
+  // --- Interior/exterior evidence ----------------------------------------
+  let extHits = 0;
+  let intHits = 0;
+  for (const c of canon) {
+    if (EXTERIOR_SIGNALS.has(c.word)) extHits += 1;
+    else if (INTERIOR_SIGNALS.has(c.word)) intHits += 1;
+  }
+  for (const t of tokenise(prose)) {
+    if (EXTERIOR_SIGNALS.has(t)) extHits += 0.25;
+    else if (INTERIOR_SIGNALS.has(t)) intHits += 0.25;
+  }
+  let exterior = !interior;
+  // Strictly greater: "KITCHEN GARDEN" (1 ext, 1 int) must stay a kitchen,
+  // while "OUTSIFR BY A TREE" (2 ext, 0 int) overrides its mistyped INT.
+  if (extHits > 0 && extHits > intHits) exterior = true;
+  else if (intHits > 0 && extHits === 0) exterior = false;
+
+  // --- Score archetypes ----------------------------------------------------
+  let bestKey = null;
+  let bestScore = 0;
+  let bestPhrase = 0;
+  for (const [key, arch] of Object.entries(ARCHETYPES)) {
+    let score = 0;
+    let phraseLen = 0;
+    for (const m of arch.match) {
+      const parts = m.split(' ');
+      if (parts.length > 1) {
+        // Multi-word keywords must appear as a contiguous token run.
+        for (let i = 0; i + parts.length <= words.length; i++) {
+          if (parts.every((p, j) => words[i + j] === p)) {
+            score += 3 * parts.length;
+            phraseLen = Math.max(phraseLen, parts.length);
+            break;
+          }
+        }
+      } else {
+        // Exact token match beats one that needed typo repair.
+        let gain = 0;
+        for (let i = 0; i < words.length && gain < 2; i++) {
+          if (words[i] === m) gain = canon[i].repaired ? Math.max(gain, 1) : 2;
+        }
+        score += gain;
+      }
+    }
+    if (!score) continue;
+    // Soft penalty rather than a hard filter: an unambiguous name still wins
+    // even when the resolved side disagrees ("INT. THE KITCHEN GARDEN").
+    if (!!arch.exterior !== exterior) score *= 0.25;
+    if (score > bestScore || (score === bestScore && phraseLen > bestPhrase)) {
+      bestKey = key;
+      bestScore = score;
+      bestPhrase = phraseLen;
+    }
+  }
+  if (bestKey) return { key: bestKey, ...ARCHETYPES[bestKey] };
+
+  // No keyword at all: a neutral green field is the honest outdoor default —
+  // the old `village` fallback put cobbles and a well under every stray tree.
+  const fallback = exterior ? 'field' : 'cottage';
+  return { key: fallback, ...ARCHETYPES[fallback] };
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +592,30 @@ function placementPosition(kind, arch, index, count, size, rng) {
       const r = 5.5 + rng() * (Math.min(W, D) / 2 - 6.5);
       return { pos: [Math.cos(a) * r, 0, Math.sin(a) * r], rot: rng() * Math.PI * 2 };
     }
+    case 'rows': {
+      // A jittered grid: rows are what make planting read as cultivated
+      // rather than wild woodland.
+      const cols = Math.ceil(Math.sqrt(count));
+      const rows = Math.ceil(count / cols);
+      let x = (cols <= 1 ? 0 : (index % cols) / (cols - 1) - 0.5) * W * 0.62 + (rng() - 0.5) * 0.5;
+      let z = (rows <= 1 ? 0 : Math.floor(index / cols) / (rows - 1) - 0.5) * D * 0.62 + (rng() - 0.5) * 0.5;
+      // Keep the acting area clear, but push intruders outward along their own
+      // radius instead of dropping them — the row count stays honest.
+      const r = Math.hypot(x, z);
+      if (r < 4.5) {
+        if (r < 1e-3) { x = 4.5; z = 0; } else { x *= 4.5 / r; z *= 4.5 / r; }
+      }
+      return { pos: [x, 0, z], rot: rng() * Math.PI * 2 };
+    }
+    case 'perimeter': {
+      // Panels are built along local +X; align each with the ring's tangent
+      // so the run faces inward.
+      const a = (index / count) * Math.PI * 2;
+      return {
+        pos: [Math.cos(a) * (W / 2 - 0.6), 0, Math.sin(a) * (D / 2 - 0.6)],
+        rot: -a - Math.PI / 2,
+      };
+    }
     default:
       return { pos: [0, 0, 0], rot: 0 };
   }
@@ -481,7 +670,13 @@ function surfaceMaterial(kind, colour, repeat) {
  * @returns {THREE.Group} with userData: { arch, mood, lights, marks, animated }
  */
 export function buildStage(scene, options = {}) {
-  const arch = chooseArchetype(scene.location, scene.interior);
+  // Action/lyric prose reinforces the interior/exterior call — "under the
+  // branches" is evidence even when the heading itself is mistyped.
+  const prose = (scene.beats || [])
+    .filter((b) => b.type === 'action' || b.type === 'lyric')
+    .map((b) => b.text || '')
+    .join(' ');
+  const arch = chooseArchetype(scene.location, scene.interior, { prose });
   const mood = moodFor(scene.timeOfDay, !arch.exterior);
   const rng = makeRng(hash(scene.heading || scene.location || 'stage'));
   const group = new THREE.Group();
@@ -547,10 +742,10 @@ export function buildStage(scene, options = {}) {
     }
   }
 
-  for (const [name, kind, count] of requested) {
+  for (const [name, kind, count, opts] of requested) {
     for (let i = 0; i < count; i++) {
       if (kind === 'on-surface') continue; // handled after surfaces exist
-      const def = createProp(name, {});
+      const def = createProp(name, opts || {});
       if (!def) continue;
       const { pos, rot } = placementPosition(kind, arch, i, count, def.userData.size, rng);
       def.position.set(pos[0], pos[1], pos[2]);
@@ -567,10 +762,10 @@ export function buildStage(scene, options = {}) {
   }
 
   // Tabletop dressing, now that tables exist.
-  for (const [name, kind, count] of requested) {
+  for (const [name, kind, count, opts] of requested) {
     if (kind !== 'on-surface') continue;
     for (let i = 0; i < count; i++) {
-      const def = createProp(name, {});
+      const def = createProp(name, opts || {});
       if (!def) continue;
       const surface = surfaces[i % Math.max(1, surfaces.length)];
       if (surface) {
@@ -648,9 +843,12 @@ export function buildStage(scene, options = {}) {
   return group;
 }
 
-/** Scan a scene's prose for props the archetype didn't already provide. */
+/** Scan a scene's heading and prose for props the archetype didn't provide. */
 export function propsForScene(scene) {
   const found = new Set();
+  // The heading counts too — "BY A TREE" is a request for a tree even when no
+  // action line repeats the word.
+  propsMentioned(scene.heading || scene.location || '').forEach((p) => found.add(p));
   for (const beat of scene.beats) {
     if (beat.type !== 'action' && beat.type !== 'lyric') continue;
     propsMentioned(beat.text || '').forEach((p) => found.add(p));

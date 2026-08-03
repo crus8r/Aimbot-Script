@@ -361,28 +361,33 @@ function addShoe(mb, side) {
 // Head
 // ---------------------------------------------------------------------------
 
-const HEAD_U = 26;
+// 28 columns puts a vertex column exactly on the face midline (u=0.25), so
+// nose/philtrum shading is symmetric instead of creased between two columns.
+const HEAD_U = 28;
 const HEAD_V = 20;
 
 /** Localised displacements that turn an ellipsoid into a skull. */
 function skullPokes(f) {
   return [
     // brow ridge
-    { c: new THREE.Vector3(0.030, 0.022, 0.072), r: 0.045, amt: 0.008 * f.brow, dir: new THREE.Vector3(0, 0, 1) },
-    { c: new THREE.Vector3(-0.030, 0.022, 0.072), r: 0.045, amt: 0.008 * f.brow, dir: new THREE.Vector3(0, 0, 1) },
-    // eye sockets
-    { c: new THREE.Vector3(0.032, 0.006, 0.074), r: 0.030, amt: -0.011, dir: new THREE.Vector3(0, 0, 1) },
-    { c: new THREE.Vector3(-0.032, 0.006, 0.074), r: 0.030, amt: -0.011, dir: new THREE.Vector3(0, 0, 1) },
+    { c: new THREE.Vector3(0.030, 0.024, 0.070), r: 0.042, amt: 0.0075 * f.brow, dir: new THREE.Vector3(0, 0, 1) },
+    { c: new THREE.Vector3(-0.030, 0.024, 0.070), r: 0.042, amt: 0.0075 * f.brow, dir: new THREE.Vector3(0, 0, 1) },
+    // eye sockets — shallow: the eyeballs sit proud now, deep sockets ate them
+    { c: new THREE.Vector3(0.031, 0.006, 0.076), r: 0.028, amt: -0.007, dir: new THREE.Vector3(0, 0, 1) },
+    { c: new THREE.Vector3(-0.031, 0.006, 0.076), r: 0.028, amt: -0.007, dir: new THREE.Vector3(0, 0, 1) },
     // cheekbones
-    { c: new THREE.Vector3(0.058, -0.012, 0.052), r: 0.040, amt: 0.007 * f.cheek, dir: null },
-    { c: new THREE.Vector3(-0.058, -0.012, 0.052), r: 0.040, amt: 0.007 * f.cheek, dir: null },
+    { c: new THREE.Vector3(0.056, -0.016, 0.050), r: 0.038, amt: 0.0055 * f.cheek, dir: null },
+    { c: new THREE.Vector3(-0.056, -0.016, 0.050), r: 0.038, amt: 0.0055 * f.cheek, dir: null },
     // temples
-    { c: new THREE.Vector3(0.070, 0.042, 0.040), r: 0.038, amt: -0.006, dir: null },
-    { c: new THREE.Vector3(-0.070, 0.042, 0.040), r: 0.038, amt: -0.006, dir: null },
-    // chin
-    { c: new THREE.Vector3(0, -0.070, 0.052), r: 0.036, amt: 0.010 * f.chin, dir: new THREE.Vector3(0, -0.25, 1).normalize() },
-    // philtrum hollow above the lip
-    { c: new THREE.Vector3(0, -0.030, 0.080), r: 0.020, amt: -0.004, dir: new THREE.Vector3(0, 0, 1) },
+    { c: new THREE.Vector3(0.070, 0.042, 0.038), r: 0.036, amt: -0.005, dir: null },
+    { c: new THREE.Vector3(-0.070, 0.042, 0.038), r: 0.036, amt: -0.005, dir: null },
+    // chin ball — positioned for the lengthened lower face
+    { c: new THREE.Vector3(0, -0.094, 0.046), r: 0.036, amt: 0.011 * f.chin, dir: new THREE.Vector3(0, -0.2, 1).normalize() },
+    // philtrum hollow between nose base and upper lip
+    { c: new THREE.Vector3(0, -0.048, 0.064), r: 0.013, amt: -0.0028, dir: new THREE.Vector3(0, 0, 1) },
+    // mouth pocket: recess the lip bands sit proud of, deep enough that the
+    // dark cavity sphere is in front of the pocket floor when the jaw opens
+    { c: new THREE.Vector3(0, -0.068, 0.052), r: 0.020, amt: -0.011, dir: new THREE.Vector3(0, 0, 1) },
     // occiput
     { c: new THREE.Vector3(0, 0.020, -0.088), r: 0.060, amt: 0.008, dir: new THREE.Vector3(0, 0, -1) },
   ];
@@ -402,17 +407,21 @@ function skullPoint(u, v, f, inflate = 0) {
   );
 
   const r = 0.093 + inflate;
-  const p = new THREE.Vector3(n.x * r * 0.86 * f.width, n.y * r * 1.06, n.z * r * 0.95);
+  const p = new THREE.Vector3(n.x * r * 0.86 * f.width, n.y * r * 1.01, n.z * r * 0.95);
+
+  // Longer lower face: on a pure ellipsoid the chin crowds the mouth and the
+  // cranium dominates, which is most of what read as "bulbous".
+  if (p.y < 0) p.y *= 1.14;
 
   // Jaw taper: narrow and pull back below the cheekbones.
   if (p.y < 0) {
-    const t = THREE.MathUtils.clamp(-p.y / 0.082, 0, 1);
-    const k = 1 - 0.44 * Math.pow(t, 1.35) * f.jaw;
+    const t = THREE.MathUtils.clamp(-p.y / 0.108, 0, 1);
+    const k = 1 - 0.40 * Math.pow(t, 1.35) * f.jaw;
     p.x *= k;
-    p.z *= p.z > 0 ? 1 - 0.18 * Math.pow(t, 1.6) : k;
+    p.z *= p.z > 0 ? 1 - 0.16 * Math.pow(t, 1.6) : k;
   }
   // Slight forehead recline.
-  if (p.y > 0.03 && p.z > 0) p.z -= (p.y - 0.03) * 0.20;
+  if (p.y > 0.03 && p.z > 0) p.z -= (p.y - 0.03) * 0.22;
 
   for (const poke of skullPokes(f)) {
     const d = p.distanceTo(poke.c);
@@ -427,12 +436,20 @@ function skullPoint(u, v, f, inflate = 0) {
   return p;
 }
 
-/** Weight blend that lets the lower face hinge on the jaw bone. */
+/**
+ * Weight blend that lets the lower face hinge on the jaw bone. The band is
+ * anchored just below the lip seam (final-frame y ≈ -0.006): everything from
+ * the upper lip up stays on the head, the chin swings fully with the jaw.
+ */
 function jawBlend(p) {
   const yLocal = p.y - 0.062;
-  const w = THREE.MathUtils.clamp((0.004 - yLocal) / 0.042, 0, 1);
-  const front = THREE.MathUtils.clamp((p.z + 0.02) / 0.06, 0, 1);
-  const jaw = Math.pow(w, 1.4) * front * 0.9;
+  // Sharp split right at the lip seam so an opening jaw parts the mouth
+  // instead of stretching a skin membrane across it; wider (softer) band out
+  // on the cheeks so the jawline shears smoothly.
+  const band = 0.008 + Math.min(1, Math.abs(p.x) / 0.05) * 0.018;
+  const w = THREE.MathUtils.clamp((-0.066 - yLocal) / band, 0, 1);
+  const front = THREE.MathUtils.clamp((p.z + 0.02) / 0.05, 0, 1);
+  const jaw = w * front * 0.95;
   return jaw < 0.02
     ? [{ bone: 'head', w: 1 }]
     : [{ bone: 'jaw', w: jaw }, { bone: 'head', w: 1 - jaw }];
@@ -449,13 +466,26 @@ function headVertex(mb, local, u, v) {
   return mb.rigidVertex(local.clone().add(HEAD_ORIGIN), u, v, null, jawBlend(local));
 }
 
+/** Head vertex with an explicit bone blend — used where the automatic jaw
+ * band would smear across a feature that must split cleanly (the lips). */
+function headVertexBlend(mb, local, u, v, blend) {
+  return mb.rigidVertex(local.clone().add(HEAD_ORIGIN), u, v, null, blend);
+}
+
 function addHead(mb, f) {
   const grid = [];
   for (let vi = 0; vi <= HEAD_V; vi++) {
     const row = [];
-    for (let ui = 0; ui < HEAD_U; ui++) {
-      const p = skullPoint(ui / HEAD_U, vi / HEAD_V, f);
-      row.push(headVertex(mb, p, ui / HEAD_U, vi / HEAD_V));
+    if (vi === 0) {
+      // Weld the crown to one vertex: per-column pole duplicates average to
+      // inconsistent normals and render as a dark pinch on the scalp.
+      const id = headVertex(mb, skullPoint(0, 0, f), 0.5, 0);
+      for (let ui = 0; ui < HEAD_U; ui++) row.push(id);
+    } else {
+      for (let ui = 0; ui < HEAD_U; ui++) {
+        const p = skullPoint(ui / HEAD_U, vi / HEAD_V, f);
+        row.push(headVertex(mb, p, ui / HEAD_U, vi / HEAD_V));
+      }
     }
     grid.push(row);
   }
@@ -468,24 +498,24 @@ function addHead(mb, f) {
  * The final ring collapses to a point so no end cap (and no winding risk).
  */
 function addNose(mb, f) {
-  const bridgeY = 0.072;
-  const tipY = 0.038;
+  const bridgeY = 0.066;
+  const tipY = 0.024; // nose root at eye level, tip ~40% of eye-to-chin
   const steps = 7;
   const seg = 8;
   const rings = [];
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;
-    const closing = s === steps ? 0.04 : 1; // collapse the tip
+    const closing = s === steps ? 0.22 : 1; // round the tip off, not to a point
     const y = THREE.MathUtils.lerp(bridgeY, tipY, t);
-    const width = THREE.MathUtils.lerp(0.010, 0.020 * f.nose, Math.pow(t, 1.5)) * closing;
-    const depth = THREE.MathUtils.lerp(0.004, 0.022 * f.nose, Math.pow(t, 1.2));
-    const baseZ = 0.076 - Math.pow(t, 2) * 0.006;
+    const width = THREE.MathUtils.lerp(0.0095, 0.0155 * f.nose, Math.pow(t, 1.5)) * closing;
+    const depth = THREE.MathUtils.lerp(0.005, 0.016 * f.nose, Math.pow(t, 1.2));
+    const baseZ = 0.073 - t * 0.005;
     const ids = [];
     for (let i = 0; i < seg; i++) {
       const a = (i / seg) * Math.PI * 2;
       const p = new THREE.Vector3(
         Math.cos(a) * width,
-        y - Math.abs(Math.sin(a)) * 0.004 * closing,
+        y - Math.abs(Math.sin(a)) * 0.0045 * closing,
         baseZ + (Math.sin(a) * 0.5 + 0.5) * depth,
       );
       ids.push(headVertex(mb, p, i / seg, t));
@@ -495,29 +525,85 @@ function addNose(mb, f) {
   mb.stitch(rings);
 }
 
-/** Lips are skinned across the jaw hinge so the mouth genuinely opens. */
-function addLips(mb, f) {
-  const rings = [];
-  const steps = 5;
-  const seg = 12;
-  for (let s = 0; s <= steps; s++) {
-    const t = s / steps;
-    const y = THREE.MathUtils.lerp(0.031, 0.013, t);
-    const half = 0.026 * f.mouth * (1 - Math.pow(Math.abs(t - 0.5) * 2, 2) * 0.25);
-    const ids = [];
-    for (let i = 0; i < seg; i++) {
-      const a = (i / seg) * Math.PI * 2;
-      const bulge = 0.0055 * (1 - Math.pow(Math.abs(t - 0.45) * 2.2, 2));
-      const p = new THREE.Vector3(
-        Math.cos(a) * half,
-        y + Math.sin(a) * 0.0055,
-        0.078 + Math.max(0, bulge) + Math.sin(a) * 0.001,
-      );
-      ids.push(headVertex(mb, p, i / seg, t));
-    }
-    rings.push(ids);
+// --- Mouth -----------------------------------------------------------------
+// The mouth line sits between nose tip (y 0.024) and chin bottom (y ~-0.046),
+// well below the nose with a philtrum gap — the old torus loft hovered right
+// under the nostrils and read as a moustache blob.
+const MOUTH_SEAM_Y = -0.006;
+
+/** Approximate face-surface depth along the mouth column (before pokes). */
+function mouthBaseZ(y) { return 0.0565 + (y - MOUTH_SEAM_Y) * 0.50; }
+
+/**
+ * Closed mouth as two separate lip bands lofted over the face surface: the
+ * upper band rides the head bone, the lower band rides the jaw, so
+ * `bones.jaw.rotation.x` parts them cleanly. Relief is a few millimetres —
+ * lips are surface detail, not a bolted-on shape.
+ */
+function addMouth(mb, f) {
+  const W = 0.024 * f.mouth;
+  const cols = 13;
+  const curv = 8.6; // cheek curvature: z falls off as curv·x² across the mouth
+
+  // rows: [y, relief, widthFactor]; negative relief tucks a border row under
+  // the skull surface so the band edge disappears into the skin.
+  const upperRows = [
+    [0.0135, -0.0012, 0.86],
+    [0.0070, 0.0026, 0.97],
+    [0.0016, 0.0036, 1.00],
+    [-0.0052, 0.0014, 0.97],
+  ];
+  const lowerRows = [
+    [-0.0066, 0.0014, 0.94],
+    [-0.0100, 0.0038, 0.90],
+    [-0.0150, 0.0030, 0.82],
+    [-0.0210, -0.0012, 0.66],
+  ]; // lower band rides the jaw at the same weight the chin skin does
+
+  const loft = (rows, blend) => {
+    const rings = rows.map(([y, d, wf], r) => {
+      const ids = [];
+      for (let i = 0; i < cols; i++) {
+        const t = (i / (cols - 1)) * 2 - 1;
+        const x = t * W * wf;
+        const fade = d > 0 ? Math.pow(Math.cos(t * Math.PI * 0.5), 0.6) : 1;
+        const p = new THREE.Vector3(
+          x,
+          y + 0.0020 * t * t, // corners rise a touch — a flat slit reads grim
+          mouthBaseZ(y) - curv * x * x + d * fade,
+        );
+        ids.push(headVertexBlend(mb, p, i / (cols - 1), r / rows.length, blend));
+      }
+      return ids;
+    });
+    mb.stitch(rings, false);
+  };
+
+  loft(upperRows, [{ bone: 'head', w: 1 }]);
+  loft(lowerRows, [{ bone: 'jaw', w: 0.95 }, { bone: 'head', w: 0.05 }]);
+}
+
+/**
+ * Hairline dark tube along the lip seam. Parented to the head bone: when the
+ * jaw drops it stays with the upper lip and vanishes against the cavity.
+ */
+function buildMouthSeam(f) {
+  const W = 0.0225 * f.mouth;
+  const pts = [];
+  for (let i = 0; i <= 8; i++) {
+    const t = (i / 8) * 2 - 1;
+    const x = t * W;
+    pts.push(new THREE.Vector3(
+      x,
+      MOUTH_SEAM_Y + 0.0022 * t * t,
+      mouthBaseZ(MOUTH_SEAM_Y) - 8.6 * x * x + 0.0018,
+    ));
   }
-  mb.stitch(rings);
+  const tube = new THREE.Mesh(
+    new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 16, 0.0010, 5),
+    darkMaterial('#3a2024'),
+  );
+  return tube;
 }
 
 /** Ears never deform, so they ride the head bone as separate meshes. */
@@ -525,8 +611,8 @@ function buildEars(f, skin) {
   const group = new THREE.Group();
   for (const S of [1, -1]) {
     const ear = new THREE.Mesh(new THREE.SphereGeometry(0.019, 10, 10), skinMaterial(skin));
-    ear.scale.set(0.34, 1.28, 0.86);
-    ear.position.set(S * 0.072 * f.width, 0.058, -0.014);
+    ear.scale.set(0.34, 1.32, 0.86);
+    ear.position.set(S * 0.072 * f.width, 0.050, -0.014);
     ear.rotation.z = S * -0.12;
     ear.rotation.y = S * 0.22;
     ear.castShadow = true;
@@ -541,61 +627,142 @@ function buildEars(f, skin) {
 
 const HAIR_STYLES = ['short', 'crop', 'bob', 'long', 'ponytail', 'bun', 'curly', 'bald'];
 
-function buildHair(style, f, colour) {
-  if (style === 'bald') return null;
-  const group = new THREE.Group();
-  const mat = hairMaterial(colour);
+/** Forehead hairline height (centred-frame y) per style. */
+const HAIRLINE_FRONT = {
+  short: 0.050, crop: 0.054, bob: 0.044, long: 0.046,
+  ponytail: 0.048, bun: 0.048, curly: 0.046,
+};
 
-  // Cap: the skull surface, inflated, masked to the hair-bearing region.
+/**
+ * Hairline height (centred-frame y) as a function of depth along the head.
+ * High across the forehead, dipping to just above the ear, then sliding down
+ * the back to the nape — the believable path a real hairline takes.
+ */
+function hairlineAt(z, front) {
+  const nape = THREE.MathUtils.lerp(-0.055, 0.022, THREE.MathUtils.smoothstep(z, -0.060, -0.028));
+  return THREE.MathUtils.lerp(nape, front, THREE.MathUtils.smoothstep(z, -0.024, 0.048));
+}
+
+/**
+ * Hair cap: the inflated skull surface clipped to the hairline. Columns are
+ * clamped to the exact crossing (found by bisection) instead of dropping
+ * whole vertices, so the edge is a smooth curve, not a staircase; the shell
+ * inflation also fades to nothing at the edge so the rim tucks onto the scalp.
+ */
+function buildHairCap(style, f, mat) {
+  const front = HAIRLINE_FRONT[style];
+  const crossing = [];
+  for (let ui = 0; ui < HEAD_U; ui++) {
+    let lo = 0; let hi = 1;
+    for (let it = 0; it < 16; it++) {
+      const mid = (lo + hi) / 2;
+      const p = skullPoint(ui / HEAD_U, mid, f, 0.0075);
+      if ((p.y - 0.062) - hairlineAt(p.z, front) > 0) lo = mid; else hi = mid;
+    }
+    crossing.push((lo + hi) / 2);
+  }
+
   const pos = [];
   const idx = [];
   const grid = [];
-  const fringe = style === 'crop' ? 0.055 : style === 'bob' ? 0.028 : 0.040;
   for (let vi = 0; vi <= HEAD_V; vi++) {
     const row = [];
-    for (let ui = 0; ui < HEAD_U; ui++) {
-      const p = skullPoint(ui / HEAD_U, vi / HEAD_V, f, 0.0075);
-      const yl = p.y - 0.062;
-      // Hairline: higher at the front, dropping down the back and sides.
-      const frontness = THREE.MathUtils.clamp((p.z + 0.02) / 0.10, 0, 1);
-      const limit = -0.010 + frontness * fringe;
-      row.push(yl > limit ? pos.push(p.x, p.y, p.z) / 3 - 1 : -1);
+    if (vi === 0) {
+      // Single welded crown vertex (see addHead): avoids a normal pinch.
+      const p = skullPoint(0, 0, f, 0.008);
+      const id = pos.push(p.x, p.y, p.z) / 3 - 1;
+      for (let ui = 0; ui < HEAD_U; ui++) row.push(id);
+    } else {
+      for (let ui = 0; ui < HEAD_U; ui++) {
+        const v = Math.min(vi / HEAD_V, crossing[ui]);
+        const edge = THREE.MathUtils.clamp((crossing[ui] - v) / 0.12, 0, 1);
+        const p = skullPoint(ui / HEAD_U, v, f, 0.0015 + edge * 0.0065);
+        row.push(pos.push(p.x, p.y, p.z) / 3 - 1);
+      }
     }
     grid.push(row);
   }
   for (let vi = 0; vi < HEAD_V; vi++) {
     for (let ui = 0; ui < HEAD_U; ui++) {
       const uj = (ui + 1) % HEAD_U;
-      const a = grid[vi][ui]; const b = grid[vi][uj];
-      const c = grid[vi + 1][uj]; const d = grid[vi + 1][ui];
-      if (a < 0 || b < 0 || c < 0 || d < 0) continue;
-      idx.push(a, b, c, a, c, d);
+      idx.push(grid[vi][ui], grid[vi][uj], grid[vi + 1][uj]);
+      idx.push(grid[vi][ui], grid[vi + 1][uj], grid[vi + 1][ui]);
     }
   }
-  if (pos.length) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setIndex(idx);
-    g.computeVertexNormals();
-    const cap = new THREE.Mesh(g, mat);
-    cap.castShadow = true;
-    group.add(cap);
-  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const cap = new THREE.Mesh(g, mat);
+  cap.castShadow = true;
+  return cap;
+}
 
-  // Length elements.
-  if (style === 'long' || style === 'bob') {
-    // A mass behind the head rather than a sleeve around it: a full cylinder
-    // here wraps across the face, which is what it used to do.
-    const drop = style === 'long' ? 0.26 : 0.11;
-    const fall = new THREE.Mesh(new THREE.SphereGeometry(0.092, 16, 14), mat);
-    fall.scale.set(0.92, drop / 0.092 * 0.62, 0.78);
-    fall.position.set(0, 0.030 - drop * 0.42, -0.030);
-    fall.castShadow = true;
-    group.add(fall);
+/**
+ * Falling hair for long/bob: an open shell swept around the BACK arc of the
+ * head only (edges land behind the ears), hugging the skull then dropping.
+ * Never a closed cylinder — that is what used to wrap across the face.
+ */
+function buildCurtain(style, f, mat) {
+  const w = f.width;
+  // rows: [y, rx, rz, z centre]
+  const rows = style === 'long'
+    ? [
+      [0.080, 0.082, 0.088, -0.002],
+      [0.048, 0.090, 0.096, -0.005],
+      [0.008, 0.089, 0.093, -0.008],
+      [-0.038, 0.081, 0.082, -0.010],
+      [-0.088, 0.073, 0.070, -0.012],
+      [-0.138, 0.068, 0.060, -0.012],
+      [-0.182, 0.066, 0.054, -0.010],
+    ]
+    : [
+      [0.080, 0.083, 0.089, -0.002],
+      [0.048, 0.091, 0.097, -0.005],
+      [0.008, 0.090, 0.094, -0.007],
+      [-0.030, 0.086, 0.088, -0.008],
+      [-0.058, 0.088, 0.090, -0.008], // bob tips flare out slightly
+    ];
+  const K = 14;
+  const aMin = Math.PI * (115 / 180);
+  const aMax = Math.PI * (245 / 180);
+  const pos = [];
+  const idx = [];
+  for (let r = 0; r < rows.length; r++) {
+    const [y, rx, rz, zc] = rows[r];
+    for (let i = 0; i < K; i++) {
+      const a = THREE.MathUtils.lerp(aMin, aMax, i / (K - 1));
+      pos.push(Math.sin(a) * rx * w, y, zc + Math.cos(a) * rz);
+    }
   }
+  for (let r = 0; r < rows.length - 1; r++) {
+    for (let i = 0; i < K - 1; i++) {
+      const a = r * K + i;
+      idx.push(a, a + 1, a + K + 1, a, a + K + 1, a + K);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const sheetMat = mat.clone();
+  sheetMat.side = THREE.DoubleSide; // visible from front over the shoulders
+  const curtain = new THREE.Mesh(g, sheetMat);
+  curtain.castShadow = true;
+  return curtain;
+}
+
+function buildHair(style, f, colour) {
+  if (style === 'bald') return null;
+  const group = new THREE.Group();
+  const mat = hairMaterial(colour);
+
+  group.add(buildHairCap(style, f, mat));
+
+  if (style === 'long' || style === 'bob') group.add(buildCurtain(style, f, mat));
   if (style === 'ponytail') {
     const tail = new THREE.Mesh(new THREE.CapsuleGeometry(0.030, 0.18, 4, 10), mat);
-    tail.position.set(0, -0.020, -0.100);
+    tail.position.set(0, -0.020, -0.096);
     tail.rotation.x = -0.42;
     tail.castShadow = true;
     group.add(tail);
@@ -607,14 +774,18 @@ function buildHair(style, f, colour) {
     group.add(bun);
   }
   if (style === 'curly') {
-    for (let i = 0; i < 16; i++) {
-      const a = (i / 16) * Math.PI * 2;
-      const curl = new THREE.Mesh(new THREE.SphereGeometry(0.030, 8, 7), mat);
-      curl.position.set(
-        Math.cos(a) * 0.082 * f.width,
-        0.070 + Math.sin(i * 2.3) * 0.030,
-        Math.sin(a) * 0.088 - 0.006,
+    // Curls scattered over the hair-bearing scalp only — placing them on a
+    // plain ring used to march them straight across the forehead.
+    const front = HAIRLINE_FRONT.curly;
+    for (let i = 0; i < 26; i++) {
+      const u = (i * 0.6180339887) % 1;
+      const v = 0.05 + 0.40 * ((i * 0.4172) % 1);
+      const p = skullPoint(u, v, f, 0.010);
+      if ((p.y - 0.062) < hairlineAt(p.z, front) + 0.004) continue;
+      const curl = new THREE.Mesh(
+        new THREE.SphereGeometry(0.023 + 0.009 * ((i * 0.731) % 1), 8, 7), mat,
       );
+      curl.position.copy(p);
       curl.castShadow = true;
       group.add(curl);
     }
@@ -631,32 +802,36 @@ function buildEyes(f, eyeColour) {
   const eyes = [];
   for (const S of [1, -1]) {
     const eye = new THREE.Group();
-    eye.position.set(S * 0.031 * f.width, 0.068, 0.0655);
+    // Slightly proud of the (shallow) socket: recessed eyes vanish at range.
+    eye.position.set(S * 0.031 * f.width, 0.068, 0.0665);
 
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.0128, 14, 12), eyeWhiteMaterial());
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.0135, 16, 12), eyeWhiteMaterial());
+    ball.scale.z = 0.88; // flatten the front so the iris disc sits proud of it
     eye.add(ball);
 
-    const iris = new THREE.Mesh(new THREE.CircleGeometry(0.0062, 14), irisMaterial(eyeColour));
-    iris.position.z = 0.0118;
+    const iris = new THREE.Mesh(new THREE.CircleGeometry(0.0068, 16), irisMaterial(eyeColour));
+    iris.position.z = 0.0124; // in FRONT of the flattened ball, or it occludes
     eye.add(iris);
 
-    const pupil = new THREE.Mesh(new THREE.CircleGeometry(0.0028, 12), darkMaterial('#08060a'));
-    pupil.position.z = 0.0122;
+    const pupil = new THREE.Mesh(new THREE.CircleGeometry(0.0030, 12), darkMaterial('#08060a'));
+    pupil.position.z = 0.0128;
     eye.add(pupil);
 
     // Upper lid as a rotatable shell, so blinks are a single euler tweak.
+    // anim.js drives blinks as rotation.x = -0.30 + closed * 1.35, so -0.30
+    // must remain the "open" rest angle.
     const lid = new THREE.Mesh(
-      new THREE.SphereGeometry(0.0138, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.46),
+      new THREE.SphereGeometry(0.0146, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.38),
       skinMaterial(f.skin),
     );
     lid.rotation.x = -0.30;
     eye.add(lid);
 
     const lower = new THREE.Mesh(
-      new THREE.SphereGeometry(0.0136, 14, 8, 0, Math.PI * 2, Math.PI * 0.62, Math.PI * 0.38),
+      new THREE.SphereGeometry(0.0143, 16, 8, 0, Math.PI * 2, Math.PI * 0.68, Math.PI * 0.32),
       skinMaterial(f.skin),
     );
-    lower.rotation.x = 0.18;
+    lower.rotation.x = 0.10;
     eye.add(lower);
 
     group.add(eye);
@@ -665,22 +840,38 @@ function buildEyes(f, eyeColour) {
   return { group, eyes };
 }
 
+/**
+ * Brows as one smooth strip each, swept along the forehead's horizontal arc —
+ * discrete boxes yawed to the surface read as a zigzag at MCU distance.
+ */
 function buildBrows(f, colour) {
   const group = new THREE.Group();
+  const mat = hairMaterial(colour).clone();
+  mat.side = THREE.DoubleSide;
   for (const S of [1, -1]) {
-    const brow = new THREE.Group();
-    for (let i = 0; i < 5; i++) {
-      const t = i / 4;
-      const seg = new THREE.Mesh(new THREE.BoxGeometry(0.0085, 0.0042, 0.0055), hairMaterial(colour));
-      seg.position.set(
-        S * (0.018 + t * 0.032) * f.width,
-        0.088 - Math.pow(t - 0.35, 2) * 0.045,
-        0.070 - t * 0.014,
-      );
-      seg.rotation.z = S * (t - 0.3) * 0.5;
-      brow.add(seg);
+    const pos = [];
+    const idx = [];
+    const N = 9;
+    for (let i = 0; i < N; i++) {
+      const t = i / (N - 1);
+      const psi = 0.16 + 0.62 * t; // angle around the forehead arc
+      const x = S * Math.sin(psi) * 0.080 * f.width;
+      const y = 0.0872 + 0.0062 * Math.sin(t * Math.PI * 0.85) - 0.0045 * t * t;
+      const z = 0.0833 + (Math.cos(psi) - 1) * 0.084; // hugs the curvature
+      const h = 0.0026 - t * 0.0007; // strip tapers toward the tail
+      const nz = Math.cos(psi);
+      pos.push(x, y + h, z - nz * 0.0010);
+      pos.push(x, y - h, z + nz * 0.0006);
     }
-    group.add(brow);
+    for (let i = 0; i < N - 1; i++) {
+      const a = i * 2;
+      idx.push(a, a + 1, a + 3, a, a + 3, a + 2);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    group.add(new THREE.Mesh(g, mat));
   }
   return group;
 }
@@ -953,7 +1144,7 @@ export function createCharacter(spec, options = {}) {
   addLeg(mb, 'R', p);
   addHead(mb, f);
   addNose(mb, f);
-  addLips(mb, f);
+  addMouth(mb, f);
 
   const bodyGeo = mb.build();
   const body = new THREE.SkinnedMesh(bodyGeo, skinMaterial(spec.skin));
@@ -1000,10 +1191,14 @@ export function createCharacter(spec, options = {}) {
 
   head.add(buildEars(f, spec.skin));
 
-  // A dark cavity behind the lips so an open mouth reads as open.
-  const cavity = new THREE.Mesh(new THREE.SphereGeometry(0.024, 10, 8), darkMaterial('#2a1218'));
-  cavity.position.set(0, 0.024, 0.058);
-  cavity.scale.set(1, 0.62, 0.55);
+  // The closed-mouth seam line, and a dark cavity behind the lips so an open
+  // mouth reads as open.
+  head.add(buildMouthSeam(f));
+  // Sized to hide behind the closed lip bands (front z ~0.052 sits proud of
+  // the pocket floor but well behind the lip crests at ~0.063).
+  const cavity = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 10), darkMaterial('#2a1218'));
+  cavity.position.set(0, -0.007, 0.0412);
+  cavity.scale.set(0.88, 0.55, 0.45);
   head.add(cavity);
 
   // Scale last: bind matrices are computed at unit scale above.

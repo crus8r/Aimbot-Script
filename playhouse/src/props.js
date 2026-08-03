@@ -727,12 +727,14 @@ function buildWindow({ frame = '#3a2412', night = true } = {}) {
   return g;
 }
 
-function buildTree({ trunk = '#3f2c1c', leaf = '#2f4a26' } = {}) {
+function buildTree({ trunk = '#3f2c1c', leaf = '#2f4a26', fruit = null, fruitCount = 7 } = {}) {
   const g = new THREE.Group();
   g.add(cyl(0.16, 0.30, 3.0, woodMaterial(trunk, 0.9), 10, 0, 1.5, 0));
+  const canopies = [];
   for (let i = 0; i < 5; i++) {
+    const radius = 0.9 + Math.random() * 0.5;
     const canopy = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.9 + Math.random() * 0.5, 1),
+      new THREE.IcosahedronGeometry(radius, 1),
       fabricMaterial(leaf, 0.95),
     );
     canopy.position.set(
@@ -742,6 +744,25 @@ function buildTree({ trunk = '#3f2c1c', leaf = '#2f4a26' } = {}) {
     );
     canopy.castShadow = true;
     g.add(canopy);
+    canopies.push({ mesh: canopy, radius });
+  }
+  // Fruit dots on the canopies' lower surfaces are what make an orchard read
+  // as an orchard instead of random woodland.
+  if (fruit) {
+    const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(fruit), roughness: 0.38 });
+    for (let i = 0; i < fruitCount; i++) {
+      const { mesh, radius } = canopies[i % canopies.length];
+      const a = Math.random() * Math.PI * 2;
+      const drop = 0.45 + Math.random() * 0.4; // below the canopy's equator
+      const dot = new THREE.Mesh(new THREE.IcosahedronGeometry(0.055, 1), mat);
+      dot.position.set(
+        mesh.position.x + Math.cos(a) * radius * 0.72,
+        mesh.position.y - radius * drop,
+        mesh.position.z + Math.sin(a) * radius * 0.72,
+      );
+      dot.castShadow = true;
+      g.add(dot);
+    }
   }
   return g;
 }
@@ -768,6 +789,131 @@ function buildCrate({ wood = '#6a4a28' } = {}) {
   for (const y of [0.10, s - 0.10]) {
     g.add(box(s + 0.02, 0.05, s + 0.02, woodMaterial('#4a3018'), 0, y, 0));
   }
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// Handheld and exterior props
+// ---------------------------------------------------------------------------
+
+/**
+ * An apple sized for a close insert: red body, offset stem, single leaf — the
+ * three cues that make a 4 cm sphere read as fruit rather than a ball.
+ */
+function buildApple({ skin = '#a8231f', leaf = '#3f6a2a' } = {}) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.04, 2),
+    new THREE.MeshStandardMaterial({ color: new THREE.Color(skin), roughness: 0.32 }),
+  );
+  body.scale.y = 0.92;
+  body.position.y = 0.037;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  const stalk = cyl(0.004, 0.005, 0.03, woodMaterial('#4a3320', 0.8), 6, 0, 0.078, 0);
+  stalk.rotation.z = 0.18;
+  g.add(stalk);
+  const leafMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.032, 0.014),
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color(leaf), roughness: 0.8, side: THREE.DoubleSide,
+    }),
+  );
+  leafMesh.position.set(0.02, 0.085, 0);
+  leafMesh.rotation.set(-0.5, 0.3, 0.5);
+  g.add(leafMesh);
+  g.userData.hero = true;
+  return g;
+}
+
+function buildBasket({ weave = '#8a6a3c', apples = 0 } = {}) {
+  const g = new THREE.Group();
+  const m = woodMaterial(weave, 0.85);
+  // Open flared body: DoubleSide so the camera can see inside.
+  const profile = [];
+  for (let i = 0; i <= 6; i++) {
+    const t = i / 6;
+    profile.push(new THREE.Vector2(0.13 + t * 0.07, t * 0.20));
+  }
+  const body = new THREE.Mesh(
+    new THREE.LatheGeometry(profile, 18),
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color(weave), roughness: 0.85, side: THREE.DoubleSide,
+    }),
+  );
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  g.add(cyl(0.125, 0.13, 0.02, m, 18, 0, 0.01, 0));
+  // Weave hoops sell the wicker without modelling any.
+  for (const [y, r] of [[0.06, 0.152], [0.12, 0.173], [0.185, 0.196]]) {
+    const hoop = new THREE.Mesh(new THREE.TorusGeometry(r, 0.008, 6, 22), m);
+    hoop.rotation.x = Math.PI / 2;
+    hoop.position.y = y;
+    hoop.castShadow = true;
+    g.add(hoop);
+  }
+  // Carry handle arching over the top.
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.013, 8, 22, Math.PI), m);
+  handle.position.y = 0.20;
+  handle.castShadow = true;
+  g.add(handle);
+  for (let i = 0; i < apples; i++) {
+    const a = buildApple();
+    const ang = (i / Math.max(1, apples)) * Math.PI * 2 + 0.7;
+    a.position.set(Math.cos(ang) * 0.07, 0.16, Math.sin(ang) * 0.07);
+    a.rotation.y = ang * 3;
+    g.add(a);
+  }
+  return g;
+}
+
+/** One fence section, built along local +X so runs and rings can rotate it. */
+function buildFence({ wood = '#6a5238' } = {}) {
+  const g = new THREE.Group();
+  const m = woodMaterial(wood, 0.85);
+  for (const y of [0.52, 0.86]) g.add(box(2.4, 0.07, 0.05, m, 0, y, 0));
+  for (const x of [-1.1, 0, 1.1]) g.add(box(0.10, 1.05, 0.10, m, x, 0.525, 0));
+  return g;
+}
+
+/**
+ * A carry-lantern: caged candle with a ring on top, sized for a hand.
+ * Distinct from the tabletop oil lamp — this one is meant to travel.
+ */
+function buildLantern({ metal = '#4a4038' } = {}) {
+  const g = new THREE.Group();
+  const m = metalMaterial(metal, 0.5);
+  g.add(cyl(0.055, 0.06, 0.02, m, 10, 0, 0.01, 0));
+  g.add(cyl(0.03, 0.055, 0.035, m, 10, 0, 0.21, 0));
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    g.add(box(0.012, 0.17, 0.012, m, Math.cos(a) * 0.045, 0.105, Math.sin(a) * 0.045));
+  }
+  const pane = cyl(0.043, 0.048, 0.165, glassMaterial('#f2ecd8', 0.22), 10, 0, 0.105, 0);
+  pane.castShadow = false;
+  g.add(pane);
+  g.add(cyl(0.012, 0.013, 0.05, fabricMaterial('#e8e0cc', 0.5), 8, 0, 0.045, 0));
+  const flame = new THREE.Mesh(
+    new THREE.ConeGeometry(0.009, 0.03, 8, 1, true),
+    glowMaterial('#ffcf80', 0.9),
+  );
+  flame.position.y = 0.085;
+  g.add(flame);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.005, 6, 16), m);
+  ring.position.y = 0.256;
+  g.add(ring);
+  const light = new THREE.PointLight('#ffbb70', 2.6, 7, 1.5);
+  light.position.y = 0.10;
+  g.add(light);
+  g.userData.update = (dt, t) => {
+    const f = 0.85 + Math.sin(t * 12.3) * 0.09 + Math.sin(t * 29.1) * 0.05;
+    flame.scale.set(1, f, 1);
+    light.intensity = 2.1 + f * 0.9;
+  };
+  g.userData.lightSource = light;
+  g.userData.hero = true;
   return g;
 }
 
@@ -804,6 +950,19 @@ export const PROPS = {
   bottle: { build: buildBottle, size: [0.09, 0.29, 0.09], category: 'clutter', tags: ['table'] },
   tree: { build: buildTree, size: [2.40, 4.20, 2.40], category: 'nature', tags: ['exterior'] },
   well: { build: buildWell, size: [1.70, 2.10, 0.80], category: 'nature', tags: ['exterior'] },
+  apple: {
+    build: buildApple, size: [0.08, 0.10, 0.08], category: 'clutter',
+    tags: ['table', 'hero', 'handheld'], hold: { offset: [0, -0.10, 0.03] },
+  },
+  basket: {
+    build: buildBasket, size: [0.42, 0.42, 0.42], category: 'clutter',
+    tags: ['floor', 'handheld'], hold: { offset: [0, -0.46, 0.05] },
+  },
+  fence: { build: buildFence, size: [2.40, 1.05, 0.12], category: 'structure', tags: ['exterior'] },
+  lantern: {
+    build: buildLantern, size: [0.12, 0.29, 0.12], category: 'light',
+    tags: ['table', 'hero', 'handheld'], hold: { offset: [0, -0.36, 0.03] },
+  },
 };
 
 export const PROP_NAMES = Object.keys(PROPS);
@@ -828,7 +987,8 @@ export function createProp(name, opts = {}) {
 
 /** Loose keyword -> prop name, so scripts can call for things in prose. */
 const PROP_KEYWORDS = {
-  oilLamp: ['oil lamp', 'lamp', 'lantern', 'oil-lamp'],
+  oilLamp: ['oil lamp', 'lamp', 'oil-lamp'],
+  lantern: ['lantern', 'carry lantern', 'hand lantern'],
   grandfatherClock: ['grandfather clock', 'longcase clock', 'clock', 'grandfather'],
   candle: ['candle', 'candles', 'taper'],
   fireplace: ['fireplace', 'hearth', 'fire place', 'mantel', 'mantelpiece'],
@@ -849,10 +1009,70 @@ const PROP_KEYWORDS = {
   door: ['door', 'doorway'],
   cup: ['cup', 'teacup', 'mug'],
   bottle: ['bottle', 'flask', 'decanter'],
-  tree: ['tree', 'oak', 'birch'],
+  // 'branches'/'boughs' matter: writers describe the tree without naming it.
+  tree: ['tree', 'trees', 'oak', 'birch', 'branches', 'boughs', 'orchard'],
   well: ['well'],
   chandelier: ['chandelier'],
+  apple: ['apple', 'apples'],
+  basket: ['basket', 'hamper'],
+  fence: ['fence', 'gate', 'stile'],
 };
+
+// ---------------------------------------------------------------------------
+// Hand attachment
+// ---------------------------------------------------------------------------
+
+/**
+ * Parent a prop to a character's hand bone so it rides every pose and walk.
+ *
+ * Works for procedural humans and imported avatars alike — both expose
+ * `userData.bones.handL/handR`. Character groups may be scaled (height), so
+ * the prop is counter-scaled and its offset expressed in world metres.
+ *
+ * @param {THREE.Object3D} character group carrying `userData.bones`
+ * @param {THREE.Object3D} prop group from `createProp`
+ * @param {'L'|'R'} [side] which hand; offsets mirror for the left
+ * @returns {boolean} true when the prop was attached
+ */
+export function attachToHand(character, prop, side = 'R') {
+  const hand = character?.userData?.bones?.[side === 'L' ? 'handL' : 'handR'];
+  if (!hand || !prop) return false;
+  const hold = PROPS[prop.userData?.propName]?.hold || {};
+  prop.userData.prevParent = prop.parent || null;
+  hand.updateWorldMatrix(true, false);
+  const ws = new THREE.Vector3();
+  hand.getWorldScale(ws);
+  const world = Math.abs(ws.y) > 1e-6 ? Math.abs(ws.y) : 1;
+  hand.add(prop);
+  prop.scale.setScalar((hold.scale ?? 1) / world);
+  // Offsets are authored in world metres for the right hand; divide by the
+  // accumulated scale so they survive scaled character groups.
+  const [ox, oy, oz] = hold.offset || [0, -0.10, 0.03];
+  prop.position.set((side === 'L' ? -ox : ox) / world, oy / world, oz / world);
+  const [rx, ry, rz] = hold.rotation || [0, 0, 0];
+  prop.rotation.set(rx, side === 'L' ? -ry : ry, rz);
+  prop.userData.heldBy = character;
+  prop.userData.heldSide = side;
+  return true;
+}
+
+/**
+ * Release a held prop, restoring its previous parent (or the character's own
+ * parent as a fallback) while keeping its world transform, so the caller can
+ * then settle it — e.g. at the character's feet.
+ * @returns {boolean} true when the prop was actually held
+ */
+export function detachFromHand(prop) {
+  if (!prop || !prop.userData?.heldBy) return false;
+  const prev = prop.userData.prevParent;
+  const target = prev && prev.isObject3D ? prev : prop.userData.heldBy.parent || null;
+  if (target) target.attach(prop);
+  else prop.removeFromParent();
+  prop.userData.heldBy = null;
+  prop.userData.heldSide = null;
+  prop.userData.prevParent = null;
+  return true;
+}
 
 /** Find props a line of prose is asking for. */
 export function propsMentioned(text) {
