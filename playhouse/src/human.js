@@ -213,9 +213,9 @@ function torsoRings(p) {
     { y: 1.340, rx: 0.168 * shoulder, rz: 0.112 * chest, e: 0.92 },
     { y: 1.400, rx: 0.163 * shoulder, rz: 0.106 * chest, e: 0.94 },
     { y: 1.445, rx: 0.112 * shoulder, rz: 0.088, e: 0.96 },
-    { y: 1.482, rx: 0.058, rz: 0.056, e: 1.0 },
-    { y: 1.528, rx: 0.052, rz: 0.050, e: 1.0 },
-    { y: 1.556, rx: 0.045, rz: 0.044, e: 1.0 }, // tucks up inside the skull
+    { y: 1.482, rx: 0.0545, rz: 0.053, e: 1.0 }, // neck: narrower than the jaw
+    { y: 1.528, rx: 0.049, rz: 0.048, e: 1.0 },
+    { y: 1.556, rx: 0.044, rz: 0.043, e: 1.0 }, // tucks up inside the skull
   ];
 }
 
@@ -361,10 +361,12 @@ function addShoe(mb, side) {
 // Head
 // ---------------------------------------------------------------------------
 
-// 28 columns puts a vertex column exactly on the face midline (u=0.25), so
-// nose/philtrum shading is symmetric instead of creased between two columns.
-const HEAD_U = 28;
-const HEAD_V = 20;
+// A multiple of 4 puts a vertex column exactly on the face midline (u=0.25),
+// so nose/philtrum shading is symmetric instead of creased between two
+// columns. 32x24 keeps rows ~12mm apart through the mouth band, which limits
+// how tall the stretched skin cell at the jaw split can get when it opens.
+const HEAD_U = 32;
+const HEAD_V = 24;
 
 /** Localised displacements that turn an ellipsoid into a skull. */
 function skullPokes(f) {
@@ -381,13 +383,14 @@ function skullPokes(f) {
     // temples
     { c: new THREE.Vector3(0.070, 0.042, 0.038), r: 0.036, amt: -0.005, dir: null },
     { c: new THREE.Vector3(-0.070, 0.042, 0.038), r: 0.036, amt: -0.005, dir: null },
-    // chin ball — positioned for the lengthened lower face
-    { c: new THREE.Vector3(0, -0.094, 0.046), r: 0.036, amt: 0.011 * f.chin, dir: new THREE.Vector3(0, -0.2, 1).normalize() },
+    // chin ball — broad and subtle; a small strong poke read as a pointed chin
+    { c: new THREE.Vector3(0, -0.090, 0.046), r: 0.042, amt: 0.0085 * f.chin, dir: new THREE.Vector3(0, -0.2, 1).normalize() },
     // philtrum hollow between nose base and upper lip
     { c: new THREE.Vector3(0, -0.048, 0.064), r: 0.013, amt: -0.0028, dir: new THREE.Vector3(0, 0, 1) },
-    // mouth pocket: recess the lip bands sit proud of, deep enough that the
-    // dark cavity sphere is in front of the pocket floor when the jaw opens
-    { c: new THREE.Vector3(0, -0.068, 0.052), r: 0.020, amt: -0.011, dir: new THREE.Vector3(0, 0, 1) },
+    // mouth pocket: recess the lip bands sit proud of. Kept small and shallow
+    // enough that the lip bands fully cover its rim — a deep wide pocket left
+    // a shadowed crease peeking out under the lower lip.
+    { c: new THREE.Vector3(0, -0.066, 0.052), r: 0.018, amt: -0.009, dir: new THREE.Vector3(0, 0, 1) },
     // occiput
     { c: new THREE.Vector3(0, 0.020, -0.088), r: 0.060, amt: 0.008, dir: new THREE.Vector3(0, 0, -1) },
   ];
@@ -411,17 +414,19 @@ function skullPoint(u, v, f, inflate = 0) {
 
   // Longer lower face: on a pure ellipsoid the chin crowds the mouth and the
   // cranium dominates, which is most of what read as "bulbous".
-  if (p.y < 0) p.y *= 1.14;
+  if (p.y < 0) p.y *= 1.10;
 
   // Jaw taper: narrow and pull back below the cheekbones.
   if (p.y < 0) {
     const t = THREE.MathUtils.clamp(-p.y / 0.108, 0, 1);
-    const k = 1 - 0.40 * Math.pow(t, 1.35) * f.jaw;
+    const k = 1 - 0.34 * Math.pow(t, 1.35) * f.jaw;
     p.x *= k;
-    p.z *= p.z > 0 ? 1 - 0.16 * Math.pow(t, 1.6) : k;
+    p.z *= p.z > 0 ? 1 - 0.14 * Math.pow(t, 1.6) : k;
   }
-  // Slight forehead recline.
-  if (p.y > 0.03 && p.z > 0) p.z -= (p.y - 0.03) * 0.22;
+  // Slight forehead recline. The z/0.045 ramp fades the shift out near the
+  // z=0 plane: applied as a hard step it tore a visible crack across the
+  // crown (and the hair cap, which samples this same surface).
+  if (p.y > 0.03 && p.z > 0) p.z -= (p.y - 0.03) * 0.22 * Math.min(1, p.z / 0.045);
 
   for (const poke of skullPokes(f)) {
     const d = p.distanceTo(poke.c);
@@ -541,36 +546,42 @@ function mouthBaseZ(y) { return 0.0565 + (y - MOUTH_SEAM_Y) * 0.50; }
  * lips are surface detail, not a bolted-on shape.
  */
 function addMouth(mb, f) {
-  const W = 0.024 * f.mouth;
+  const W = 0.026 * f.mouth;
   const cols = 13;
   const curv = 8.6; // cheek curvature: z falls off as curv·x² across the mouth
 
-  // rows: [y, relief, widthFactor]; negative relief tucks a border row under
-  // the skull surface so the band edge disappears into the skin.
+  // rows: [y, relief, widthFactor, seal]; negative relief tucks a border row
+  // under the skull surface so the band edge disappears into the skin. seal=1
+  // keeps full relief at the corners: the two rows flanking the lip seam must
+  // stay proud there or a dark slit of recessed skull shows at each corner.
   const upperRows = [
     [0.0135, -0.0012, 0.86],
-    [0.0070, 0.0026, 0.97],
-    [0.0016, 0.0036, 1.00],
-    [-0.0052, 0.0014, 0.97],
+    [0.0070, 0.0036, 0.97],
+    [0.0016, 0.0052, 1.00],
+    [-0.0052, 0.0020, 0.97, 1],
   ];
   const lowerRows = [
-    [-0.0066, 0.0014, 0.94],
-    [-0.0100, 0.0038, 0.90],
-    [-0.0150, 0.0030, 0.82],
+    [-0.0066, 0.0020, 0.94, 1],
+    [-0.0100, 0.0056, 0.90],
+    [-0.0150, 0.0042, 0.82],
     [-0.0210, -0.0012, 0.66],
   ]; // lower band rides the jaw at the same weight the chin skin does
 
   const loft = (rows, blend) => {
-    const rings = rows.map(([y, d, wf], r) => {
+    const rings = rows.map(([y, d, wf, seal], r) => {
       const ids = [];
       for (let i = 0; i < cols; i++) {
         const t = (i / (cols - 1)) * 2 - 1;
         const x = t * W * wf;
-        const fade = d > 0 ? Math.pow(Math.cos(t * Math.PI * 0.5), 0.6) : 1;
+        const fade = d > 0 && !seal ? Math.pow(Math.cos(t * Math.PI * 0.5), 0.6) : 1;
+        // Side columns bury into the cheek: the bands are open sheets, and a
+        // free edge hovering at skin level opened a slit that showed the dark
+        // mouth cavity as a tick at each corner.
+        const tuck = 0.0034 * THREE.MathUtils.smoothstep(Math.abs(t), 0.80, 1.0);
         const p = new THREE.Vector3(
           x,
-          y + 0.0020 * t * t, // corners rise a touch — a flat slit reads grim
-          mouthBaseZ(y) - curv * x * x + d * fade,
+          y + 0.0014 * t * t, // corners rise a touch — a flat slit reads grim
+          mouthBaseZ(y) - curv * x * x + d * fade - tuck,
         );
         ids.push(headVertexBlend(mb, p, i / (cols - 1), r / rows.length, blend));
       }
@@ -588,19 +599,23 @@ function addMouth(mb, f) {
  * jaw drops it stays with the upper lip and vanishes against the cavity.
  */
 function buildMouthSeam(f) {
-  const W = 0.0225 * f.mouth;
+  const W = 0.0235 * f.mouth;
   const pts = [];
   for (let i = 0; i <= 8; i++) {
     const t = (i / 8) * 2 - 1;
     const x = t * W;
+    // Forward offset tapers to slightly NEGATIVE at the corners so the tube
+    // tips bury into the cheek: held proud, they rendered as dark corner dots
+    // where the lip-band relief fades out.
     pts.push(new THREE.Vector3(
       x,
-      MOUTH_SEAM_Y + 0.0022 * t * t,
-      mouthBaseZ(MOUTH_SEAM_Y) - 8.6 * x * x + 0.0018,
+      MOUTH_SEAM_Y + 0.0014 * t * t,
+      mouthBaseZ(MOUTH_SEAM_Y) - 8.6 * x * x - 0.0006 + 0.0032 * Math.cos(t * Math.PI * 0.5),
     ));
   }
+  // Thin: the seam is a shadow line in the lip crease, not a drawn-on mouth.
   const tube = new THREE.Mesh(
-    new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 16, 0.0010, 5),
+    new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 16, 0.0008, 5),
     darkMaterial('#3a2024'),
   );
   return tube;
@@ -803,32 +818,34 @@ function buildEyes(f, eyeColour) {
   for (const S of [1, -1]) {
     const eye = new THREE.Group();
     // Slightly proud of the (shallow) socket: recessed eyes vanish at range.
-    eye.position.set(S * 0.031 * f.width, 0.068, 0.0665);
+    eye.position.set(S * 0.031 * f.width, 0.068, 0.0655);
 
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.0135, 16, 12), eyeWhiteMaterial());
-    ball.scale.z = 0.88; // flatten the front so the iris disc sits proud of it
+    // Strongly flattened front-to-back: a full sphere bulged past the lids
+    // and read bug-eyed from three-quarter and profile angles.
+    ball.scale.set(0.94, 1, 0.72);
     eye.add(ball);
 
     const iris = new THREE.Mesh(new THREE.CircleGeometry(0.0068, 16), irisMaterial(eyeColour));
-    iris.position.z = 0.0124; // in FRONT of the flattened ball, or it occludes
+    iris.position.z = 0.0104; // just proud of the flattened ball front
     eye.add(iris);
 
     const pupil = new THREE.Mesh(new THREE.CircleGeometry(0.0030, 12), darkMaterial('#08060a'));
-    pupil.position.z = 0.0128;
+    pupil.position.z = 0.0108;
     eye.add(pupil);
 
     // Upper lid as a rotatable shell, so blinks are a single euler tweak.
     // anim.js drives blinks as rotation.x = -0.30 + closed * 1.35, so -0.30
     // must remain the "open" rest angle.
     const lid = new THREE.Mesh(
-      new THREE.SphereGeometry(0.0146, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.38),
+      new THREE.SphereGeometry(0.0148, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.42),
       skinMaterial(f.skin),
     );
     lid.rotation.x = -0.30;
     eye.add(lid);
 
     const lower = new THREE.Mesh(
-      new THREE.SphereGeometry(0.0143, 16, 8, 0, Math.PI * 2, Math.PI * 0.68, Math.PI * 0.32),
+      new THREE.SphereGeometry(0.0145, 16, 8, 0, Math.PI * 2, Math.PI * 0.65, Math.PI * 0.35),
       skinMaterial(f.skin),
     );
     lower.rotation.x = 0.10;
@@ -841,27 +858,37 @@ function buildEyes(f, eyeColour) {
 }
 
 /**
- * Brows as one smooth strip each, swept along the forehead's horizontal arc —
- * discrete boxes yawed to the surface read as a zigzag at MCU distance.
+ * Brows as strips sampled directly off the inflated skull surface, so they sit
+ * a fixed ~3.5mm proud of the skin whatever the parameter pokes (brow ridge,
+ * temples, f.width) do underneath. The previous analytic arc landed BEHIND the
+ * poked surface for most face seeds and rendered as clipped slivers.
  */
 function buildBrows(f, colour) {
   const group = new THREE.Group();
+  // Brows read as hair shadow, not glossy hair: darken and roughen the colour,
+  // or bright hair (red, blonde) turns them into warpaint streaks.
   const mat = hairMaterial(colour).clone();
+  mat.color = mat.color.clone().lerp(new THREE.Color('#221510'), 0.5);
+  mat.roughness = 0.8;
+  mat.metalness = 0;
   mat.side = THREE.DoubleSide;
+  const N = 9;
+  const V_PER_M = 1 / (Math.PI * 0.096); // metres of arc -> skull v units
   for (const S of [1, -1]) {
     const pos = [];
     const idx = [];
-    const N = 9;
     for (let i = 0; i < N; i++) {
       const t = i / (N - 1);
-      const psi = 0.16 + 0.62 * t; // angle around the forehead arc
-      const x = S * Math.sin(psi) * 0.080 * f.width;
-      const y = 0.0872 + 0.0062 * Math.sin(t * Math.PI * 0.85) - 0.0045 * t * t;
-      const z = 0.0833 + (Math.cos(psi) - 1) * 0.084; // hugs the curvature
-      const h = 0.0026 - t * 0.0007; // strip tapers toward the tail
-      const nz = Math.cos(psi);
-      pos.push(x, y + h, z - nz * 0.0010);
-      pos.push(x, y - h, z + nz * 0.0006);
+      // Sweep from beside the nose bridge out over the eye's outer corner.
+      const theta = THREE.MathUtils.lerp(1.40, 0.86, t);
+      const u = (S > 0 ? theta : Math.PI - theta) / (Math.PI * 2);
+      // Arch peaks about two-thirds out; the tail drops slightly below the head.
+      const v = 0.414 - 0.013 * Math.sin(Math.min(1, t * 1.15) * Math.PI)
+        + 0.030 * Math.max(0, t - 0.70);
+      const dv = (0.0028 - 0.0013 * t) * V_PER_M; // tapers toward the tail
+      const top = skullPoint(u, v - dv, f, 0.0035);
+      const bot = skullPoint(u, v + dv, f, 0.0035);
+      pos.push(top.x, top.y, top.z, bot.x, bot.y, bot.z);
     }
     for (let i = 0; i < N - 1; i++) {
       const a = i * 2;
@@ -1194,11 +1221,15 @@ export function createCharacter(spec, options = {}) {
   // The closed-mouth seam line, and a dark cavity behind the lips so an open
   // mouth reads as open.
   head.add(buildMouthSeam(f));
-  // Sized to hide behind the closed lip bands (front z ~0.052 sits proud of
-  // the pocket floor but well behind the lip crests at ~0.063).
+  // Wide and tall enough to fill the whole opening when the jaw drops (a
+  // narrow cavity let the stretched skin membrane show around a small dark
+  // oval), yet still tucked behind the closed lip bands at rest. Width tracks
+  // f.mouth so it cannot poke through the cheek beside a narrow mouth.
   const cavity = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 10), darkMaterial('#2a1218'));
-  cavity.position.set(0, -0.007, 0.0412);
-  cavity.scale.set(0.88, 0.55, 0.45);
+  cavity.position.set(0, -0.007, 0.042);
+  // 0.92: the cheek curls back faster than the lip-band parabola suggests, so
+  // a cavity as wide as the mouth pierced it beside each corner (dark ticks).
+  cavity.scale.set(0.92 * f.mouth, 0.60, 0.45);
   head.add(cavity);
 
   // Scale last: bind matrices are computed at unit scale above.
