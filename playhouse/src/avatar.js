@@ -844,6 +844,7 @@ export async function saveAvatarFile(character, buffer, filename) {
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
     });
+    db.close();
     return true;
   } catch {
     return false; // private browsing, quota, etc. — not worth failing over
@@ -861,9 +862,10 @@ export async function loadStoredAvatars() {
       tx.oncomplete = () => {
         const out = new Map();
         keys.result.forEach((k, i) => out.set(k, values.result[i]));
+        db.close();
         resolve(out);
       };
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => { db.close(); reject(tx.error); };
     });
   } catch {
     return new Map();
@@ -873,8 +875,15 @@ export async function loadStoredAvatars() {
 export async function clearStoredAvatar(character) {
   try {
     const db = await openDb();
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).delete(character);
+    // Await the commit: "Remove" re-renders on this promise, and a reload right
+    // after must not resurrect the avatar from an uncommitted delete.
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(character);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
   } catch { /* nothing to clear */ }
 }
 

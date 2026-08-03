@@ -134,7 +134,6 @@ fitCanvas();
 // ---------------------------------------------------------------------------
 
 const SCRIPT_KEY = 'playhouse.script';
-const CAST_HINT_KEY = 'playhouse.castHintSeen';
 
 /** localStorage is unavailable in some privacy modes; never fail over it. */
 function remember(key, value) {
@@ -338,7 +337,13 @@ function renderScriptPanel(body) {
   // The panel is rebuilt from scratch on every open, so the textarea is not the
   // buffer — state is. Without this, typing lives only in a node that the next
   // render throws away, and "Stage it" re-stages whatever was last staged.
-  ta.oninput = () => { state.scriptText = ta.value; };
+  // The draft also goes to localStorage (debounced — this fires per keystroke)
+  // so a reload mid-writing does not cost the writer their unstaged work.
+  ta.oninput = () => {
+    state.scriptText = ta.value;
+    clearTimeout(renderScriptPanel._save);
+    renderScriptPanel._save = setTimeout(() => remember(SCRIPT_KEY, state.scriptText), 400);
+  };
   body.appendChild(ta);
 
   const status = document.createElement('div');
@@ -376,8 +381,12 @@ function renderScriptPanel(body) {
 
     const beats = countBeats(preview);
     if (!beats) {
-      const why = preview.parsed.scenes
-        ? `Found ${preview.parsed.scenes} scene heading${preview.parsed.scenes === 1 ? '' : 's'} `
+      // parseScript never reports zero scenes — it invents an empty stage — so
+      // honesty about "you wrote headings but nothing under them" has to come
+      // from counting heading lines in the text itself.
+      const headings = (text.match(/^\s*(?:INT|EXT)[.\s]/gim) || []).length;
+      const why = headings
+        ? `Found ${headings} scene heading${headings === 1 ? '' : 's'} `
           + 'but no dialogue or action underneath.'
         : 'No scene headings, dialogue or action were found.';
       setStatus(`Nothing staged. ${why} Scene headings start with INT. or EXT.; a line in `
@@ -450,6 +459,17 @@ function renderScriptPanel(body) {
 }
 
 // --- Cast -------------------------------------------------------------------
+
+// A filtered picker is a convenience on the desktop — its dialogs always have
+// an "All files" escape hatch — and a wall on a phone: iOS maps accept tokens
+// to UTIs, and .vrm/.fbx have none registered, so a filtered Files sheet greys
+// out exactly the files this panel exists to import. loadAvatar() sniffs the
+// real format from the bytes and never trusts the extension, so on touch
+// devices the picker accepts everything and the loader is the gate.
+const AVATAR_ACCEPT = (navigator.maxTouchPoints || 0) > 0
+  || (window.matchMedia?.('(any-pointer: coarse)').matches ?? false)
+  ? ''
+  : '.glb,.gltf,.vrm,.fbx,model/gltf-binary';
 
 /** How the mouth ended up being driven — visemes, a synthesised jaw, or nothing. */
 function describeMouth(report) {
@@ -551,27 +571,43 @@ function renderCastPanel(body) {
 
     // --- Imported avatar ---------------------------------------------------
     const imported = production.avatars.get(record.name);
+    const importingFile = state.importing.get(record.name);
     const avatarRow = document.createElement('div');
     avatarRow.className = 'row';
     avatarRow.style.margin = '4px 0 10px';
 
     const picker = document.createElement('input');
     picker.type = 'file';
-    picker.accept = '.glb,.gltf,.vrm,model/gltf-binary';
+    picker.accept = AVATAR_ACCEPT;
     picker.style.display = 'none';
-    picker.onchange = () => { if (picker.files?.[0]) importAvatarFor(record.name, picker.files[0]); };
+    picker.onchange = () => {
+      const file = picker.files?.[0];
+      // Clear before importing so re-picking the same file still fires change.
+      picker.value = '';
+      if (file) importAvatarFor(record.name, file);
+    };
     avatarRow.appendChild(picker);
 
     const importBtn = document.createElement('button');
     importBtn.className = imported ? 'btn small' : 'btn small primary';
-    importBtn.textContent = imported ? 'Replace avatar' : 'Import avatar';
+    importBtn.textContent = importingFile ? 'Loading…' : imported ? 'Replace avatar' : 'Import avatar';
+    importBtn.disabled = !!importingFile;
     importBtn.onclick = () => picker.click();
     avatarRow.appendChild(importBtn);
+
+    if (importingFile) {
+      const busy = document.createElement('div');
+      busy.className = 'hint';
+      busy.style.cssText = 'width:100%;margin:2px 0 0';
+      busy.textContent = `Loading ${importingFile} — parsing and retargeting can take a few seconds…`;
+      avatarRow.appendChild(busy);
+    }
 
     if (imported) {
       const drop = document.createElement('button');
       drop.className = 'btn small';
       drop.textContent = 'Remove';
+      drop.disabled = !!importingFile;
       drop.onclick = async () => {
         await clearStoredAvatar(record.name);
         production.clearAvatar(record.name);
@@ -894,14 +930,43 @@ function renderLookPanel(body) {
 // Go
 // ---------------------------------------------------------------------------
 
-try {
+/**
+ * Boot with the writer's saved script when it still stages; otherwise the demo
+ * plays and the saved draft stays in the editor for repair instead of being
+ * silently discarded.
+ */
+function stageInitialScript() {
+  const saved = recall(SCRIPT_KEY);
+  if (saved && saved !== SAMPLE) {
+    try {
+      if (countBeats(parseScript(saved)) > 0) { stageScript(saved); return; }
+    } catch (err) {
+      console.error('Stored script failed to stage; falling back to the sample', err);
+    }
+    stageScript(SAMPLE);
+    // stageScript(SAMPLE) just overwrote both the buffer and the stored copy —
+    // put the draft back so a reload mid-repair still returns to it.
+    state.scriptText = saved;
+    remember(SCRIPT_KEY, saved);
+    state.scriptStatus = {
+      text: 'Restored your saved draft, but it does not stage yet, so the demo is playing. '
+        + 'Press Stage it when it is ready.',
+      tone: 'warn',
+    };
+    return;
+  }
   stageScript(SAMPLE);
+}
+
+try {
+  stageInitialScript();
   ui.bootMsg.textContent = 'Ready';
   setTimeout(() => ui.boot.classList.add('gone'), 260);
   production.seek(0);
   production.play();
   frame();
-  restoreAvatars();
+  // Async on purpose: a slow IndexedDB read must not hold the curtain.
+  restoreAvatars().catch((err) => console.error('Avatar restore failed', err));
 } catch (err) {
   ui.bootMsg.innerHTML = `Failed to start.<br><span style="font-size:11px;color:#c88">${err.message}</span>`;
   console.error(err);
