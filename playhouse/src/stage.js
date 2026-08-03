@@ -843,6 +843,109 @@ export function buildStage(scene, options = {}) {
   return group;
 }
 
+// ---------------------------------------------------------------------------
+// Explicit stages (scene files)
+// ---------------------------------------------------------------------------
+
+const GROUND_COLOUR = {
+  grass: '#4a6238', dirt: '#6a5238', cobble: '#5e564c',
+  stone: '#6e675c', plank: '#6b4a2c',
+};
+
+/**
+ * Build a stage from an explicit layout rather than from a scene heading.
+ *
+ * The archetype path guesses a room from prose; this one is told. Both produce
+ * the same userData contract so the camera, blocking and note systems cannot
+ * tell them apart - which is the point: an authored scene and an inferred one
+ * are the same kind of thing downstream.
+ *
+ * @param {object} env normalised `scene.environment`
+ * @returns {THREE.Group}
+ */
+export function buildExplicitStage(env) {
+  const group = new THREE.Group();
+  group.name = `stage:${env.preset || 'custom'}`;
+  const animated = [];
+  const placed = [];
+  const byId = new Map();
+  const [W, D] = env.size || [30, 30];
+  const mood = moodFor(env.mood || 'DAY', false);
+  if (env.fog !== undefined) {
+    mood.fog = env.fog > 0 ? [env.fog, mood.fog ? mood.fog[1] : mood.background] : null;
+  }
+
+  const kind = env.ground || 'grass';
+  const groundMat = surfaceMaterial(kind, GROUND_COLOUR[kind] || '#4a6238', [W / 3, D / 3]);
+  groundMat.side = THREE.FrontSide;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(W, D), groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  group.add(ground);
+
+  for (const p of env.props || []) {
+    const obj = createProp(p.type, p.options || {});
+    if (!obj) continue;
+    obj.position.set(p.at[0], p.at[1], p.at[2]);
+    obj.rotation.y = p.rot || 0;
+    if (p.scale && p.scale !== 1) obj.scale.setScalar(p.scale);
+    // Hovering props keep their own idea of "home" so their bob is relative to
+    // where the director put them, not to the ground.
+    obj.userData.setHoverHeight?.(p.at[1]);
+    obj.userData.sceneId = p.id;
+    group.add(obj);
+    placed.push(obj);
+    byId.set(p.id, obj);
+    if (obj.userData.update) animated.push(obj);
+  }
+
+  const lights = new THREE.Group();
+  const mk = (cfg, shadow) => {
+    const l = new THREE.DirectionalLight(cfg.colour, cfg.intensity);
+    l.position.set(cfg.dir[0], cfg.dir[1], cfg.dir[2]).multiplyScalar(1.6);
+    if (shadow) {
+      l.castShadow = true;
+      l.shadow.mapSize.set(1024, 1024);
+      const span = Math.max(W, D) * 0.45;
+      l.shadow.camera.left = -span;
+      l.shadow.camera.right = span;
+      l.shadow.camera.top = span;
+      l.shadow.camera.bottom = -span;
+      l.shadow.camera.near = 0.5;
+      l.shadow.camera.far = 90;
+      l.shadow.bias = -0.0016;
+      l.shadow.normalBias = 0.022;
+    }
+    return l;
+  };
+  lights.add(mk(mood.key, true), mk(mood.fill, false), mk(mood.rim, false));
+  lights.add(new THREE.HemisphereLight(mood.ambient.colour, '#1a1410', mood.ambient.intensity));
+  group.add(lights);
+
+  // A shallow downstage arc, used only if something asks for a mark the scene
+  // file did not supply.
+  const marks = [];
+  for (let i = 0; i < 7; i++) {
+    const t = i / 6;
+    const a = (t - 0.5) * Math.PI * 0.62;
+    marks.push({ position: new THREE.Vector3(Math.sin(a) * 3.0, 0, Math.cos(a) * 1.8 - 0.5), facing: -a * 0.4 });
+  }
+
+  group.userData = {
+    arch: { key: env.preset || 'custom', exterior: true },
+    mood,
+    lights,
+    marks,
+    animated,
+    props: placed,
+    byId,
+    surfaces: [],
+    bounds: { width: W, height: 24, depth: D, exterior: true },
+    explicit: true,
+  };
+  return group;
+}
+
 /** Scan a scene's heading and prose for props the archetype didn't provide. */
 export function propsForScene(scene) {
   const found = new Set();

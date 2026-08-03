@@ -113,6 +113,30 @@ export const POSES = {
     upperArmR: [-8, 0, -6], foreArmR: [-18, 0, -3],
     spine: [-5, 0, 0], chest: [6, 0, 0], neck: [-10, 0, 0], head: [-8, 0, 0],
   },
+  run: {
+    upperArmL: [-62, 0, 10], foreArmL: [-92, 0, 8],
+    upperArmR: [38, 0, -10], foreArmR: [-78, 0, -8],
+    spine: [14, 0, 0], chest: [6, 0, 0], neck: [-12, 0, 0], head: [-6, 0, 0],
+    hips: [4, 0, 0],
+  },
+  handsUp: {
+    upperArmL: [-8, 0, 152], foreArmL: [-26, 0, 22],
+    upperArmR: [-8, 0, -152], foreArmR: [-26, 0, -22],
+    clavL: [0, 0, 14], clavR: [0, 0, -14],
+    spine: [3, 0, 0], chest: [2, 0, 0], neck: [4, 0, 0], head: [2, 0, 0],
+  },
+  aim: {
+    // Right hand on the grip, left forward on the handguard, shoulders squared.
+    upperArmR: [-74, -18, -22], foreArmR: [-58, 0, -6],
+    upperArmL: [-82, 22, 16], foreArmL: [-42, 0, 4],
+    spine: [4, -10, 0], chest: [-2, 8, 0], neck: [0, 6, 0], head: [-2, 4, 0],
+  },
+  flinch: {
+    upperArmL: [-42, 0, 10], foreArmL: [-96, 0, 12],
+    upperArmR: [-42, 0, -10], foreArmR: [-96, 0, -12],
+    clavL: [0, 0, 12], clavR: [0, 0, -12],
+    spine: [12, 0, 0], chest: [8, 0, 0], neck: [10, 0, 0], head: [8, 0, 0],
+  },
   bow: {
     upperArmL: [-18, 0, 10], foreArmL: [-40, 0, 6],
     upperArmR: [-18, 0, -10], foreArmR: [-40, 0, -6],

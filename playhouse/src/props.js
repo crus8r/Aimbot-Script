@@ -921,11 +921,141 @@ function buildLantern({ metal = '#4a4038' } = {}) {
 // Registry
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Drone
+// ---------------------------------------------------------------------------
+
+/**
+ * A quadrotor. Reads as menacing mostly through the sensor eye and the way it
+ * holds station — a dead-still hover with a twitchy scan beats any amount of
+ * greebling at the distance drones are actually shot from.
+ */
+function buildDrone({ shell = '#33383f', accent = '#ff3b30' } = {}) {
+  const g = new THREE.Group();
+  const body = metalMaterial(shell, 0.5);
+  const dark = darkMaterial('#16181c');
+
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.14, 16, 12), body);
+  core.scale.set(1.55, 0.60, 1.15);
+  core.castShadow = true;
+  g.add(core);
+
+  // Canopy: a darker upper shell gives the silhouette a "front".
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.115, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), dark);
+  canopy.scale.set(1.35, 0.75, 1.0);
+  canopy.position.set(0, 0.035, 0.02);
+  g.add(canopy);
+
+  const rotors = [];
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const ax = Math.cos(a) * 0.24;
+    const az = Math.sin(a) * 0.24;
+
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.020, 0.20, 8), body);
+    arm.position.set(ax * 0.55, 0.004, az * 0.55);
+    arm.rotation.z = Math.PI / 2;
+    arm.rotation.y = -a;
+    arm.castShadow = true;
+    g.add(arm);
+
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.042, 0.05, 10), body);
+    pod.position.set(ax, 0.012, az);
+    g.add(pod);
+
+    // Rotor disc: at speed a real blade is a translucent smear, so model that
+    // rather than blades that would strobe against the frame rate.
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(0.115, 20),
+      new THREE.MeshBasicMaterial({
+        color: '#8fa0b4', transparent: true, opacity: 0.20,
+        side: THREE.DoubleSide, depthWrite: false,
+      }),
+    );
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.set(ax, 0.042, az);
+    g.add(disc);
+
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.005, 0.022), dark);
+    blade.position.set(ax, 0.042, az);
+    g.add(blade);
+    rotors.push({ blade, disc, dir: i % 2 ? 1 : -1 });
+  }
+
+  // Gimbal and sensor eye.
+  const gimbal = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 10), dark);
+  gimbal.position.set(0, -0.055, 0.045);
+  g.add(gimbal);
+
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 10), glowMaterial(accent, 0.95));
+  eye.position.set(0, -0.058, 0.092);
+  g.add(eye);
+
+  const eyeLight = new THREE.PointLight(accent, 1.6, 3.2, 2);
+  eyeLight.position.set(0, -0.06, 0.13);
+  g.add(eyeLight);
+
+  // Navigation strobes.
+  const strobe = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), glowMaterial('#7fe8a0', 0.9));
+  strobe.position.set(0, 0.05, -0.14);
+  g.add(strobe);
+
+  const home = { y: 0 };
+  g.userData.update = (dt, t) => {
+    for (const r of rotors) {
+      r.blade.rotation.y += dt * 48 * r.dir;
+      r.disc.rotation.y += dt * 9 * r.dir;
+    }
+    // Station-keeping: a slow bob with a faster micro-correction on top.
+    g.position.y = home.y + Math.sin(t * 1.3) * 0.035 + Math.sin(t * 5.7) * 0.008;
+    g.rotation.z = Math.sin(t * 0.9) * 0.035;
+    g.rotation.x = Math.cos(t * 1.1) * 0.028;
+    eye.scale.setScalar(1 + Math.sin(t * 3.1) * 0.12);
+    eyeLight.intensity = 1.3 + Math.sin(t * 3.1) * 0.5;
+    strobe.material.opacity = (t % 1.4) < 0.09 ? 1 : 0.06;
+  };
+  g.userData.setHoverHeight = (y) => { home.y = y; };
+  g.userData.lightSource = eyeLight;
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// Rifle
+// ---------------------------------------------------------------------------
+
+/**
+ * Built pointing along +Z so attachToHand's forward axis aims it correctly.
+ * Silhouette is everything here: stock, magazine, and a long barrel read as a
+ * rifle from any distance a rifle is ever framed at.
+ */
+function buildRifle({ metal = '#2c3036', furniture = '#3f3a34' } = {}) {
+  const g = new THREE.Group();
+  const m = metalMaterial(metal, 0.55);
+  const f = fabricMaterial(furniture, 0.75);
+
+  g.add(box(0.045, 0.075, 0.26, f, 0, -0.005, -0.20));      // stock
+  g.add(box(0.05, 0.09, 0.22, m, 0, 0, 0.005));             // receiver
+  g.add(box(0.035, 0.10, 0.055, f, 0, -0.085, -0.045));     // grip
+  const mag = box(0.030, 0.13, 0.055, m, 0, -0.095, 0.045);
+  mag.rotation.x = -0.18;
+  g.add(mag);
+  g.add(cyl(0.014, 0.016, 0.34, m, 10, 0, 0.012, 0.28));    // barrel
+  g.add(box(0.032, 0.030, 0.15, f, 0, -0.020, 0.19));       // handguard
+  g.add(box(0.016, 0.032, 0.075, m, 0, 0.062, 0.02));       // optic
+  g.add(cyl(0.017, 0.017, 0.07, m, 8, 0, 0.075, 0.03).rotateX(Math.PI / 2));
+
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  g.userData.grip = { position: new THREE.Vector3(0, -0.085, -0.045), rotation: 0 };
+  return g;
+}
+
 /**
  * name -> { build, size [w,h,d], category, tags }
  * `size` is the footprint used for placement and collision avoidance.
  */
 export const PROPS = {
+  drone: { build: buildDrone, size: [0.55, 0.30, 0.55], category: 'vehicle', tags: ['air'] },
+  rifle: { build: buildRifle, size: [0.10, 0.20, 0.70], category: 'handheld', tags: ['held'] },
   oilLamp: { build: buildOilLamp, size: [0.13, 0.37, 0.13], category: 'light', tags: ['table', 'hero'] },
   grandfatherClock: { build: buildGrandfatherClock, size: [0.58, 2.20, 0.36], category: 'furniture', tags: ['wall', 'hero'] },
   candle: { build: buildCandle, size: [0.09, 0.24, 0.09], category: 'light', tags: ['table'] },
@@ -987,6 +1117,8 @@ export function createProp(name, opts = {}) {
 
 /** Loose keyword -> prop name, so scripts can call for things in prose. */
 const PROP_KEYWORDS = {
+  drone: ['drone', 'drones', 'quadcopter', 'uav'],
+  rifle: ['rifle', 'rifles', 'gun', 'guns', 'weapon', 'weapons', 'carbine'],
   oilLamp: ['oil lamp', 'lamp', 'oil-lamp'],
   lantern: ['lantern', 'carry lantern', 'hand lantern'],
   grandfatherClock: ['grandfather clock', 'longcase clock', 'clock', 'grandfather'],

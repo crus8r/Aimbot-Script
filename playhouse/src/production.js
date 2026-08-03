@@ -16,6 +16,8 @@ import { direct, solveShot, shotAt, describeShot, findStageProp } from './direct
 import { disposeObject } from './engine.js';
 import { MAGIC_COLOURS } from './human.js';
 import { loadAvatar, Retargeter, measureRestPose } from './avatar.js';
+import { normaliseScene, validateScene } from './scenefile.js';
+import { buildExplicitStage } from './stage.js';
 import { NoteStack, applyNotes } from './notes.js';
 import { createProp, attachToHand, detachFromHand, propsMentioned, PROP_NAMES } from './props.js';
 
@@ -64,6 +66,8 @@ export class Production {
     this.stageCache = new Map();
     this.stage = null;
     this.sceneIndex = -1;
+    this.sceneMode = false;
+    this.sceneFile = null;
 
     this.time = 0;
     this.playing = false;
@@ -362,6 +366,192 @@ export class Production {
     return map;
   }
 
+
+  // -------------------------------------------------------------------------
+  // Scene files
+  // -------------------------------------------------------------------------
+
+  /**
+   * Play an explicit scene file instead of an inferred script.
+   *
+   * Everything downstream — camera solving, notes, speech, held props — is
+   * unchanged; only the source of truth moves from "guessed from prose" to
+   * "stated outright".
+   *
+   * @param {object} sceneFile
+   * @returns {object} the normalised scene
+   */
+  loadScene(sceneFile) {
+    const check = validateScene(sceneFile);
+    if (!check.ok) {
+      throw new Error(`scene file invalid:\n  ${check.errors.join('\n  ')}`);
+    }
+    const scene = normaliseScene(sceneFile);
+
+    for (const name of [...this.cast.keys()]) this.#destroyCharacter(name);
+    if (this.stage) {
+      this.engine.scene.remove(this.stage);
+      disposeObject(this.stage);
+      this.stage = null;
+    }
+    for (const cached of this.stageCache.values()) disposeObject(cached);
+    this.stageCache.clear();
+    this.vfx.clear();
+
+    this.sceneMode = true;
+    this.sceneFile = scene;
+    this.currentBeat = null;
+    this.firedCues.clear();
+    this.script = {
+      meta: { title: scene.title, author: '' },
+      scenes: [],
+      characters: scene.cast.map((c) => ({ name: c.id, lines: 0, songLines: 0 })),
+    };
+
+    this.stage = buildExplicitStage(scene.environment);
+    this.engine.scene.add(this.stage);
+    this.engine.applyMood(this.stage.userData.mood);
+    this.sceneIndex = 0;
+
+    scene.cast.forEach((c, i) => {
+      const spec = castCharacter(c.id, c.spec || {}, i);
+      const character = createCharacter(spec);
+      const animator = new Animator(character, i);
+      const mover = new Mover(character, animator);
+      this.cast.set(c.id, character);
+      this.specs.set(c.id, spec);
+      this.animators.set(c.id, animator);
+      this.movers.set(c.id, mover);
+      this.engine.scene.add(character);
+      mover.snapTo(new THREE.Vector3(c.at[0], c.at[1], c.at[2]), c.facing);
+    });
+
+    const shots = scene.shots.map((s) => {
+      const subjectIsCast = !!s.camera.subject && this.cast.has(s.camera.subject);
+      return {
+        id: s.id,
+        scene: 0,
+        beat: null,
+        start: s.start,
+        duration: s.duration,
+        size: s.camera.size,
+        subject: subjectIsCast ? s.camera.subject : null,
+        subjectProp: !subjectIsCast && s.camera.subject ? s.camera.subject : null,
+        insert: !subjectIsCast && !!s.camera.subject,
+        secondary: s.camera.secondary && this.cast.has(s.camera.secondary) ? s.camera.secondary : null,
+        // `track` is a dolly that holds the subject; the solver already does
+        // that, so it only needs the lateral move.
+        move: s.camera.move === 'track' ? 'dolly' : s.camera.move,
+        side: s.camera.side,
+        height: s.camera.height,
+        worldTarget: s.camera.lookAt ? new THREE.Vector3(...s.camera.lookAt) : null,
+        explicitAt: s.camera.at ? new THREE.Vector3(...s.camera.at) : null,
+        sceneShot: s,
+      };
+    });
+
+    this.plan = {
+      shots,
+      scenes: [{ index: 0, start: 0, duration: scene.duration, scene: null }],
+      duration: scene.duration,
+    };
+    this.notes = this.notes || null;
+    this.seek(0);
+    return scene;
+  }
+
+  /** World position of a cast member or a placed prop, by scene id. */
+  #worldOf(id) {
+    const character = this.cast.get(id);
+    if (character) return headPosition(character);
+    const prop = this.stage?.userData.byId?.get(id);
+    if (prop) return prop.getWorldPosition(new THREE.Vector3());
+    return null;
+  }
+
+  /** Run one scene shot's action list. */
+  #applySceneShot(shot) {
+    const s = shot.sceneShot;
+    if (!s) return;
+    this.caption = s.caption || null;
+
+    for (const a of s.actions || []) {
+      const animator = this.animators.get(a.actor);
+      const mover = this.movers.get(a.actor);
+      const character = this.cast.get(a.actor);
+      const prop = this.stage?.userData.byId?.get(a.actor);
+
+      switch (a.do) {
+        case 'move': {
+          if (!mover) break;
+          const to = a.to.length === 2
+            ? new THREE.Vector3(a.to[0], 0, a.to[1])
+            : new THREE.Vector3(a.to[0], a.to[1], a.to[2]);
+          const speed = a.speed ?? 1.2;
+          mover.moveTo(to, a.facing ?? null, speed);
+          // A run is a pose as much as a rate; without the forward lean a fast
+          // walk cycle just reads as a hurried walk.
+          if (a.pose) animator?.setPose(a.pose);
+          else if (speed > 2.2) animator?.setPose('run');
+          break;
+        }
+        case 'pose':
+          animator?.setPose(a.pose);
+          if (a.pose === 'handsUp' || a.pose === 'flinch') animator?.clearLook();
+          break;
+        case 'face': {
+          if (!mover) break;
+          if (a.target) {
+            const t = this.#worldOf(a.target);
+            if (t && character) {
+              mover.facing = Math.atan2(t.x - character.position.x, t.z - character.position.z);
+            }
+          } else if (a.to !== undefined) {
+            mover.facing = a.to;
+          }
+          break;
+        }
+        case 'look': {
+          const t = a.target ? this.#worldOf(a.target) : (a.at ? new THREE.Vector3(...a.at) : null);
+          if (t) animator?.lookAt(t, a.weight ?? 0.95);
+          break;
+        }
+        case 'hold': {
+          const held = this.#propForHand(a.prop, true);
+          if (held) this.#holdProp(held, a.actor, a.hand || 'R');
+          break;
+        }
+        case 'release': {
+          const held = this.#heldPropNamed(a.prop);
+          if (held) this.#releaseProp(held);
+          break;
+        }
+        case 'vfx': {
+          const origin = character ? character.position.clone() : (prop ? prop.position.clone() : new THREE.Vector3());
+          const target = a.target ? this.#worldOf(a.target) : null;
+          this.vfx.spawn(a.ability || 'light', { origin, target, colour: a.colour, character });
+          break;
+        }
+        case 'prop': {
+          if (!prop) break;
+          if (a.to) {
+            prop.position.set(
+              a.to[0],
+              a.to.length === 2 ? prop.position.y : a.to[1],
+              a.to.length === 2 ? a.to[1] : a.to[2],
+            );
+            prop.userData.setHoverHeight?.(prop.position.y);
+          }
+          if (a.rot !== undefined) prop.rotation.y = a.rot;
+          if (a.hover !== undefined) prop.userData.setHoverHeight?.(a.hover);
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Playback
   // -------------------------------------------------------------------------
@@ -408,7 +598,7 @@ export class Production {
     const shot = shotAt(this.plan.shots, this.time);
     if (!shot) return;
 
-    if (shot.scene !== this.sceneIndex) this.#ensureScene(shot.scene);
+    if (!this.sceneMode && shot.scene !== this.sceneIndex) this.#ensureScene(shot.scene);
 
     // Director notes season the pristine shot; cut detection stays on the raw
     // shot object so toggling a note mid-shot never re-triggers a cut.
@@ -418,14 +608,15 @@ export class Production {
     if (isCut) {
       this.currentShot = shot;
       this.cutFlash = 1;
-      this.#onShotStart(staged);
+      if (this.sceneMode) this.#applySceneShot(staged);
+      else this.#onShotStart(staged);
     }
     this.slate = describeShot(staged);
 
     const t = THREE.MathUtils.clamp((this.time - staged.start) / Math.max(0.001, staged.duration), 0, 1);
 
     // --- Beat state -------------------------------------------------------
-    if (shot.beat !== this.currentBeat) {
+    if (!this.sceneMode && shot.beat !== this.currentBeat) {
       this.currentBeat = shot.beat;
       this.#onBeatStart(shot.beat, shot);
     }
@@ -454,6 +645,9 @@ export class Production {
 
     // --- Camera -----------------------------------------------------------
     const solved = solveShot(staged, this.cast, this.stage, t, elapsed);
+    // A scene file may pin the camera outright; the solver still supplies the
+    // aim, headroom and lens so an explicit position is a nudge, not an escape.
+    if (staged.explicitAt) solved.position.copy(staged.explicitAt);
     if (isCut) {
       this.camPos.copy(solved.position);
       this.camLook.copy(solved.lookAt);
