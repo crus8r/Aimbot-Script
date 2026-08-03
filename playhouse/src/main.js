@@ -260,6 +260,10 @@ function frame() {
   // A loaded recording silences TTS outright: the recording is the
   // performance, and two clocks fighting is worse than either alone.
   speech.suppressed = state.audioMaster && audio.loaded;
+  // A line already sounding when the recording becomes master (mid-line upload
+  // or "Audio drives timing" toggle) must stop too — suppressed only gates
+  // NEW speaks, and a stale `holding` would otherwise freeze the plan clock.
+  if (speech.suppressed && speech.speaking) speech.cancel();
   speech.update(dt);
 
   // When a recording is loaded it is the master clock — the performance

@@ -383,20 +383,24 @@ try {
   // --- A7: overrun -> bounded `holding` stall; boundary-driven envelope moves.
   try {
     // A6 just staged a new scene; let swiftshader finish compiling its shaders
-    // so multi-second frames don't distort the wall clock mid-test.
-    await ev(page, () => new Promise((res) => {
-      let last = performance.now();
-      let calm = 0;
-      const t0 = last;
-      const tick = () => {
-        const now = performance.now();
-        calm = now - last < 150 ? calm + 1 : 0;
-        last = now;
-        if (calm >= 3 || now - t0 > 10000) res();
-        else requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    }), null, 15000);
+    // so multi-second frames don't distort the wall clock mid-test. Best-effort:
+    // shader compiles can block the page's main thread past any rAF/timer, so
+    // a settle timeout must not fail A7 outright — it only risks slower frames.
+    try {
+      await ev(page, () => new Promise((res) => {
+        let last = performance.now();
+        let calm = 0;
+        const t0 = last;
+        const tick = () => {
+          const now = performance.now();
+          calm = now - last < 150 ? calm + 1 : 0;
+          last = now;
+          if (calm >= 3 || now - t0 > 10000) res();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }), null, 40000);
+    } catch { /* settle is an optimisation, never a verdict */ }
     const s = await ev(page, async () => {
       const sd = window.__sd;
       const p = window.playhouse.production;
