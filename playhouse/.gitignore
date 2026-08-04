@@ -3,3 +3,4 @@ dist/
 shots/
 test/fixtures/
 tools/_tmp-*
+build/
