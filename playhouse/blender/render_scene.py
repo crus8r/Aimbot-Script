@@ -1175,7 +1175,99 @@ def view_is_blocked(scene, dg, blender_pos, blender_look, ignore, clearance):
     return False
 
 
-def unblock_camera(scene, world, position, look_at, ignore, warn, shot_id):
+def face_is_covered(scene, dg, blender_pos, blender_look, focus, radius=0.30):
+    """Is the subject's own body between the lens and their face?
+
+    The blocking gate has to ignore the subject -- a ray toward someone's head
+    hits their head, and a check that called that "blocked" would reject every
+    shot ever framed. But ignoring the whole armature makes the commonest
+    close-up failure invisible: on the `held` shot the runner has both hands
+    up, and the solver put the lens behind his own raised forearm. The frame
+    is a forty-degree close-up of a wrist.
+
+    So the subject is not ignored here; *proximity to the aim point* is. Any
+    hit within `radius` of what the camera is pointing at is the face, the
+    hair or the collar and is fine. A hit further away that still belongs to
+    the subject is a limb in the way.
+    """
+    if focus is None:
+        return False
+    parts = {focus["obj"], *_descendants(focus["obj"])}
+    delta = blender_look - blender_pos
+    span = delta.length
+    if span < 1e-6:
+        return False
+    direction = delta / span
+
+    travelled = 0.0
+    for _ in range(8):
+        origin = blender_pos + direction * travelled
+        hit, location, _n, _i, obj, _m = scene.ray_cast(
+            dg, origin, direction, distance=span * 0.98 - travelled)
+        if not hit:
+            return False
+        if obj in parts and (location - blender_look).length > radius:
+            return True
+        travelled = (location - blender_pos).length + 1e-3
+        if travelled >= span * 0.98:
+            return False
+    return False
+
+
+def nearest_part_distance(focus, blender_pos):
+    """Distance from the lens to the closest bit of the subject.
+
+    Evaluated geometry, not rest geometry: an armature's bounding box says
+    nothing about where a raised arm currently is, and a raised arm is exactly
+    what this exists to measure.
+    """
+    if focus is None:
+        return None
+    dg = bpy.context.evaluated_depsgraph_get()
+    best = None
+    for part in [focus["obj"], *_descendants(focus["obj"])]:
+        if part.type != "MESH":
+            continue
+        evaluated = part.evaluated_get(dg)
+        for corner in evaluated.bound_box:
+            span = ((evaluated.matrix_world @ Vector(corner)) - blender_pos).length
+            if best is None or span < best:
+                best = span
+    return best
+
+
+def hold_subject_back(position, look_at, focus, want, warn, shot_id):
+    """Retreat until no part of the subject is nearer than `want`.
+
+    A shot size is a promise about how big a person is in frame, and the
+    solver keeps that promise by measuring one point -- the head. A body is
+    not a point. On the `held` shot the runner has both hands up: the head
+    solved to a correct 0.84 m for a close-up, and his forearm ended up 0.35 m
+    from the lens, so the close-up delivered was a close-up of a wrist.
+
+    Backing off along the existing view axis is the only correction that keeps
+    the angle the director chose, and it is what an operator does when an
+    actor's gesture crowds the lens.
+    """
+    if focus is None:
+        return position
+    have = nearest_part_distance(focus, to_blender(position))
+    if have is None or have >= want:
+        return position
+    view = position - look_at
+    span = view.length
+    if span < 1e-4:
+        return position
+    # Retreat by the shortfall along the view axis, capped so a close-up
+    # cannot silently become a medium.
+    push = min(want - have, span * 1.6)
+    warn(f"shot {shot_id!r}: subject's nearest point was {have:.2f} m from a "
+         f"lens framed for {want:.2f} m; backed off {push:.2f} m")
+    return position + (view / span) * push
+
+
+def unblock_camera(scene, world, position, look_at, ignore, warn, shot_id,
+                   face_of=None):
     """Move a camera that is inside scenery, keeping the shot it was given.
 
     director.js solves a camera against abstract marks and never asks whether
@@ -1209,9 +1301,18 @@ def unblock_camera(scene, world, position, look_at, ignore, warn, shot_id):
         floor = terrain_height(ground, blender_pos.x, blender_pos.y) + 0.35
         if blender_pos.z < floor:
             return False
-        return not (camera_is_buried(scene, dg, blender_pos)
-                    or view_is_blocked(scene, dg, blender_pos,
-                                       to_blender(look_at), ignore, clearance))
+        if camera_is_buried(scene, dg, blender_pos):
+            return False
+        if view_is_blocked(scene, dg, blender_pos, to_blender(look_at),
+                           ignore, clearance):
+            return False
+        # Self-occlusion only matters on the strict pass. On the fallback the
+        # camera is already compromising, and a partly covered face beats a
+        # lens inside a tree.
+        if clearance is None and face_is_covered(scene, dg, blender_pos,
+                                                 to_blender(look_at), face_of):
+            return False
+        return True
 
     # Two passes over the same candidates. The first insists on a completely
     # clear sightline; the second only insists the lens is not buried and
@@ -1219,7 +1320,7 @@ def unblock_camera(scene, world, position, look_at, ignore, warn, shot_id):
     # with a clean view of the subject beats the intended angle through a
     # trunk, but the intended angle with a leaf in the corner beats a camera
     # swung 60 degrees away from the shot that was asked for.
-    for clearance, label in ((None, "the subject was hidden behind scenery"),
+    for clearance, label in ((None, "the subject was obstructed"),
                              (0.55, "the camera was inside scenery")):
         for swing, lift in trials:
             candidate = look_at + _rot_y(offset, swing)
@@ -1500,8 +1601,23 @@ def main(argv):
                 if focus is not None:
                     ignore.add(focus["obj"])
                     ignore.update(_descendants(focus["obj"]))
-            position = unblock_camera(scene, world, position, look_at,
-                                      ignore, warn, shot["id"])
+            # Only a shot framed on a face can have its face covered; a wide
+            # of someone with their arm up is that shot working.
+            spec = SHOT_SIZES.get(shot["size"], SHOT_SIZES["MS"])
+            aims_at_face = spec["aim"] == "head"
+            # Only shots framed on a head or a chest are protected from the
+            # subject's own limbs. On a wide the whole body IS the subject, so
+            # a hand nearer the lens than the torso is not a problem to solve
+            # — applying the rule there just backed an EWS off for no reason.
+            # 0.80 of nominal: a shoulder may still lead the frame, which is
+            # good, but a forearm cannot become the subject.
+            subject = world["cast"].get(shot["subject"])
+            if subject is not None and not shot["ots"] and spec["aim"] in ("head", "chest"):
+                position = hold_subject_back(position, look_at, subject,
+                                             spec["dist"] * 0.80, warn, shot["id"])
+            position = unblock_camera(
+                scene, world, position, look_at, ignore, warn, shot["id"],
+                face_of=world["cast"].get(shot["subject"]) if aims_at_face else None)
 
         heading = aim_camera(cam, position, look_at, fov)
         light_for_camera(world, heading, fov,
