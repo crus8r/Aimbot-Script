@@ -386,6 +386,10 @@ export class Production {
     if (!check.ok) {
       throw new Error(`scene file invalid:\n  ${check.errors.join('\n  ')}`);
     }
+    // A warning is almost always "this previews but will be missing from the
+    // Blender render", which is invisible here by definition — the preview is
+    // the half that works. Said out loud, or a director finds out at delivery.
+    for (const w of check.warnings) console.warn(`scene file: ${w}`);
     const scene = normaliseScene(sceneFile);
 
     for (const name of [...this.cast.keys()]) this.#destroyCharacter(name);

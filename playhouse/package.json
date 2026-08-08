@@ -6,7 +6,9 @@
   "description": "Script in, staged performance out. A procedural director for screenplays, plays and musicals.",
   "scripts": {
     "build": "node tools/build.mjs",
-    "test": "node tools/smoke.mjs",
+    "vocabulary": "node tools/vocabulary.mjs",
+    "vocabulary:check": "node tools/vocabulary.mjs --check",
+    "test": "node tools/vocabulary.mjs --check && node tools/smoke.mjs",
     "serve": "node tools/serve.mjs"
   },
   "devDependencies": {

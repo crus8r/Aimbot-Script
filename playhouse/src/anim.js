@@ -143,9 +143,24 @@ export const POSES = {
     spine: [34, 0, 0], chest: [12, 0, 0], neck: [-20, 0, 0], head: [-10, 0, 0],
     hips: [8, 0, 0],
   },
+  // The trailing leg is folded so the shin lies along the floor. It used to
+  // be near straight (thigh -24, shin 30), which is not a kneel at all — it
+  // is a lunge, and no pelvis height puts both legs on the ground from it:
+  // measured, one leg hung 0.41 m in the air whatever the drop.
+  //
+  // These angles are DELIBERATELY not ph_assets.py's (10 / 100). Both tables
+  // were solved the same way — vary the angles and the root drop together,
+  // measure the lowest vertex of each leg, minimise the gap — and the two
+  // rigs land on different answers because their thigh-to-shin ratios differ
+  // (0.390/0.430 here against ph_assets' 0.2615/0.226). Cross-applying either
+  // answer leaves one leg ~9 cm off the floor. What has to match between the
+  // renderers is that the pose READS the same and both figures touch their
+  // own floor, not that the numbers are equal. tools/vocabulary.mjs reports
+  // every value-level divergence between the tables so this stays a choice
+  // rather than becoming a drift.
   kneel: {
     thighL: [-88, 0, 4], shinL: [96, 0, 0], footL: [-12, 0, 0],
-    thighR: [-24, 0, -6], shinR: [30, 0, 0],
+    thighR: [2, 0, -6], shinR: [92, 0, 0], footR: [-52, 0, 0],
     upperArmL: [-14, 0, 8], foreArmL: [-40, 0, 6],
     upperArmR: [-14, 0, -8], foreArmR: [-40, 0, -6],
     spine: [6, 0, 0], hips: [0, 0, 0],
@@ -188,6 +203,43 @@ const BONE_KEYS = [
   'thighL', 'shinL', 'footL', 'thighR', 'shinR', 'footR',
 ];
 
+/** Standing height of the hips bone, from human.js's BONE_TABLE. */
+const HIP_HEIGHT = 0.950;
+
+/**
+ * How far the pelvis drops for a pose that folds the legs, in metres.
+ *
+ * A pose is only a set of bone rotations, and rotations cannot move the root.
+ * Fold the legs without lowering the hips and the feet leave the floor: `sit`
+ * hangs the figure 35 cm in the air, which is the "seated on nothing" read.
+ *
+ * Read off human.js's BONE_TABLE, where the thigh runs 0.905 -> 0.515 (0.390)
+ * and the shin 0.515 -> 0.085 (0.430), so the hip joint stands 0.820 m above
+ * the ankle. Folding shortens that to thigh*cos(thigh from vertical) +
+ * shin*cos(shin from vertical), and the drop is the difference:
+ *
+ *   sit    thigh 84 deg, shin 4 deg (-84 + 80 from the table):
+ *          0.390*cos84 + 0.430*cos4 = 0.041 + 0.429 = 0.470  ->  0.350
+ *   kneel  the pelvis rides on the kneeling thigh alone — the shin runs
+ *          backward along the floor rather than downward — so the drop is
+ *          nearly a whole shin: 0.390*cos2 = 0.390 left under the hip joint,
+ *          against 0.820 standing  ->  0.430 by arithmetic, 0.395 measured.
+ *          The 3.5 cm difference is the raised leg's sole and ankle, which
+ *          bone lengths alone do not account for; the measurement wins.
+ *
+ * The kneel figure was found by measuring, not derived: pose angles and drop
+ * were varied together and the lowest vertex of each leg read off the built
+ * mesh until the two contacts agreed. Result: both within 1.4 mm, and
+ * identical across all five builds, because BUILDS only scales arm length and
+ * mesh radius — never the legs.
+ *
+ * ph_assets._ROOT_OFFSET is the same idea for the Blender rig and carries
+ * DIFFERENT numbers on purpose: that figure has a longer thigh and a higher
+ * hip, so it has further to fall. Each is derived from its own skeleton, which
+ * is the only way both sets of feet land on the same floor.
+ */
+const ROOT_DROP = { sit: 0.350, kneel: 0.395 };
+
 /**
  * Layered animator for one character.
  */
@@ -221,6 +273,8 @@ export class Animator {
     this.walkPhase = 0;
     this.walkSpeed = 0;
     this.sitting = false;
+    this.rootDrop = 0;
+    this.rootDropTarget = 0;
 
     this.setPose('idle', true);
   }
@@ -230,11 +284,13 @@ export class Animator {
     const pose = POSES[name] || POSES.idle;
     this.poseName = name;
     this.sitting = name === 'sit' || name === 'kneel';
+    this.rootDropTarget = ROOT_DROP[name] || 0;
     for (const key of BONE_KEYS) {
       const v = pose[key];
       this.target[key].set(v ? d(v[0]) : 0, v ? d(v[1]) : 0, v ? d(v[2]) : 0);
       if (immediate) this.current[key].copy(this.target[key]);
     }
+    if (immediate) this.rootDrop = this.rootDropTarget;
   }
 
   /** Aim head and eyes at a world position. */
@@ -272,6 +328,9 @@ export class Animator {
     for (const key of BONE_KEYS) {
       this.current[key].lerp(this.target[key], k);
     }
+    // On the same easing as the rotations, so the figure lowers as the legs
+    // fold rather than dropping first and folding afterwards.
+    this.rootDrop += (this.rootDropTarget - this.rootDrop) * k;
 
     // --- Write base pose --------------------------------------------------
     for (const key of BONE_KEYS) {
@@ -280,6 +339,10 @@ export class Animator {
       const c = this.current[key];
       bone.rotation.set(c.x, c.y, c.z);
     }
+    // Written every frame, not only while seated: the idle and walk layers
+    // below both set this outright, and between them and a held sit there is
+    // no other owner of the pelvis height.
+    if (this.bones.hips) this.bones.hips.position.y = HIP_HEIGHT - this.rootDrop;
 
     // --- Additive: breathing ---------------------------------------------
     const breath = Math.sin(t * 1.15) * 0.5 + 0.5;
@@ -290,13 +353,23 @@ export class Animator {
     if (this.bones.spine) this.bones.spine.rotation.x += (breath - 0.5) * 0.018;
 
     // --- Additive: idle weight shift and sway ----------------------------
-    if (!this.sitting && this.walkSpeed < 0.05) {
-      const sway = Math.sin(t * 0.42) * 0.030 + Math.sin(t * 0.27) * 0.018;
-      const bobY = Math.sin(t * 0.84) * 0.006;
+    // Gated on the pelvis having actually come back up, not on `sitting`.
+    // `sitting` is a property of the pose NAME and flips the instant setPose
+    // is called, whereas rootDrop takes about a second to ease out — so a
+    // boolean gate handed this layer the pelvis one frame after a stand-up
+    // began, and it wrote HIP_HEIGHT outright while the legs were still
+    // folded. The figure snapped 35 cm upright and then unfolded in mid-air,
+    // which is the seated bug this run was called to kill, moved to the exit.
+    const risen = 1 - Math.min(1, this.rootDrop / 0.08);
+    if (risen > 0 && this.walkSpeed < 0.05) {
+      const sway = (Math.sin(t * 0.42) * 0.030 + Math.sin(t * 0.27) * 0.018) * risen;
+      const bobY = Math.sin(t * 0.84) * 0.006 * risen;
       if (this.bones.hips) {
         this.bones.hips.rotation.z += sway * 0.4;
-        this.bones.hips.rotation.y += Math.sin(t * 0.31) * 0.035;
-        this.bones.hips.position.y = 0.95 + bobY;
+        this.bones.hips.rotation.y += Math.sin(t * 0.31) * 0.035 * risen;
+        // Additive. The base-pose write above owns the pelvis height and is
+        // the only thing that knows how far through a sit we are.
+        this.bones.hips.position.y += bobY;
       }
       if (this.bones.chest) this.bones.chest.rotation.z -= sway * 0.25;
       // Arms trail the body sway slightly.
@@ -318,7 +391,10 @@ export class Animator {
       if (this.bones.upperArmL) this.bones.upperArmL.rotation.x += swing * 0.55;
       if (this.bones.upperArmR) this.bones.upperArmR.rotation.x += -swing * 0.55;
       if (this.bones.hips) {
-        this.bones.hips.position.y = 0.95 + Math.abs(Math.sin(p)) * 0.022;
+        // Additive, for the same reason as the idle layer: someone who stands
+        // and immediately walks off is still easing out of the sit for the
+        // first stride, and this must not fight that.
+        this.bones.hips.position.y += Math.abs(Math.sin(p)) * 0.022;
         this.bones.hips.rotation.y += Math.sin(p) * 0.09;
         this.bones.hips.rotation.z += Math.cos(p) * 0.05;
       }

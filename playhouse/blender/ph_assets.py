@@ -38,6 +38,9 @@ Public API:
     make_tree(seed=0, scale=1.0) -> object
     make_drone(scale=1.0) -> object
     make_rifle(scale=1.0) -> object
+    make_slab / make_rod / make_orb (seed, scale, colour, size) -> object
+        the generic dressing shapes, plus a dozen named types built on them
+        (make_crate, make_table, make_cup, ...) -- see that section's header
     make_character(spec, name) -> object          (an armature object)
     pose_character(obj, pose)
     set_world(mood, fog)      -> {'world', 'sun', 'kick', 'fog'}
@@ -59,8 +62,12 @@ re-aim them or the shot loses its backlight:
 import colorsys
 import math
 
-import bmesh
+# bpy first, out of alphabetical order on purpose: outside Blender's own
+# interpreter these are pip's `bpy` wheel, which only registers bmesh and
+# mathutils as it initialises. `import bmesh` above `import bpy` raises
+# ModuleNotFoundError, which reads as "Blender is not installed" and is not.
 import bpy
+import bmesh
 from mathutils import Euler, Matrix, Vector
 
 TAU = math.pi * 2.0
@@ -504,6 +511,19 @@ def _obj_from_bm(name, bm, materials=()):
         me.materials.append(m)
     bpy.context.scene.collection.objects.link(ob)
     return ob
+
+
+def _spin(bm, rng):
+    """Turn a mesh about its own vertical axis by a seeded angle.
+
+    Yaw jitter has to be baked into the vertices, not written to the object:
+    ``render_scene.place`` sets ``rotation_euler[2]`` from the scene file's
+    ``facing`` and would drop it. Without this a row of buckets lines every
+    handle and every lofted seam up the same way, which is the giveaway that
+    one loop placed all of them.
+    """
+    bmesh.ops.rotate(bm, verts=bm.verts, cent=(0.0, 0.0, 0.0),
+                     matrix=Matrix.Rotation(rng.range(0.0, TAU), 3, 'Z'))
 
 
 def _ring(z, cx=0.0, cy=0.0, rx=1.0, ry=None, n=16, phase=0.0, lobes=None,
@@ -1129,10 +1149,11 @@ def make_bucket(seed=0, scale=1.0):
            for a in [math.radians(d) for d in range(0, 181, 20)]]
     _tube(bm, arc, [0.006] * len(arc), n=6, mat=0, up=Vector((0.0, 1.0, 0.0)))
 
+    _spin(bm, rng)
+
     ob = _obj_from_bm(f'bucket{seed}', bm, [m_body])
     _finish(ob, bevel_width=0.004, smooth_angle=52.0)
     ob.rotation_mode = 'XYZ'
-    ob.rotation_euler[2] = rng.range(0.0, TAU)
     ob.scale = (scale, scale, scale)
     ob['ph_kind'] = 'bucket'
     return ob
@@ -1162,13 +1183,838 @@ def make_parasol(seed=0, scale=1.0):
                _ring(top - 0.14, rx=span * 0.62, n=24, lobes=_scallop(8, 0.05)),
                _ring(top - 0.30, rx=span, n=24, lobes=_scallop(8, 0.07))],
           cap_start=True, cap_end=False, mat=0)
+    _spin(bm, rng)
+
     ob = _obj_from_bm(f'parasol{seed}', bm, [m_canopy, m_pole])
     _finish(ob, bevel_width=0.004, smooth_angle=46.0)
-    ob.rotation_mode = 'XYZ'
-    ob.rotation_euler[0] = math.radians(rng.range(4.0, 8.0))
-    ob.rotation_euler[2] = rng.range(0.0, TAU)
+    # The lean the docstring is about. Through `_lean` so the direction is
+    # seeded too: written to X alone it would compose with the scene file's
+    # `facing`, and a row of parasols all authored at rot 0 would lean as one.
+    _lean(ob, rng, 4.0, 8.0)
     ob.scale = (scale, scale, scale)
     ob['ph_kind'] = 'parasol'
+    return ob
+
+
+# ---------------------------------------------------------------------------
+# Generic primitives, and the named types built on them
+#
+# Measured over three screenplays: of the 83 objects the prose asks for, 79.5%
+# read as a box, a cylinder or a sphere plus a colour. Split by the part they
+# play it is 87.3% of SET DRESSING and only 14.3% of HERO props -- the ones the
+# script names, touches or shoots in close-up. So this layer is here to dress a
+# set cheaply, not to save anyone the work of modelling a hero prop: a rifle
+# still has to be a rifle. Porting the browser's twenty-seven missing types one
+# at a time is ~950 lines; these are ~30 each.
+#
+# `make_slab`, `make_rod` and `make_orb` are the bare shapes, sized and tinted
+# from the scene file per the `options` contract. Everything after them is a
+# NAMED type, because a name carries what a shape cannot -- the validator has
+# to know that a mug is 8 cm across and must never be the subject of a
+# close-up, and no amount of `size: [0.08, 0.08, 0.08]` tells it that.
+#
+# Named types therefore take `colour` but deliberately NOT `size`: their size
+# is the metadata, taken from props.js's PROPS table verbatim so the preview
+# and the film agree about how big a table is. Blocking solved against a 1.4 m
+# table in the browser is wrong in the film if the film's table is 1.2 m. A
+# scene that genuinely wants a three-metre crate wants `make_slab`.
+# ---------------------------------------------------------------------------
+
+
+def _dims(size, default):
+    """Scene-file ``size`` -> Blender (x, y, z) extents.
+
+    The contract's ``size`` is three.js ``[width, height, depth]`` in metres,
+    which is the order props.js publishes and therefore the only order a scene
+    author ever sees. Blender is Z-up, so height is the *last* component here
+    and depth is the second. Getting it wrong builds a table 80 cm wide and
+    1.4 m tall, which validates perfectly and renders as a lectern.
+    """
+    w, h, d = default if size is None else size
+    return (abs(float(w)), abs(float(d)), abs(float(h)))
+
+
+def _dressing_material(name, colour, default, rng, rough=0.62, scale=9.0,
+                       shade=0.62, texture='NOISE', bump=0.0, sheen=0.0,
+                       distortion=0.0):
+    """The house material for dressing: one colour, blotched with a darker self.
+
+    A generic primitive is the asset most at risk of reading as programmer art,
+    because it has no silhouette to hide behind — a box with one flat albedo is
+    *literally* the default cube. The second tone is the first scaled down and
+    nudged in hue rather than a second palette entry, because that is what wear
+    does: it darkens a surface unevenly, it does not repaint it.
+    """
+    base = hex_rgb(colour, default)
+    worn = jitter_colour([c * shade for c in base], rng, hue=0.03, sat=0.25,
+                         val=0.20)
+    return _mix_colour_material(name, base, worn, scale, rough, bump=bump,
+                                texture=texture, sheen=sheen,
+                                distortion=distortion)
+
+
+def _lean(ob, rng, lo=3.0, hi=8.0):
+    """Take an object off true vertical by a seeded few degrees.
+
+    A perfect vertical is the loudest CG tell after a razor edge: nothing a
+    person put down is plumb. Seeded from the prop's id, so the crate leans the
+    same way in every frame of the film rather than flickering.
+
+    Only X and Y are written. ``render_scene.place`` owns the Z rotation — it
+    is the scene file's ``facing`` — so a yaw authored here would be silently
+    overwritten, and any yaw jitter that wants to exist has to live in the mesh
+    instead. The tilt survives because ``register_prop`` records it and a
+    set-down restores it.
+
+    The rotation is about the object's origin, which sits at the centre of its
+    base, so a leaning object digs one edge in rather than hovering on the
+    other. That is why the angle is small for anything with a wide footprint:
+    at 8 degrees a 0.54 m crate buries a corner 38 mm.
+    """
+    ang = math.radians(rng.range(lo, hi))
+    axis = rng.range(0.0, TAU)
+    ob.rotation_mode = 'XYZ'
+    ob.rotation_euler[0] = math.cos(axis) * ang
+    ob.rotation_euler[1] = math.sin(axis) * ang
+    return ob
+
+
+def _shaft(bm, base, size, mat=0, n=16, taper=1.0, bulge=0.0, lobes=None,
+           lobe_peak=1.0, cap_start=True, cap_end=True, steps=4):
+    """A vertical body of revolution inscribed *exactly* in a box.
+
+    ``taper`` is the top radius as a fraction of the bottom, ``bulge`` swells
+    the waist. Both are normalised against the widest ring so the result fills
+    ``size`` and no more: a barrel is a cylinder with a 19% swell, and without
+    the normalisation asking for a 0.60 m barrel builds a 0.71 m one — an error
+    that never crashes and only shows up as an actor standing too far away from
+    something.
+    """
+    rx, ry, h = size[0] * 0.5, size[1] * 0.5, size[2]
+    ks = [(1.0 - i / steps) + taper * (i / steps)
+          + bulge * math.sin(math.pi * i / steps) for i in range(steps + 1)]
+    peak = max(ks) * lobe_peak
+    rings = [_ring(base[2] + (i / steps) * h, cx=base[0], cy=base[1],
+                   rx=rx * k / peak, ry=ry * k / peak, n=n, lobes=lobes)
+             for i, k in enumerate(ks)]
+    return _loft(bm, rings, cap_start, cap_end, mat)
+
+
+def _ellipsoid(bm, centre, size, mat=0, seed=0, subdiv=2, dent=0.12):
+    """An ellipsoid inscribed in a box, dented rather than swelled.
+
+    :func:`_blob` pushes its radius both ways, which is right for a canopy and
+    wrong here, because this shape has to fit a measured bounding box. So the
+    noise only ever removes material. Nothing is a perfect ellipsoid anyway — a
+    cast doorknob has flats and a stone has hollows — and the hollows are the
+    half worth keeping.
+
+    Removing material shrinks the result, so it is rescaled onto the box
+    afterwards. Without that a 0.24 m stone measures 0.227 m, because the noise
+    never quite reaches zero anywhere on the surface — and the size table is
+    the only thing the validator has to reason about a prop with.
+    """
+    r = Vector((size[0] * 0.5, size[1] * 0.5, size[2] * 0.5))
+    res = bmesh.new()
+    bmesh.ops.create_icosphere(res, subdivisions=subdiv, radius=1.0)
+    off = Vector((seed * 3.7, seed * 1.3, seed * 2.1))
+    dented = []
+    peak = [1e-9, 1e-9, 1e-9]
+    for v in res.verts:
+        d = v.co.normalized()
+        k = _fbm((d * 2.6) + off, seed=seed, octaves=2)
+        p = Vector((d.x * r.x, d.y * r.y, d.z * r.z)) * (1.0 - dent * k)
+        dented.append((v, p))
+        for i in range(3):
+            peak[i] = max(peak[i], abs(p[i]))
+    for v, p in dented:
+        v.co = Vector((p.x * r.x / peak[0], p.y * r.y / peak[1],
+                       p.z * r.z / peak[2])) + Vector(centre)
+    for f in res.faces:
+        f.material_index = mat
+    me = bpy.data.meshes.new('_tmp')
+    res.to_mesh(me)
+    res.free()
+    bm.from_mesh(me)
+    bpy.data.meshes.remove(me)
+
+
+def make_slab(seed=0, scale=1.0, colour=None, size=None):
+    """A flat rectangular mass: a board, a panel, a lid, a step, a headstone.
+
+    The generic dressing shape, and the one it is most dangerous to be lazy
+    about, because a box with one albedo and square corners *is* the default
+    cube. Hence two tones, a seeded lean, and a bevel scaled to the thinnest
+    dimension — the default 6 mm bevel on a 10 mm panel eats the panel and
+    leaves a lozenge.
+    """
+    rng = Rng(seed * 7919 + 211)
+    dims = _dims(size, (0.30, 0.20, 0.04))
+    mat = _dressing_material(f'slab{seed}', colour, (0.055, 0.049, 0.040), rng,
+                             rough=0.58, scale=7.0, bump=0.16)
+    bm = bmesh.new()
+    _box(bm, (0.0, 0.0, dims[2] * 0.5), dims, mat=0)
+    ob = _obj_from_bm(f'slab{seed}', bm, [mat])
+    _finish(ob, bevel_width=min(0.006, 0.22 * min(dims)))
+    _lean(ob, rng, 3.0, 6.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_grip'] = (0.0, 0.0, dims[2] * 0.5)
+    ob['ph_kind'] = 'slab'
+    return ob
+
+
+def make_rod(seed=0, scale=1.0, colour=None, size=None):
+    """An upright cylinder: a post, a pipe, a bollard, a rolled carpet.
+
+    Seeded taper as well as seeded lean. A prism of exactly constant radius is
+    a manufacturing achievement; everything else in the world is thicker at one
+    end, and the two together are what stop a row of fence posts reading as one
+    post instanced eight times.
+    """
+    rng = Rng(seed * 7919 + 223)
+    dims = _dims(size, (0.12, 0.25, 0.12))
+    mat = _dressing_material(f'rod{seed}', colour, (0.052, 0.044, 0.034), rng,
+                             rough=0.55, scale=12.0, bump=0.12)
+    bm = bmesh.new()
+    # 20 sides, not 18: a ring only reaches its stated radius where it has a
+    # vertex, and 20 puts one on each of the four cardinal axes, so the built
+    # object measures the size it was asked for.
+    _shaft(bm, (0.0, 0.0, 0.0), dims, mat=0, n=20,
+           taper=rng.range(0.86, 1.0))
+    ob = _obj_from_bm(f'rod{seed}', bm, [mat])
+    _finish(ob, bevel_width=min(0.005, 0.22 * min(dims)), smooth_angle=46.0)
+    _lean(ob, rng, 3.0, 8.0)
+    ob.scale = (scale, scale, scale)
+    # A stick is held down the shaft, not in the middle: a torch or a broom
+    # balanced at its centre reads as a weightless prop.
+    ob['ph_grip'] = (0.0, 0.0, dims[2] * 0.36)
+    ob['ph_kind'] = 'rod'
+    return ob
+
+
+def make_orb(seed=0, scale=1.0, colour=None, size=None):
+    """A rounded mass: a stone, a pot, a fruit, a buoy, a snowball.
+
+    A sphere cannot be leaned — a rotation about any axis leaves it identical —
+    so its asymmetry has to be in the mesh. That is what the dents are for, and
+    why the noise field is offset per seed: two stones from the same builder
+    have to be two stones. Sunk a fiftieth of its height into the floor for the
+    same reason make_ball is: a sphere resting on a mathematical tangent point
+    casts a contact shadow the size of a full stop, and reads as hovering.
+    """
+    rng = Rng(seed * 7919 + 227)
+    dims = _dims(size, (0.24, 0.24, 0.24))
+    mat = _dressing_material(f'orb{seed}', colour, (0.048, 0.046, 0.042), rng,
+                             rough=0.52, scale=16.0, bump=0.22)
+    bm = bmesh.new()
+    _ellipsoid(bm, (0.0, 0.0, dims[2] * 0.48), dims, mat=0,
+               seed=int(rng.range(1.0, 900.0)), subdiv=3, dent=0.12)
+    ob = _obj_from_bm(f'orb{seed}', bm, [mat])
+    _finish(ob, bevel=False, smooth_angle=180.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_grip'] = (0.0, 0.0, dims[2] * 0.48)
+    ob['ph_kind'] = 'orb'
+    return ob
+
+
+def make_crate(seed=0, scale=1.0, colour=None):
+    """A packing crate, 0.54 m cubed, battened and dumped at an angle.
+
+    The battens are the whole read. A plain cube at twenty pixels is a cube;
+    two bands of proud timber give it four horizontal highlights and a broken
+    silhouette, which is what says "crate" before any detail resolves. Kept to
+    2-5 degrees of lean rather than the usual 8 because the origin is at the
+    centre of the base, so a big footprint tipped hard buries a corner.
+    """
+    rng = Rng(seed * 7919 + 307)
+    m_wood = _dressing_material(f'crate{seed}', colour, hex_rgb('#6a4a28'), rng,
+                                rough=0.72, scale=6.0, texture='WAVE',
+                                distortion=1.4, bump=0.20)
+    m_batten = _dressing_material(f'crate_batten{seed}', None,
+                                  hex_rgb('#4a3018'), rng, rough=0.78,
+                                  scale=11.0, bump=0.24)
+
+    s, band, proud = 0.54, 0.06, 0.02
+    body = s - proud * 2.0
+    bm = bmesh.new()
+    _box(bm, (0.0, 0.0, s * 0.5), (body, body, s), mat=0)
+    # Two bands, low and high rather than symmetrically placed, and at a
+    # seeded height: a crate nailed by a person is not a diagram, and two
+    # crates side by side must not be the same crate twice.
+    for z in (s * rng.range(0.15, 0.23), s * rng.range(0.77, 0.85)):
+        for sign in (-1.0, 1.0):
+            _box(bm, (0.0, sign * (s - proud) * 0.5, z), (s, proud, band), mat=1)
+            _box(bm, (sign * (s - proud) * 0.5, 0.0, z), (proud, s, band), mat=1)
+
+    ob = _obj_from_bm(f'crate{seed}', bm, [m_wood, m_batten])
+    _finish(ob, bevel_width=0.004, bevel_angle=28.0, smooth_angle=30.0)
+    _lean(ob, rng, 2.0, 5.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'crate'
+    return ob
+
+
+def make_barrel(seed=0, scale=1.0, colour=None):
+    """A coopered barrel: 0.60 m at the waist, 0.82 m tall, three iron hoops.
+
+    Two cues do all the work and both are silhouette. The 19% swell at the
+    waist is what separates a barrel from a bin — a straight cylinder with
+    hoops reads as an oil drum. The staves are a 1% scallop, which sounds
+    invisible and is not: it breaks the outline into sixteen facets that catch
+    the key light one at a time as the camera moves.
+    """
+    rng = Rng(seed * 7919 + 311)
+    m_wood = _dressing_material(f'barrel{seed}', colour, hex_rgb('#5a3f22'),
+                                rng, rough=0.68, scale=5.0, texture='WAVE',
+                                distortion=1.1, bump=0.18)
+    m_iron = principled(f'barrel_hoop{seed}', hex_rgb('#4a4038'), rough=0.46,
+                        metal=0.75, rough_var=0.18, noise_scale=70.0)
+
+    dia, height, stave = 0.60, 0.82, 0.010
+    # The hoops stand 2% proud, so the body is normalised down by the same
+    # amount: the widest thing on the object has to be 0.60, not 0.612.
+    hoop_proud = 1.02
+    body = (dia / hoop_proud, dia / hoop_proud, height)
+    # Browser profile: 0.31 at the waist over 0.26 at the ends, seeded either
+    # side of it because a cooper's barrel is not a lathe part.
+    bulge = rng.range(0.170, 0.215)
+    bm = bmesh.new()
+    _shaft(bm, (0.0, 0.0, 0.0), body, mat=0, n=32, bulge=bulge, steps=8,
+           lobes=_scallop(16, stave), lobe_peak=1.0 + stave)
+    for t in (rng.range(0.10, 0.15), 0.50, rng.range(0.85, 0.90)):
+        k = (1.0 + bulge * math.sin(math.pi * t)) / (1.0 + bulge)
+        r = body[0] * 0.5 * k * hoop_proud
+        _shaft(bm, (0.0, 0.0, height * t - 0.014), (r * 2.0, r * 2.0, 0.028),
+               mat=1, n=32)
+
+    ob = _obj_from_bm(f'barrel{seed}', bm, [m_wood, m_iron])
+    _finish(ob, bevel_width=0.003, smooth_angle=44.0)
+    _lean(ob, rng, 2.0, 5.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'barrel'
+    return ob
+
+
+def make_cup(seed=0, scale=1.0, colour=None):
+    """A mug, 8 cm over the handle, origin at the base.
+
+    Open at the top and lofted rather than blobbed, for make_bucket's reason:
+    the dark ellipse of the mouth is the entire cue that says "container". The
+    handle is the other one — a lidless tapered cylinder on a table is a plant
+    pot until something sticks out of the side of it — and it is why the 8 cm
+    in the size table is 8 cm *including the handle*, not the 6 cm body.
+    """
+    rng = Rng(seed * 7919 + 401)
+    m_body = _dressing_material(f'cup{seed}', colour, hex_rgb('#d8d0c0'), rng,
+                                rough=0.28, scale=40.0, shade=0.78)
+
+    height, rim, thick = 0.078, 0.031, 0.0055
+    base_r = rng.range(0.022, 0.026)     # how hard the potter pulled the wall
+    # The handle's outer surface, not its centreline, is what has to land on
+    # 0.08 across: the tube's own radius counts.
+    reach = 0.080 - rim - thick
+    hang, span = rng.range(0.52, 0.58), rng.range(0.26, 0.30)
+    bm = bmesh.new()
+    _shaft(bm, (0.0, 0.0, 0.0), (rim * 2.0, rim * 2.0, height), mat=0, n=20,
+           taper=rim / base_r, cap_end=False)
+    # A rolled lip, so the rim is not a zero-thickness edge (see make_bucket).
+    _loft(bm, [_ring(height, rx=rim, n=20),
+               _ring(height - 0.010, rx=rim * 0.88, n=20)],
+          cap_start=False, cap_end=True, mat=0)
+    arc = [Vector((rim * 0.92 + math.sin(a) * (reach - rim * 0.92), 0.0,
+                   height * hang - math.cos(a) * height * span))
+           for a in [math.radians(d) for d in range(0, 181, 30)]]
+    _tube(bm, arc, [thick] * len(arc), n=8, mat=0, up=Vector((0.0, 1.0, 0.0)))
+
+    ob = _obj_from_bm(f'cup{seed}', bm, [m_body])
+    _finish(ob, bevel_width=0.002, smooth_angle=48.0)
+    # Thrown, not moulded: 2-5 degrees, because a mug leaning 8 degrees on a
+    # table reads as a mug about to go over.
+    _lean(ob, rng, 2.0, 5.0)
+    ob.scale = (scale, scale, scale)
+    # The palm closes round the body, not the handle: at this size a hand
+    # covers both, and gripping the handle would swing the mug off the wrist.
+    ob['ph_grip'] = (0.0, 0.0, height * 0.55)
+    ob['ph_kind'] = 'cup'
+    return ob
+
+
+def make_bottle(seed=0, scale=1.0, colour=None):
+    """A 0.29 m bottle: body, shoulder, neck, and a label stuck on crooked.
+
+    The label earns its place twice. It is the second tone this object would
+    otherwise have to fake, and it is the only thing on a bottle that can be
+    *wrong* — a paper rectangle 2-5 degrees off square around the body is the
+    cheapest hand-made cue in the library.
+
+    The glass is opaque. Transmission on a background bottle costs light paths
+    for a result nobody resolves at MS; a dark saturated albedo at low
+    roughness reads as green glass and renders for free.
+    """
+    rng = Rng(seed * 7919 + 419)
+    m_glass = _dressing_material(f'bottle{seed}', colour, hex_rgb('#3a5a3a'),
+                                 rng, rough=0.16, scale=30.0, shade=0.55)
+    m_label = principled(f'bottle_label{seed}', hex_rgb('#d8cdb8'), rough=0.86,
+                         rough_var=0.16, noise_scale=110.0, sheen=0.22)
+
+    profile = [(0.000, 0.0400), (0.012, 0.0443), (0.130, 0.0443),
+               (0.170, 0.0330), (0.200, 0.0170), (0.265, 0.0170),
+               (0.278, 0.0200), (0.290, 0.0155)]
+    bm = bmesh.new()
+    _loft(bm, [_ring(z, rx=r, n=18) for z, r in profile], mat=0)
+    tilt = math.tan(math.radians(rng.range(2.0, 5.0)))
+    for z in ((0.045, 0.108),):
+        lo, hi = z
+        rings = [[Vector((p.x, p.y, p.z + p.x * tilt))
+                  for p in _ring(edge, rx=0.0450, n=18)] for edge in (lo, hi)]
+        _loft(bm, rings, cap_start=False, cap_end=False, mat=1)
+
+    ob = _obj_from_bm(f'bottle{seed}', bm, [m_glass, m_label])
+    _finish(ob, bevel_width=0.002, smooth_angle=44.0)
+    _lean(ob, rng, 2.0, 5.0)
+    ob.scale = (scale, scale, scale)
+    # Carried by the neck, which is how a bottle is picked up and which lets it
+    # hang below the hand instead of standing on the palm.
+    ob['ph_grip'] = (0.0, 0.0, 0.225)
+    ob['ph_kind'] = 'bottle'
+    return ob
+
+
+def make_table(seed=0, scale=1.0, colour=None):
+    """A 1.4 x 0.8 m table, top surface at 0.80 m.
+
+    The one asset here that must NOT lean: it stands on four legs and tipping
+    it lifts two of them off the floor, which is a worse artefact than the
+    plumbness it fixes. Its share of the anti-symmetry rule is paid in the mesh
+    instead — every leg is a different thickness and sits at a different inset,
+    and the top is a few millimetres off centre, the way a top that was fitted
+    to a frame by hand is.
+
+    The apron under the top is not decoration either. Without it the legs meet
+    the underside at a bare right angle and the whole thing reads as four
+    cylinders holding up a plank, which at MS is exactly what it is.
+    """
+    rng = Rng(seed * 7919 + 503)
+    # shade 0.80 rather than the library default 0.62: a table top is the one
+    # large flat plane in an interior, and the key light rakes across it. At
+    # full grain contrast the planks read as the stripes of a deckchair.
+    m_wood = _dressing_material(f'table{seed}', colour, hex_rgb('#4a2f1c'), rng,
+                                rough=0.44, scale=4.0, texture='WAVE',
+                                distortion=1.6, bump=0.10, shade=0.80)
+    m_under = _dressing_material(f'table_under{seed}', colour,
+                                 hex_rgb('#4a2f1c'), rng, rough=0.62,
+                                 scale=7.0, shade=0.48, bump=0.14)
+
+    w, d, h, thick = 1.40, 0.80, 0.80, 0.055
+    bm = bmesh.new()
+    _box(bm, (rng.range(-0.004, 0.004), rng.range(-0.004, 0.004), h - thick * 0.5),
+         (w, d, thick), mat=0)
+    _box(bm, (0.0, 0.0, h - thick - 0.045), (w - 0.14, d - 0.14, 0.09), mat=1)
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            leg = rng.range(0.066, 0.076)
+            inset = rng.range(0.085, 0.100)
+            _box(bm, (sx * (w * 0.5 - inset), sy * (d * 0.5 - inset),
+                      (h - thick - 0.01) * 0.5),
+                 (leg, leg, h - thick - 0.01), mat=0)
+
+    ob = _obj_from_bm(f'table{seed}', bm, [m_wood, m_under])
+    _finish(ob, bevel_width=0.005, bevel_angle=28.0, smooth_angle=30.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'table'
+    return ob
+
+
+def make_stool(seed=0, scale=1.0, colour=None):
+    """A three-legged stool, 0.40 m across, seat at 0.48 m.
+
+    Three legs rather than four, and splayed: it is the shape that reads as a
+    stool at any distance, and unlike a four-legged one it stands flat on a
+    displaced ground mesh without rocking. The splay angles are jittered
+    independently, so no two of the three make the same triangle.
+    """
+    rng = Rng(seed * 7919 + 509)
+    # Blotched, not banded. The WAVE grain the flat-panel assets use reads as a
+    # machined thread when it wraps a 20 mm turned leg or a seat rim, and a
+    # stool that looks threaded looks like plumbing.
+    m_wood = _dressing_material(f'stool{seed}', colour, hex_rgb('#5a3a20'), rng,
+                                rough=0.52, scale=11.0, shade=0.74, bump=0.14)
+
+    dia, h, seat = 0.40, 0.48, 0.048
+    bm = bmesh.new()
+    _shaft(bm, (0.0, 0.0, h - seat), (dia, dia, seat), mat=0, n=24, taper=0.95)
+    for i in range(3):
+        a = TAU * i / 3.0 + rng.range(-0.12, 0.12)
+        foot = rng.range(0.160, 0.178)
+        top = rng.range(0.115, 0.135)
+        # A splayed leg's end cap is perpendicular to the leg, not to the
+        # floor, so the foot starts 2 mm up: run it to z = 0 and the downhill
+        # half of the cap hangs through the floor. The top runs 6 mm *into*
+        # the seat, because a leg that merely touches it leaves a shadow gap.
+        _tube(bm, [Vector((math.cos(a) * foot, math.sin(a) * foot, 0.002)),
+                   Vector((math.cos(a) * top, math.sin(a) * top,
+                           h - seat + 0.006))],
+              [rng.range(0.019, 0.023), 0.018], n=8, mat=0)
+
+    ob = _obj_from_bm(f'stool{seed}', bm, [m_wood])
+    _finish(ob, bevel_width=0.004, smooth_angle=44.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'stool'
+    return ob
+
+
+def make_chair(seed=0, scale=1.0, colour=None):
+    """A ladder-back chair, 1.00 m to the top rail, seat at 0.46 m.
+
+    The back is the silhouette and the rake is the anti-symmetry: a real chair
+    leans its back 6-10 degrees off vertical, so this one does too, and that
+    satisfies the never-plumb rule without tipping the chair off its own legs.
+    Three rails with a gap between them beat a solid panel — the gaps let the
+    background through, which is what makes a chair readable in front of a
+    bright wall.
+
+    Faces +Y, so an actor placed at the seat and facing +Y is sitting in it
+    rather than astride the back.
+    """
+    rng = Rng(seed * 7919 + 521)
+    # Blotched rather than banded, for make_stool's reason: every part of a
+    # chair is 45 mm stock, and a plank grain wrapped round it reads as thread.
+    m_wood = _dressing_material(f'chair{seed}', colour, hex_rgb('#5a3a20'), rng,
+                                rough=0.50, scale=11.0, shade=0.74, bump=0.14)
+    m_seat = _dressing_material(f'chair_seat{seed}', None, hex_rgb('#7a4a3a'),
+                                rng, rough=0.82, scale=22.0, bump=0.30,
+                                sheen=0.28)
+
+    seat_z, top_z, back_y, stile = 0.46, 1.00, -0.175, 0.045
+    # 5-8 degrees, not the library's usual 3-8: at 10 the top rail swings the
+    # chair past the 0.50 m depth the size table promises the placement solver.
+    rake = math.radians(rng.range(5.0, 8.0))
+    ca, sa = math.cos(rake), math.sin(rake)
+
+    def raked(dz, dy=0.0):
+        """Position on the raked back, measured from the seat's back edge."""
+        return (back_y + dy * ca - dz * sa, seat_z + dy * sa + dz * ca)
+
+    bm = bmesh.new()
+    _box(bm, (0.0, 0.0, seat_z - 0.025), (0.46, 0.44, 0.05), mat=1)
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            leg = rng.range(0.040, 0.048)
+            _box(bm, (sx * rng.range(0.168, 0.186), sy * rng.range(0.168, 0.186),
+                      (seat_z - 0.05) * 0.5),
+                 (leg, leg, seat_z - 0.05), mat=0)
+    # Stiles run to the top rail; the rails hang between them, unevenly spaced.
+    # The reach is shortened by the raked stile's own top corner, which stands
+    # proud of the centre of its end face and is the real top of the chair.
+    reach = (top_z - seat_z - stile * 0.5 * sa) / ca
+    for sx in (-1.0, 1.0):
+        y, z = raked(reach * 0.5)
+        _box(bm, (sx * 0.200, y, z), (stile, stile, reach), mat=0,
+             rot=Euler((rake, 0.0, 0.0)))
+    for frac in (0.30, 0.58, 0.88):
+        y, z = raked(reach * (frac + rng.range(-0.03, 0.03)))
+        _box(bm, (0.0, y, z), (0.355, 0.030, 0.055), mat=0,
+             rot=Euler((rake, 0.0, 0.0)))
+
+    ob = _obj_from_bm(f'chair{seed}', bm, [m_wood, m_seat])
+    _finish(ob, bevel_width=0.004, bevel_angle=28.0, smooth_angle=32.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'chair'
+    return ob
+
+
+def make_rug(seed=0, scale=1.0, colour=None):
+    """A 2.6 x 1.8 m rug: one rippled sheet, three colour zones.
+
+    Built as a grid rather than a slab because a rug is the one prop that is
+    genuinely two-dimensional, and a mathematically flat 2.6 m rectangle lying
+    on a displaced ground mesh is the flattest thing in the frame. A few
+    millimetres of weave ripple plus corners that curl up on a fourth power
+    gives it a broken edge and somewhere for the grazing key light to catch —
+    which is the whole reason a rug is in a shot at all.
+
+    The border, band and medallion are per-face material zones, so it is one
+    mesh and one draw. The grid lines are placed *on* the zone boundaries
+    rather than spread evenly, because a boundary that falls mid-cell renders
+    as a staircase.
+    """
+    rng = Rng(seed * 7919 + 601)
+    m_field = _dressing_material(f'rug{seed}', colour, hex_rgb('#6a3038'), rng,
+                                 rough=0.88, scale=26.0, bump=0.34, sheen=0.30)
+    m_trim = _dressing_material(f'rug_trim{seed}', None, hex_rgb('#c9a24a'),
+                                rng, rough=0.86, scale=26.0, bump=0.34,
+                                sheen=0.30)
+
+    hw, hd = 1.30, 0.90
+    # props.js buildRug insets its border a fixed 0.14 m and the band inside it
+    # a further 0.09, the same all the way round. Insetting by a *fraction*
+    # instead would make the border half as wide on the short side as on the
+    # long, which no woven rug is.
+    edge, band = 0.14, 0.23
+    med_x, med_y = hw * 0.22, hd * 0.22
+
+    def axis(half, med):
+        cuts = {half - edge, half - band, med,
+                -(half - edge), -(half - band), -med}
+        cuts |= {-half + 2.0 * half * i / 22.0 for i in range(23)}
+        return sorted({round(c, 5) for c in cuts})
+
+    xs, ys = axis(hw, med_x), axis(hd, med_y)
+    bm = bmesh.new()
+    grid = []
+    for x in xs:
+        col = []
+        for y in ys:
+            t = max(abs(x) / hw, abs(y) / hd)
+            # Weave ripple plus a corner curl on a fourth power, and the two
+            # together stay inside the 10 mm the size table calls a rug: a
+            # bigger curl looks like a rug being blown off the floor.
+            z = (_fbm((x * 1.6, y * 1.6, 0.0), seed=seed, octaves=2) - 0.5) * 0.004
+            col.append(bm.verts.new((x, y, z + 0.0055 * t ** 4)))
+        grid.append(col)
+    for i in range(len(xs) - 1):
+        for j in range(len(ys) - 1):
+            f = bm.faces.new((grid[i][j], grid[i + 1][j],
+                              grid[i + 1][j + 1], grid[i][j + 1]))
+            cx = (xs[i] + xs[i + 1]) * 0.5
+            cy = (ys[j] + ys[j + 1]) * 0.5
+            inset = min(hw - abs(cx), hd - abs(cy))
+            f.material_index = 1 if (edge <= inset < band
+                                     or (abs(cx) < med_x
+                                         and abs(cy) < med_y)) else 0
+
+    ob = _obj_from_bm(f'rug{seed}', bm, [m_field, m_trim])
+    # No bevel: a sheet has no convex edge to round, and the modifier would
+    # only pinch the boundary loop.
+    _finish(ob, bevel=False, smooth_angle=60.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'rug'
+    return ob
+
+
+def make_portrait(seed=0, scale=1.0, colour=None):
+    """A framed portrait, 0.62 x 0.82 m, hung 2-5 degrees crooked.
+
+    Crooked about the wall normal, not tipped off it, and 2-5 rather than the
+    usual 3-8: measured against the frame edge, a picture at 8 degrees reads as
+    a gag about an earthquake. Two or three is the angle that reads as a house
+    somebody lives in.
+
+    The canvas is a mottled two-tone rather than a painted figure. At the size
+    a portrait occupies in anything wider than a CU it is a dark rectangle with
+    a warm patch in it, and modelling more than that is detail nobody resolves.
+    """
+    rng = Rng(seed * 7919 + 607)
+    m_frame = _dressing_material(f'portrait_frame{seed}', colour,
+                                 hex_rgb('#8a6a2a'), rng, rough=0.38,
+                                 scale=18.0, shade=0.55, bump=0.20)
+    m_canvas = _mix_colour_material(f'portrait_canvas{seed}',
+                                    hex_rgb('#3a2f24'), hex_rgb('#171009'),
+                                    3.4, 0.86, bump=0.10, distortion=1.2)
+
+    w, h, deep = 0.62, 0.82, 0.06
+    rail = rng.range(0.046, 0.064)      # how heavy a frame this house bought
+    bm = bmesh.new()
+    for sx in (-1.0, 1.0):
+        _box(bm, (sx * (w - rail) * 0.5, 0.0, h * 0.5), (rail, deep, h), mat=0)
+        _box(bm, (0.0, 0.0, h * 0.5 + sx * (h - rail) * 0.5),
+             (w - rail * 2.0, deep, rail), mat=0)
+    _box(bm, (0.0, -0.012, h * 0.5), (w - rail * 2.0, 0.012, h - rail * 2.0),
+         mat=1)
+
+    ob = _obj_from_bm(f'portrait{seed}', bm, [m_frame, m_canvas])
+    _finish(ob, bevel_width=0.003, bevel_angle=28.0, smooth_angle=30.0)
+    ob.rotation_mode = 'XYZ'
+    ob.rotation_euler[1] = math.radians(rng.range(2.0, 5.0)) * rng.sign()
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'portrait'
+    return ob
+
+
+def make_window(seed=0, scale=1.0, colour=None):
+    """A casement, 1.24 x 1.58 m, pane facing +Y.
+
+    The glass emits. A window is not dressing that happens to be near a light,
+    it *is* the light in most interiors, and an unlit dark rectangle in a wall
+    reads as a hole. Strength 1.15-1.65 rather than emissive()'s default 6: at
+    a square metre and a half this is a soft source lighting a room, and six
+    would blow the wall around it out before the exposure could catch up.
+
+    Built into a wall, so no lean — its share of the anti-symmetry rule is the
+    mullion and the transom, off centre by a seeded few centimetres.
+    """
+    rng = Rng(seed * 7919 + 613)
+    m_frame = _dressing_material(f'window{seed}', colour, hex_rgb('#3a2412'),
+                                 rng, rough=0.60, scale=8.0, texture='WAVE',
+                                 distortion=1.2, bump=0.16)
+    # Four panes, two materials. Old glass is not one flat sheet of sky: each
+    # pane was floated separately and catches the light a shade differently,
+    # and alternating two tones is what stops the glazing reading as a decal.
+    glass = [emissive(f'window_glass{seed}_{i}',
+                      jitter_colour(hex_rgb('#16243a'), rng, hue=0.02,
+                                    sat=0.20, val=0.26),
+                      strength=rng.range(1.15, 1.65), base=hex_rgb('#0d1830'))
+             for i in range(2)]
+
+    w, h, deep, rail = 1.24, 1.58, 0.12, 0.09
+    bm = bmesh.new()
+    for sx in (-1.0, 1.0):
+        _box(bm, (sx * (w - rail) * 0.5, 0.0, h * 0.5), (rail, deep, h), mat=0)
+        _box(bm, (0.0, 0.0, h * 0.5 + sx * (h - rail) * 0.5),
+             (w - rail * 2.0, deep, rail), mat=0)
+    glass_w, glass_h = w - rail * 2.0, h - rail * 2.0
+    mull_x = rng.range(-0.03, 0.03)
+    # The transom sits above the middle, where a glazier puts it so the small
+    # pane is the one at the top, plus a little jitter on that.
+    tran_z = h * 0.5 + glass_h * rng.range(0.04, 0.10)
+    for i, (x0, x1) in enumerate(((-glass_w * 0.5, mull_x),
+                                  (mull_x, glass_w * 0.5))):
+        for j, (z0, z1) in enumerate(((h * 0.5 - glass_h * 0.5, tran_z),
+                                      (tran_z, h * 0.5 + glass_h * 0.5))):
+            _box(bm, ((x0 + x1) * 0.5, -0.020, (z0 + z1) * 0.5),
+                 (abs(x1 - x0), 0.012, abs(z1 - z0)), mat=1 + (i + j) % 2)
+    # Mullion and transom, both proud of the glass so they cast on it.
+    _box(bm, (mull_x, -0.005, h * 0.5), (0.045, 0.055, glass_h), mat=0)
+    _box(bm, (0.0, -0.005, tran_z), (glass_w, 0.055, 0.045), mat=0)
+    # Sill: the one part that stands proud of the wall, and the reason a window
+    # has a shadow under it at all.
+    _box(bm, (0.0, 0.010, rail * 0.32), (w, deep + 0.02, 0.05), mat=0)
+
+    ob = _obj_from_bm(f'window{seed}', bm, [m_frame, *glass])
+    _finish(ob, bevel_width=0.004, bevel_angle=28.0, smooth_angle=30.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'window'
+    return ob
+
+
+def make_door(seed=0, scale=1.0, colour=None):
+    """A door in its casing, 1.06 x 2.22 m, leaf standing 3-6 degrees ajar.
+
+    The ajar angle is where this asset spends its anti-symmetry budget, and it
+    is the best value in the file: a leaf flush in its frame is a flat panel,
+    while four degrees open puts a wedge of shadow down the hinge side and a
+    hard vertical highlight down the other. It also says the room continues,
+    which is most of what a door is for dramatically.
+
+    It costs the declared depth — an open leaf swings out past the 0.12 m
+    casing. props.js's size is a placement footprint rather than a bounding
+    box, and the browser's own door already exceeds it by its knob.
+    """
+    rng = Rng(seed * 7919 + 617)
+    # Distortion 0.7, well below the 1.4-1.6 the crate and the table run at:
+    # the WAVE distortion is what breaks a plank edge up, and on 2 m of door it
+    # multiplies into twenty fine specular ribs that read as corrugated iron.
+    m_leaf = _dressing_material(f'door{seed}', colour, hex_rgb('#3a2412'), rng,
+                                rough=0.52, scale=4.0, texture='WAVE',
+                                distortion=0.7, bump=0.12, shade=0.78)
+    m_case = _dressing_material(f'door_case{seed}', None, hex_rgb('#2b1a0c'),
+                                rng, rough=0.62, scale=9.0, bump=0.18)
+    m_brass = principled(f'door_knob{seed}', hex_rgb('#9a7a3a'), rough=0.28,
+                         metal=0.80, rough_var=0.14, noise_scale=90.0)
+
+    w, h, deep, jamb = 1.06, 2.22, 0.12, 0.08
+    bm = bmesh.new()
+    for sx in (-1.0, 1.0):
+        _box(bm, (sx * (w - jamb) * 0.5, 0.0, h * 0.5), (jamb, deep, h), mat=1)
+    _box(bm, (0.0, 0.0, h - jamb * 0.5), (w - jamb * 2.0, deep, jamb), mat=1)
+
+    ajar = math.radians(rng.range(3.0, 6.0))
+    hinge = -(w * 0.5 - jamb)
+    # The leaf meets the head casing with no gap. A real door has a 4 mm
+    # clearance there and it does not matter in a real doorway; standing free
+    # in a set it is a slot of open sky above the door, and a rendered strip of
+    # bright sky reads as a hole in the model.
+    leaf_w, leaf_h, leaf_t = 0.88, h - jamb, 0.05
+    rot = Euler((0.0, 0.0, -ajar))
+
+    def swung(along, up, out=0.0):
+        """A point on the leaf, `along` metres from the hinge, once it is open.
+
+        `out` is toward +Y, the face the asset presents to camera — so the
+        panels and the knob are on the side a shot can see, and the leaf itself
+        opens away into the next room.
+        """
+        return (hinge + along * math.cos(ajar) + out * math.sin(ajar),
+                -along * math.sin(ajar) + out * math.cos(ajar), up)
+
+    _box(bm, swung(leaf_w * 0.5, leaf_h * 0.5), (leaf_w, leaf_t, leaf_h),
+         mat=0, rot=rot)
+    # Two panel mouldings, standing 10 mm proud of the leaf so they throw their
+    # own shadow line: a flat slab is a board, a panelled one is a door.
+    for z, ph in ((leaf_h * 0.70, 0.66), (leaf_h * 0.28, 0.54)):
+        _box(bm, swung(leaf_w * 0.5, z, leaf_t * 0.5 + 0.005),
+             (0.42, 0.020, ph), mat=1, rot=rot)
+    x, y, z = swung(leaf_w - 0.09, 1.03, leaf_t * 0.5 + 0.02)
+    _ellipsoid(bm, (x, y, z), (0.070, 0.070, 0.062), mat=2, seed=seed,
+               subdiv=2, dent=0.05)
+
+    ob = _obj_from_bm(f'door{seed}', bm, [m_leaf, m_case, m_brass])
+    _finish(ob, bevel_width=0.004, bevel_angle=28.0, smooth_angle=32.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'door'
+    return ob
+
+
+def make_bookshelf(seed=0, scale=1.0, colour=None):
+    """A 1.00 x 1.95 m bookcase, five shelves, filled by the seed.
+
+    The books are the asset. An empty carcass is six boxes and reads as a
+    shelving unit in a warehouse; a hundred thin slabs of jittered width,
+    height and colour give it a broken, high-frequency face that says "someone
+    lives here" at any shot size, and they cost nothing because each one is
+    eight vertices.
+
+    One book in sixteen leans and one shelf run in sixteen has a gap, both from
+    the seed. A perfectly packed shelf reads as a texture rather than as
+    objects, which is the same failure as a perfectly plumb crate.
+    """
+    rng = Rng(seed * 7919 + 619)
+    m_wood = _dressing_material(f'shelf{seed}', colour, hex_rgb('#3f2a18'), rng,
+                                rough=0.56, scale=5.0, texture='WAVE',
+                                distortion=1.4, bump=0.14)
+    m_back = _dressing_material(f'shelf_back{seed}', colour, hex_rgb('#3f2a18'),
+                                rng, rough=0.74, scale=9.0, shade=0.45,
+                                bump=0.20)
+    palette = ['#7a2f28', '#2f4a6a', '#4a5a34', '#6a5424', '#3f2f4a',
+               '#7a5a3a', '#28404a']
+    books = [_dressing_material(f'book{seed}_{i}', None, hex_rgb(c), rng,
+                                rough=0.74, scale=30.0, bump=0.20, sheen=0.16)
+             for i, c in enumerate(palette)]
+
+    w, d, h = 1.00, 0.32, 1.95
+    side, shelf_t = 0.05, 0.035
+    bm = bmesh.new()
+    for sx in (-1.0, 1.0):
+        _box(bm, (sx * (w - side) * 0.5, 0.0, (h - 0.05) * 0.5),
+             (side, d - 0.02, h - 0.05), mat=0)
+    _box(bm, (0.0, -(d - 0.03) * 0.5, (h - 0.05) * 0.5), (w, 0.020, h - 0.05),
+         mat=1)
+    _box(bm, (0.0, 0.0, h - 0.025), (w, d, 0.05), mat=0)          # cornice
+
+    inner = w - side * 2.0
+    for s in range(5):
+        z = 0.09 + s * 0.37
+        _box(bm, (0.0, 0.0, z), (inner, d - 0.04, shelf_t), mat=0)
+        x = -inner * 0.5 + 0.012
+        while x < inner * 0.5 - 0.06:
+            bw = rng.range(0.022, 0.052)
+            if rng.next() < 0.0625:
+                x += bw * rng.range(1.5, 3.0)       # a gap where one was taken
+                continue
+            bh = rng.range(0.20, 0.29)
+            bd = rng.range(0.19, 0.25)
+            lean = math.radians(rng.range(4.0, 9.0)) * rng.sign() \
+                if rng.next() < 0.0625 else 0.0
+            _box(bm, (x + bw * 0.5, -(d - 0.03) * 0.5 + bd * 0.5 + 0.03,
+                      z + shelf_t * 0.5 + bh * 0.5), (bw, bd, bh),
+                 mat=2 + int(rng.range(0.0, len(books))) % len(books),
+                 rot=Euler((0.0, lean, 0.0)))
+            x += bw + 0.004
+
+    ob = _obj_from_bm(f'bookshelf{seed}', bm, [m_wood, m_back, *books])
+    _finish(ob, bevel_width=0.0025, bevel_angle=28.0, smooth_angle=30.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'bookshelf'
     return ob
 
 
@@ -1287,6 +2133,14 @@ def _skeleton(height, build):
     orientation axis-aligned with the world. That is not an aesthetic choice —
     anim.js's pose library is authored against exactly that bind pose, so any
     other rest pose would need every one of its numbers re-derived.
+
+    The ``L`` bones sit at NEGATIVE x. The figure faces +Y with +Z up, so its
+    own left is toward -X, and :func:`_three_euler_to_blender` maps the pose
+    library's +X (three.js's actor-left) onto exactly that. Naming the +X side
+    'L' instead — which this table did — leaves the rotations mirrored against
+    the bones, so every abduction in the library adducts: measured on
+    ``joyful``, the left hand travelled from the shoulder at x +0.17 to x -0.49,
+    i.e. through the chest, the neck and the opposite arm.
     """
     h = height
     sh = build['shoulder']
@@ -1303,33 +2157,33 @@ def _skeleton(height, build):
         'neck':      ((0, 0, h * 0.828), (0, 0, h * 0.880)),
         'head':      ((0, 0, h * 0.880), (0, 0, h * 0.985)),
 
-        'clavL':     ((h * 0.017, 0, h * 0.812), (h * 0.088 * sh, 0, shoulder_z)),
-        'upperArmL': ((h * 0.096 * sh, 0, shoulder_z),
-                      (h * 0.096 * sh, 0, shoulder_z - h * 0.183 * limb)),
-        'foreArmL':  ((h * 0.096 * sh, 0, shoulder_z - h * 0.183 * limb),
-                      (h * 0.096 * sh, 0, shoulder_z - h * 0.320 * limb)),
-        'handL':     ((h * 0.096 * sh, 0, shoulder_z - h * 0.320 * limb),
-                      (h * 0.096 * sh, 0, shoulder_z - h * 0.415 * limb)),
-
-        'clavR':     ((-h * 0.017, 0, h * 0.812), (-h * 0.088 * sh, 0, shoulder_z)),
-        'upperArmR': ((-h * 0.096 * sh, 0, shoulder_z),
+        'clavL':     ((-h * 0.017, 0, h * 0.812), (-h * 0.088 * sh, 0, shoulder_z)),
+        'upperArmL': ((-h * 0.096 * sh, 0, shoulder_z),
                       (-h * 0.096 * sh, 0, shoulder_z - h * 0.183 * limb)),
-        'foreArmR':  ((-h * 0.096 * sh, 0, shoulder_z - h * 0.183 * limb),
+        'foreArmL':  ((-h * 0.096 * sh, 0, shoulder_z - h * 0.183 * limb),
                       (-h * 0.096 * sh, 0, shoulder_z - h * 0.320 * limb)),
-        'handR':     ((-h * 0.096 * sh, 0, shoulder_z - h * 0.320 * limb),
+        'handL':     ((-h * 0.096 * sh, 0, shoulder_z - h * 0.320 * limb),
                       (-h * 0.096 * sh, 0, shoulder_z - h * 0.415 * limb)),
 
-        'thighL':    ((h * 0.047 * hp, 0, hip_z * 0.96), (h * 0.047 * hp, 0, h * 0.278)),
-        'shinL':     ((h * 0.047 * hp, 0, h * 0.278), (h * 0.048 * hp, 0, h * 0.052)),
-        'footL':     ((h * 0.048 * hp, 0, h * 0.052), (h * 0.048 * hp, h * 0.075, h * 0.012)),
-        'toeL':      ((h * 0.048 * hp, h * 0.075, h * 0.012),
-                      (h * 0.048 * hp, h * 0.135, h * 0.012)),
+        'clavR':     ((h * 0.017, 0, h * 0.812), (h * 0.088 * sh, 0, shoulder_z)),
+        'upperArmR': ((h * 0.096 * sh, 0, shoulder_z),
+                      (h * 0.096 * sh, 0, shoulder_z - h * 0.183 * limb)),
+        'foreArmR':  ((h * 0.096 * sh, 0, shoulder_z - h * 0.183 * limb),
+                      (h * 0.096 * sh, 0, shoulder_z - h * 0.320 * limb)),
+        'handR':     ((h * 0.096 * sh, 0, shoulder_z - h * 0.320 * limb),
+                      (h * 0.096 * sh, 0, shoulder_z - h * 0.415 * limb)),
 
-        'thighR':    ((-h * 0.047 * hp, 0, hip_z * 0.96), (-h * 0.047 * hp, 0, h * 0.278)),
-        'shinR':     ((-h * 0.047 * hp, 0, h * 0.278), (-h * 0.048 * hp, 0, h * 0.052)),
-        'footR':     ((-h * 0.048 * hp, 0, h * 0.052), (-h * 0.048 * hp, h * 0.075, h * 0.012)),
-        'toeR':      ((-h * 0.048 * hp, h * 0.075, h * 0.012),
+        'thighL':    ((-h * 0.047 * hp, 0, hip_z * 0.96), (-h * 0.047 * hp, 0, h * 0.278)),
+        'shinL':     ((-h * 0.047 * hp, 0, h * 0.278), (-h * 0.048 * hp, 0, h * 0.052)),
+        'footL':     ((-h * 0.048 * hp, 0, h * 0.052), (-h * 0.048 * hp, h * 0.075, h * 0.012)),
+        'toeL':      ((-h * 0.048 * hp, h * 0.075, h * 0.012),
                       (-h * 0.048 * hp, h * 0.135, h * 0.012)),
+
+        'thighR':    ((h * 0.047 * hp, 0, hip_z * 0.96), (h * 0.047 * hp, 0, h * 0.278)),
+        'shinR':     ((h * 0.047 * hp, 0, h * 0.278), (h * 0.048 * hp, 0, h * 0.052)),
+        'footR':     ((h * 0.048 * hp, 0, h * 0.052), (h * 0.048 * hp, h * 0.075, h * 0.012)),
+        'toeR':      ((h * 0.048 * hp, h * 0.075, h * 0.012),
+                      (h * 0.048 * hp, h * 0.135, h * 0.012)),
     }
 
 
@@ -1591,7 +2445,9 @@ def make_character(spec=None, name='actor'):
     end(p)
 
     # --- arms -------------------------------------------------------------
-    for side, s in (('L', 1), ('R', -1)):
+    # 'L' builds at -x, matching _skeleton: the figure faces +Y, so its left
+    # is -X, and the weighting below matches mesh to bone by proximity.
+    for side, s in (('L', -1), ('R', 1)):
         p = begin([f'clav{side}', f'upperArm{side}', f'foreArm{side}',
                    f'hand{side}'])
         ax = s * h * 0.096 * sh
@@ -1624,7 +2480,7 @@ def make_character(spec=None, name='actor'):
         end(p)
 
     # --- legs -------------------------------------------------------------
-    for side, s in (('L', 1), ('R', -1)):
+    for side, s in (('L', -1), ('R', 1)):
         p = begin([f'thigh{side}', f'shin{side}', f'foot{side}', f'toe{side}',
                    'hips'])
         lx = s * h * 0.047 * hp
@@ -1718,6 +2574,12 @@ POSES = {
         'upperArmR': (-4, 0, -6), 'foreArmR': (-14, 0, -3),
         'spine': (1, 0, 0), 'chest': (-1, 0, 0), 'neck': (2, 0, 0),
     },
+    'idleAlt': {
+        'upperArmL': (-6, 0, 9), 'foreArmL': (-22, 0, 5),
+        'upperArmR': (-3, 0, -5), 'foreArmR': (-10, 0, -2),
+        'spine': (1, 3, 0), 'chest': (-1, -2, 0), 'neck': (1, -3, 0),
+        'hips': (0, 2, 0),
+    },
     'listen': {
         'upperArmL': (-8, 0, 8), 'foreArmL': (-38, 0, 6),
         'upperArmR': (-8, 0, -8), 'foreArmR': (-38, 0, -6),
@@ -1728,6 +2590,88 @@ POSES = {
         'upperArmL': (-16, 0, 14), 'foreArmL': (-58, 0, 10),
         'upperArmR': (-6, 0, -8), 'foreArmR': (-22, 0, -4),
         'spine': (1, -3, 0), 'chest': (-2, 2, 0), 'neck': (2, 2, 0),
+    },
+    'talkBoth': {
+        'upperArmL': (-20, 0, 20), 'foreArmL': (-66, 0, 12),
+        'upperArmR': (-20, 0, -20), 'foreArmR': (-66, 0, -12),
+        'spine': (-2, 0, 0), 'chest': (3, 0, 0), 'neck': (-2, 0, 0),
+    },
+    'sing': {
+        'upperArmL': (-14, 0, 28), 'foreArmL': (-30, 0, 10),
+        'upperArmR': (-14, 0, -28), 'foreArmR': (-30, 0, -10),
+        'spine': (-5, 0, 0), 'chest': (7, 0, 0), 'neck': (-6, 0, 0),
+        'head': (-4, 0, 0),
+    },
+    'singBig': {
+        'upperArmL': (-30, 0, 68), 'foreArmL': (-24, 0, 8),
+        'upperArmR': (-30, 0, -68), 'foreArmR': (-24, 0, -8),
+        'spine': (-8, 0, 0), 'chest': (11, 0, 0), 'neck': (-9, 0, 0),
+        'head': (-7, 0, 0),
+    },
+    'point': {
+        'upperArmL': (-72, 0, 16), 'foreArmL': (-8, 0, 2), 'handL': (0, 0, 0),
+        'upperArmR': (-4, 0, -6), 'foreArmR': (-14, 0, -3),
+        'spine': (2, -8, 0), 'chest': (-1, 6, 0), 'neck': (0, 4, 0),
+    },
+    'cast': {
+        'upperArmL': (-84, 0, 24), 'foreArmL': (-30, 0, 10),
+        'upperArmR': (-84, 0, -24), 'foreArmR': (-30, 0, -10),
+        'spine': (-6, 0, 0), 'chest': (9, 0, 0), 'neck': (-8, 0, 0),
+        'head': (-5, 0, 0),
+    },
+    'castOne': {
+        'upperArmL': (-96, 0, 18), 'foreArmL': (-18, 0, 6),
+        'upperArmR': (-10, 0, -8), 'foreArmR': (-26, 0, -4),
+        'spine': (-3, -6, 0), 'chest': (5, 4, 0), 'neck': (-4, 2, 0),
+    },
+    'reach': {
+        'upperArmL': (-64, 0, 12), 'foreArmL': (-16, 0, 4),
+        'upperArmR': (-58, 0, -12), 'foreArmR': (-20, 0, -4),
+        'spine': (-4, 0, 0), 'chest': (6, 0, 0), 'neck': (-3, 0, 0),
+    },
+    'afraid': {
+        'upperArmL': (-30, 0, 4), 'foreArmL': (-84, 0, 8),
+        'upperArmR': (-30, 0, -4), 'foreArmR': (-84, 0, -8),
+        'clavL': (0, 0, 8), 'clavR': (0, 0, -8),
+        'spine': (8, 0, 0), 'chest': (6, 0, 0), 'neck': (8, 0, 0),
+        'head': (6, 0, 0),
+    },
+    'angry': {
+        'upperArmL': (-14, 0, 12), 'foreArmL': (-46, 0, 8),
+        'upperArmR': (-14, 0, -12), 'foreArmR': (-46, 0, -8),
+        'spine': (7, 0, 0), 'chest': (4, 0, 0), 'neck': (-4, 0, 0),
+        'head': (-3, 0, 0), 'hips': (3, 0, 0),
+    },
+    'tender': {
+        'upperArmL': (-40, 0, 6), 'foreArmL': (-76, 0, 12),
+        'upperArmR': (-8, 0, -7), 'foreArmR': (-20, 0, -3),
+        'spine': (3, 0, 0), 'chest': (-2, 0, 0), 'neck': (5, 0, 2),
+        'head': (3, 0, 3),
+    },
+    'resolute': {
+        'upperArmL': (-2, 0, 5), 'foreArmL': (-10, 0, 2),
+        'upperArmR': (-2, 0, -5), 'foreArmR': (-10, 0, -2),
+        'spine': (-3, 0, 0), 'chest': (4, 0, 0), 'neck': (-4, 0, 0),
+        'head': (-3, 0, 0),
+    },
+    'sad': {
+        'upperArmL': (-2, 0, 3), 'foreArmL': (-18, 0, 2),
+        'upperArmR': (-2, 0, -3), 'foreArmR': (-18, 0, -2),
+        'clavL': (0, 0, -6), 'clavR': (0, 0, 6),
+        'spine': (9, 0, 0), 'chest': (5, 0, 0), 'neck': (12, 0, 0),
+        'head': (8, 0, 0),
+    },
+    'joyful': {
+        'upperArmL': (-40, 0, 74), 'foreArmL': (-30, 0, 14),
+        'upperArmR': (-40, 0, -74), 'foreArmR': (-30, 0, -14),
+        'spine': (-7, 0, 0), 'chest': (9, 0, 0), 'neck': (-8, 0, 0),
+        'head': (-6, 0, 0),
+    },
+    'wonder': {
+        'upperArmL': (-56, 0, 22), 'foreArmL': (-52, 0, 10),
+        'upperArmR': (-8, 0, -6), 'foreArmR': (-18, 0, -3),
+        'spine': (-5, 0, 0), 'chest': (6, 0, 0), 'neck': (-10, 0, 0),
+        'head': (-8, 0, 0),
     },
     'run': {
         'upperArmL': (-62, 0, 10), 'foreArmL': (-92, 0, 8),
@@ -1758,6 +2702,40 @@ POSES = {
         'spine': (12, 0, 0), 'chest': (8, 0, 0), 'neck': (10, 0, 0),
         'head': (8, 0, 0),
     },
+    'bow': {
+        'upperArmL': (-18, 0, 10), 'foreArmL': (-40, 0, 6),
+        'upperArmR': (-18, 0, -10), 'foreArmR': (-40, 0, -6),
+        'spine': (34, 0, 0), 'chest': (12, 0, 0), 'neck': (-20, 0, 0),
+        'head': (-10, 0, 0), 'hips': (8, 0, 0),
+    },
+    # kneel and sit are the only two poses anim.js gives legs to, because they
+    # are the only two whose legs the browser's locomotion layer cannot infer.
+    # THIS ONE DEVIATES FROM anim.js ON PURPOSE, and anim.js has been changed
+    # to match. The inherited table was not a kneel: the left leg was a
+    # correct raised leg (thigh horizontal, shin down, sole flat) but the
+    # right was near straight at thigh -24 / shin 30, which is the geometry of
+    # a leg standing slightly behind you. There is no pelvis height at which
+    # both of those touch the floor, so whatever the root offset, one leg
+    # hung in the air — measured at 0.41 m on the finished rig. It read as a
+    # man doing a lunge in mid-fall.
+    # A one-knee kneel needs the trailing leg FOLDED so the shin lies along
+    # the floor. Solved by search rather than by eye: the pose and the offset
+    # were varied together and the rig measured each time, and this pair puts
+    # the raised sole and the kneeling shin within 0.6 mm of each other.
+    'kneel': {
+        'thighL': (-88, 0, 4), 'shinL': (96, 0, 0), 'footL': (-12, 0, 0),
+        'thighR': (10, 0, -6), 'shinR': (100, 0, 0),
+        'upperArmL': (-14, 0, 8), 'foreArmL': (-40, 0, 6),
+        'upperArmR': (-14, 0, -8), 'foreArmR': (-40, 0, -6),
+        'spine': (6, 0, 0), 'hips': (0, 0, 0),
+    },
+    'sit': {
+        'thighL': (-84, 2, 3), 'shinL': (80, 0, 0), 'footL': (4, 0, 0),
+        'thighR': (-84, -2, -3), 'shinR': (80, 0, 0), 'footR': (4, 0, 0),
+        'upperArmL': (-10, 0, 6), 'foreArmL': (-46, 0, 6),
+        'upperArmR': (-10, 0, -6), 'foreArmR': (-46, 0, -6),
+        'spine': (3, 0, 0), 'chest': (-1, 0, 0),
+    },
 }
 
 # Legs, which anim.js drives procedurally from locomotion state and therefore
@@ -1787,9 +2765,86 @@ _LEG_LAYER = {
         'thighL': (-2, 0, 3), 'shinL': (4, 0, 0),
         'thighR': (1, 0, -4), 'shinR': (3, 0, 0), 'hips': (0, -3, 0),
     },
+    # A bow is made from the waist, and the torso ends up 42 degrees forward
+    # (34 of spine on top of 8 of hips). Idle's stance cannot carry it: idle
+    # puts the weight on one hip, which under that much lean reads as a
+    # stumble rather than a bow. So: even weight, and the knees only just off
+    # locked, because a deep knee bend under a bow is a curtsey.
+    'bow': {
+        'thighL': (-1, 0, 2), 'shinL': (2, 0, 0),
+        'thighR': (-1, 0, -2), 'shinR': (2, 0, 0),
+    },
+    # kneel is the one pose anim.js leaves half-shod: it poses footL but not
+    # footR, because in the browser the walk layer owns whichever foot is not
+    # planted. The supporting (right) leg's thigh is 24 degrees forward and its
+    # The kneeling foot is not standing on anything: the shin lies along the
+    # floor, so the ankle extends and the figure rests on the top of the foot
+    # and the toes, the way anyone kneeling on one knee actually does.
+    'kneel': {
+        'footR': (-52, 0, 0),
+    },
 }
-_LEG_LAYER['listen'] = _LEG_LAYER['idle']
-_LEG_LAYER['talk'] = _LEG_LAYER['idle']
+# The rest of the library poses the upper body only — the browser plays those
+# over whatever the legs are already doing, and a still wants the same relaxed
+# stance underneath. Listed by name rather than defaulted inside
+# pose_character, so this table stays the one place to look when a new pose
+# stands wrong.
+for _upper_body in ('listen', 'talk', 'idleAlt', 'talkBoth', 'sing', 'singBig',
+                    'point', 'cast', 'castOne', 'reach', 'angry', 'tender',
+                    'resolute', 'sad', 'joyful', 'wonder'):
+    _LEG_LAYER[_upper_body] = _LEG_LAYER['idle']
+# afraid is a recoil rather than a mood — same braced legs as flinch.
+_LEG_LAYER['afraid'] = _LEG_LAYER['flinch']
+del _upper_body
+
+
+# How far the pelvis has to travel for a folded-leg pose to keep its feet on
+# the floor, in metres in three.js convention (+Y up) for the reference 1.78 m
+# figure. Rotations alone cannot do this: pose_character writes bone
+# orientations, so folding the legs under a body whose root never moves leaves
+# the feet where the rotation put them — 42 cm in the air — and `sit` renders
+# as a person seated on nothing.
+#
+# The numbers are read off _skeleton, which expresses every joint as a fraction
+# of stature h:
+#
+#     hip joint   0.5620 h * 0.96  = 0.53952 h      (thighL/R head)
+#     thigh       0.53952 h - 0.278 h = 0.26152 h
+#     shin        0.278 h - 0.052 h  = 0.226 h
+#     ankle       0.052 h
+#
+# so standing, the hip joint is 0.53952 - 0.052 = 0.48752 h above the ankle.
+# Folding the leg shortens that to thigh*cos(thigh angle from vertical) +
+# shin*cos(shin angle), and the difference is the drop:
+#
+#   sit    thigh 84 deg, shin 4 deg (-84 + 80 of the pose table):
+#          0.26152*cos84 + 0.226*cos4 = 0.0273 + 0.2255 = 0.2528 h
+#          drop = 0.48752 - 0.2528 = 0.2347 h = 0.418 m
+#   kneel  the pelvis rides on the kneeling thigh alone, which stands almost
+#          vertical (10 deg back), so the drop is very nearly the whole shin:
+#          0.226*cos100 is negative — the shin runs BACKWARD along the floor
+#          rather than downward — leaving 0.26152*cos10 = 0.2576 h under the
+#          hips. drop = 0.48752 - 0.2576 = 0.2299 h = 0.402 m by arithmetic,
+#          0.454 m measured, the difference being ankle and sole thickness on
+#          the raised leg, which the bone lengths alone do not account for.
+#          The measurement wins; see the kneel entry in POSES.
+#
+# Measured on the finished rig: sit puts both soles within 5 mm of the floor
+# and leaves the lowest hips-weighted vertex at 0.479 m — the height a chair
+# seat has to be to be under it. Kneel puts the raised sole and the kneeling
+# shin within 0.6 mm of each other, both on the floor.
+#
+# Both offsets were checked across all five builds (slim, average, sturdy,
+# willowy, broad): _skeleton scales leg length by stature only and never by
+# build, so the drop is build-invariant to seven decimal places.
+#
+# Everything else in the library stands on straight legs and must NOT be
+# offset, or it sinks into the ground. Applied to the hips bone, which every
+# other bone descends from, so the whole figure travels.
+_ROOT_OFFSET = {
+    'sit': (0.0, -0.418, 0.0),
+    'kneel': (0.0, -0.454, 0.0),
+}
 
 
 def _three_euler_to_blender(tx, ty, tz):
@@ -1818,6 +2873,12 @@ def _three_euler_to_blender(tx, ty, tz):
     return rx @ ry @ rz
 
 
+def _three_vec_to_blender(v):
+    """The same basis map as :func:`_three_euler_to_blender`, for offsets."""
+    x, y, z = v
+    return Vector((-x, z, y))
+
+
 def pose_character(obj, pose='idle', intensity=1.0):
     """Apply a named pose from anim.js's library.
 
@@ -1830,6 +2891,11 @@ def pose_character(obj, pose='idle', intensity=1.0):
 
     Doing it this way means the bone roll and rest orientation can be whatever
     is convenient for modelling without any of the pose numbers changing.
+
+    A folded-leg pose also moves the pelvis, from :data:`_ROOT_OFFSET`. That
+    offset is a fraction of stature, so it is scaled by the figure's own
+    height: every length in ``_skeleton`` is written as a fraction of h, and a
+    1.55 m actor dropped by a 1.78 m actor's 0.418 m sits through the chair.
 
     ``intensity`` scales every angle, which is how a half-flinch or a soft
     idle is expressed without a second table.
@@ -1851,6 +2917,10 @@ def pose_character(obj, pose='idle', intensity=1.0):
     for pb in rig.pose.bones:
         pb.rotation_mode = 'QUATERNION'
         pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        # Location too, not just rotation: poses are applied over each other
+        # shot after shot, and an idle that inherited sit's root offset stands
+        # the actor 42 cm into the floor.
+        pb.location = (0.0, 0.0, 0.0)
 
     for bone, (tx, ty, tz) in table.items():
         pb = rig.pose.bones.get(bone)
@@ -1860,6 +2930,22 @@ def pose_character(obj, pose='idle', intensity=1.0):
                                     tz * intensity)
         rest = pb.bone.matrix_local.to_3x3()
         pb.rotation_quaternion = (rest.inverted() @ r @ rest).to_quaternion()
+
+    offset = _ROOT_OFFSET.get(pose)
+    hips = rig.pose.bones.get('hips')
+    if offset and hips is not None:
+        # Intensity scales the fold ANGLES, and the drop it causes goes as
+        # 1 - cos(angle), which is quadratic in the angle near zero — so the
+        # offset scales as intensity squared, not intensity. Measured on a
+        # half-strength sit: scaling it linearly put the feet 90 mm through the
+        # floor, squared leaves them 15 mm above it.
+        drop = (_three_vec_to_blender(offset)
+                * (float(rig.get('ph_height') or 1.78) / 1.78) * intensity ** 2)
+        # A pose bone's location is in the bone's OWN rest space, not the
+        # armature's. The hips bone points straight up, so its local -Y is the
+        # world -Z we want; writing the world vector straight in would send the
+        # pelvis sideways instead of down. rest^-1 does the conversion.
+        hips.location = hips.bone.matrix_local.to_3x3().inverted() @ drop
 
     rig['ph_pose'] = pose
     if bpy.context.view_layer:

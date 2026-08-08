@@ -27,6 +27,10 @@ if (!check.ok) {
   console.error('  scene invalid:\n   ' + check.errors.join('\n   '));
   process.exit(1);
 }
+// This tool renders the *preview*, so a warning here is usually "the Blender
+// half will not have this" — worth saying before someone judges the film by
+// these frames, and never a reason to stop.
+for (const w of check.warnings) console.error(`  warning: ${w}`);
 const norm = normaliseScene(scene);
 console.log(`\n  ${norm.title} — ${norm.shots.length} shots, ${norm.duration.toFixed(1)}s, ` +
   `${norm.environment.props.length} props, cast ${norm.cast.map((c) => c.id).join('/')}`);

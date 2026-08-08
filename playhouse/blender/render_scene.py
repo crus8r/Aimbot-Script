@@ -757,13 +757,22 @@ def _seed_of(text):
     return h
 
 
-def build_prop(kind, seed_text, scale):
+def build_prop(kind, seed_text, scale, options=None, warn=None):
     """Instantiate a prop by its scene-file type name.
 
     The asset library's own naming is the registry -- type "tree" means
     ``ph_assets.make_tree`` -- and the signature says which arguments it wants.
     Discovering that beats keeping a table here, because a new asset then works
     from a scene file the moment it exists, with no edit on this side.
+
+    A prop entry's ``options`` ride the same discovery: a key is forwarded only
+    if the builder declares a parameter by that name, so ``colour`` reaches a
+    builder that can tint and is dropped by one that cannot. Dropped *loudly*,
+    which is the whole point -- a builder that is never passed ``colour`` has no
+    way to complain about it, so a scene file asking for a green tree would
+    otherwise render an ordinary tree and say nothing. Equally it is only a
+    warning: a mis-spelt option is a note to the author, not a reason to
+    abandon a quarter hour of Cycles.
     """
     builder = getattr(ph_assets, f"make_{kind}", None)
     if not callable(builder):
@@ -774,7 +783,46 @@ def build_prop(kind, seed_text, scale):
         kwargs["seed"] = _seed_of(seed_text)
     if "scale" in params:
         kwargs["scale"] = scale
+    for key, value in (options or {}).items():
+        if key in params:
+            kwargs[key] = value
+        elif warn is not None:
+            warn(f"prop {seed_text!r}: make_{kind} takes no {key}; ignored")
     return builder(**kwargs)
+
+
+def register_prop(world, ident, obj, kind, position, rot=0.0):
+    """Place a built prop and record it under the name the scene file uses.
+
+    One registry for props the set dresser placed and for props an actor
+    conjures with a `hold`, because identity is the thing that has to survive.
+    A cup is a cup: whoever is carrying it, it is the same object, with the
+    same seed and therefore the same colour, from the shot it appears in to the
+    shot it is put down in.
+
+    Size and radius are measured here, while the prop is still standing free.
+    Measured later they would be read through whatever scale the rig it is
+    parented to carries, and the insert solver would frame it as the wrong
+    size.
+    """
+    obj.name = f"prop:{ident}"
+    place(obj, position, rot)
+    bpy.context.view_layer.update()
+    world["props"][ident] = {
+        "obj": obj,
+        "id": ident,
+        "kind": kind,
+        "pos": list(position),
+        "rot": float(rot),
+        # Any lean the builder authored -- a parasol is planted at four to
+        # eight degrees on purpose. `place` only ever writes the yaw, so this
+        # is what a set-down has to restore instead of levelling the object.
+        "tilt": (obj.rotation_euler[0], obj.rotation_euler[1]),
+        "size_y": object_height(obj),
+        "radius": object_radius(obj),
+        "held_by": None,
+    }
+    return world["props"][ident]
 
 
 def ground_snap(world, three_pos):
@@ -865,21 +913,15 @@ def build_world(scene_data, warn):
     }
 
     for entry in env.get("props") or []:
-        obj = build_prop(entry["type"], entry["id"], float(entry.get("scale") or 1.0))
+        obj = build_prop(entry["type"], entry["id"],
+                         float(entry.get("scale") or 1.0),
+                         entry.get("options"), warn)
         if obj is None:
             warn(f"no ph_assets.make_{entry['type']} for prop {entry['id']!r}; skipped")
             continue
-        obj.name = f"prop:{entry['id']}"
-        position = ground_snap(world, entry["at"])
-        place(obj, position, entry.get("rot") or 0.0)
-        bpy.context.view_layer.update()
-        world["props"][entry["id"]] = {
-            "obj": obj,
-            "pos": position,
-            "rot": float(entry.get("rot") or 0.0),
-            "size_y": object_height(obj),
-            "radius": object_radius(obj),
-        }
+        register_prop(world, entry["id"], obj, entry["type"],
+                      ground_snap(world, entry["at"]),
+                      float(entry.get("rot") or 0.0))
 
     for member in scene_data.get("cast") or []:
         spec = member.get("spec") or {}
@@ -942,7 +984,8 @@ def _seat_held(world, actor_id):
     the hand and a prop that stayed at the hip would give the game away.
     """
     actor = world["cast"][actor_id]
-    for hand, prop in actor["held"].items():
+    for hand, entry in actor["held"].items():
+        prop = entry["obj"]
         target, bone = find_attachment(actor["obj"], hand)
         if target is None:
             continue
@@ -968,6 +1011,120 @@ def _seat_held(world, actor_id):
                              @ Matrix.Translation(-grip))
         bpy.context.view_layer.update()
         parent_keep_transform(prop, target, bone)
+        # The registry says where every named prop is, and for a held one that
+        # is the hand it is in -- an insert on the cup someone is drinking from
+        # should frame the cup, not the table it was built on.
+        entry["pos"] = list(to_three(prop.matrix_world.translation))
+
+
+def _matches_prop(entry, name):
+    """Does this prop answer to `name`?
+
+    By its scene-file id ("cupA", the one specific cup) or by its type ("cup",
+    any cup), which is how production.js resolves the same name -- a placed
+    prop carries its type as its propName, so a script saying "she picks up the
+    bucket" finds the bucket the set dresser put on the sand.
+    """
+    key = str(name).lower()
+    return entry["id"].lower() == key or entry["kind"].lower() == key
+
+
+def _prop_for_hand(world, name, actor_id):
+    """Which existing prop a `hold` should put in the hand, or None to build one.
+
+    Order is production.js #propForHand's. What this actor already holds wins,
+    so repeating a `hold` is a no-op rather than a second cup. Then anything
+    free -- placed by the scene file, or set down by whoever had it last --
+    because that is what makes a hand-off a hand-off: BEN picks up the cup ANNA
+    put down, not a new cup that merely shares its name.
+
+    A prop still in someone else's hand is deliberately NOT taken. Both guards
+    in forest-stop are told to hold a rifle and want a rifle each, not one
+    rifle and a disarmed guard; a director who means a hand-off writes the
+    `release` that frees it, and a still only ever shows the landed state.
+    """
+    matches = [entry for entry in world["props"].values()
+               if _matches_prop(entry, name)]
+    # An exact id beats a type match: "cupA" means that cup, "cup" means any.
+    matches.sort(key=lambda entry: entry["id"].lower() != str(name).lower())
+    mine = [entry for entry in matches if entry["held_by"] == actor_id]
+    if mine:
+        return mine[0]
+    free = [entry for entry in matches if entry["held_by"] is None]
+    return free[0] if free else None
+
+
+def _link_to_kick(world, obj):
+    """Let the frontal kick light see a prop that has just entered a hand.
+
+    The kick is light-linked to the cast, and that link was made in build_world
+    before any prop was in a hand: without this the rifle drawn in shot 7 is
+    the one object on a lit actor that the frontal light does not touch.
+
+    Membership is tested rather than a second link attempted -- a prop can now
+    be picked up, set down and picked up again, and linking twice raises.
+    """
+    receivers = (world.get("lights") or {}).get("kick_receivers")
+    if receivers is None:
+        return
+    for part in [obj, *_descendants(obj)]:
+        if receivers.objects.get(part.name) is None:
+            receivers.objects.link(part)
+
+
+def _take_prop(world, entry, actor_id, hand, warn):
+    """Move a named prop into an actor's hand, out of wherever it was.
+
+    One prop, one holder. The hand it came out of is cleared rather than left
+    pointing at an object that has gone, because ``_seat_held`` runs again on
+    every pose change and would otherwise keep dragging the cup back to
+    whoever used to be holding it.
+    """
+    holder = world["cast"].get(entry["held_by"])
+    if holder is not None:
+        for other_hand, other in list(holder["held"].items()):
+            if other is entry:
+                del holder["held"][other_hand]
+    world["cast"][actor_id]["held"][hand] = entry
+    entry["held_by"] = actor_id
+    _link_to_kick(world, entry["obj"])
+    _seat_held(world, actor_id)
+    if entry["obj"].parent is None:
+        warn(f"hold: {actor_id!r} exposes no {hand} hand, so {entry['id']!r} "
+             f"is left standing where it was")
+
+
+def _set_down(world, entry, actor, hand):
+    """Take a prop out of a hand and stand it on the ground at the actor's feet.
+
+    `release` used to delete the object, which made a hand-off unrepresentable:
+    the next actor to hold the same name got a rebuild seeded from *their* id,
+    so a cup passed from ANNA to BEN came back a different colour and a
+    different shape between two shots of the same table. Releasing means "no
+    longer held", and a thing that is no longer held is somewhere.
+
+    0.45 m in front of the holder, as production.js #releaseProp does: a cup
+    dropped on the character's own origin intersects their shins. It is set
+    down on the side of the hand that was carrying it, because an actor
+    emptying both hands at once would otherwise stand two props in exactly the
+    same place, which renders as one object growing out of another.
+    """
+    obj = entry["obj"]
+    facing = actor["facing"]
+    forward = _forward_of(facing)
+    right = Vector((forward.z, 0.0, -forward.x)) * (0.18 if hand == "R" else -0.18)
+    position = ground_snap(world, [actor["pos"][0] + forward.x * 0.45 + right.x, 0.0,
+                                   actor["pos"][2] + forward.z * 0.45 + right.z])
+    obj.parent = None
+    obj.rotation_mode = "XYZ"
+    # Drop the hand's tilt and restore the builder's own, or a bucket set down
+    # by an actor whose wrist was turned lands on its side.
+    obj.rotation_euler[0], obj.rotation_euler[1] = entry["tilt"]
+    place(obj, position, facing)
+    bpy.context.view_layer.update()
+    entry["pos"] = position
+    entry["rot"] = facing
+    entry["held_by"] = None
 
 
 def _set_pose(world, actor_id, pose, warn):
@@ -979,6 +1136,15 @@ def _set_pose(world, actor_id, pose, warn):
     looking -- so that is the rule reproduced here.
     """
     actor = world["cast"][actor_id]
+    if pose not in ph_assets.POSES:
+        # pose_character falls back to `idle` for anything it does not know,
+        # and the browser's pose library is much the larger of the two -- so a
+        # pose that previews perfectly can render as a man standing about, with
+        # nothing anywhere saying why. Read from POSES rather than a list kept
+        # here, so this cannot go stale the day an asset gains a pose.
+        warn(f"pose {pose!r}: ph_assets has no table for it, so {actor_id!r} "
+             f"renders as 'idle'. Blender can pose: "
+             f"{', '.join(sorted(ph_assets.POSES))}")
     ph_assets.pose_character(actor["obj"], pose)
     if pose in ("handsUp", "flinch"):
         actor["look"] = None
@@ -1064,39 +1230,51 @@ def apply_action(action, world, warn):
     elif verb == "hold":
         if actor is None:
             return
-        held = build_prop(action["prop"], f"{actor_id}:{action['prop']}", 1.0)
-        if held is None:
-            warn(f"hold: no ph_assets.make_{action['prop']}")
-            return
-        held.name = f"held:{actor_id}:{action['prop']}"
-        # The frontal kick is light-linked to the cast, and that link was set
-        # up before this prop existed. Without this the rifle is the only lit
-        # actor's only unlit object.
-        receivers = (world.get("lights") or {}).get("kick_receivers")
-        if receivers is not None:
-            for part in [held, *_descendants(held)]:
-                try:
-                    receivers.objects.link(part)
-                except RuntimeError:
-                    pass
+        name = action["prop"]
         hand = action.get("hand", "R")
-        actor["held"][hand] = held
-        _seat_held(world, actor_id)
-        if held.parent is None:
-            warn(f"hold: {actor_id!r} exposes no {hand} hand; prop left at origin")
+        entry = _prop_for_hand(world, name, actor_id)
+        if entry is None:
+            # Nothing on the set answers to this name and nothing is lying
+            # free, so the actor brings their own. It is registered under the
+            # bare name where that is available, because the *next* actor to
+            # ask for a cup must find this one rather than build a second.
+            ident = name if name not in world["props"] else f"{actor_id}:{name}"
+            obj = build_prop(name, ident, 1.0, action.get("options"), warn)
+            if obj is None:
+                warn(f"hold: no ph_assets.make_{name}")
+                return
+            entry = register_prop(world, ident, obj, name,
+                                  actor["pos"], actor["facing"])
+        elif action.get("options"):
+            # Options are decided when a prop is built. Silently ignoring them
+            # on a pick-up would let a script ask for a yellow cup, get the
+            # cup that already exists, and never learn the colour did nothing.
+            warn(f"hold: {actor_id!r} picks up the existing "
+                 f"{entry['id']!r}, so its options were ignored; set them "
+                 f"where the prop is first built")
+        _take_prop(world, entry, actor_id, hand, warn)
 
     elif verb == "release":
         if actor is None:
             return
-        for hand, held in list(actor["held"].items()):
-            if held.name.endswith(action["prop"]):
-                held.parent = None
-                bpy.data.objects.remove(held, do_unlink=True)
-                del actor["held"][hand]
+        # production.js has a release with no prop meaning "drop everything",
+        # and the scene file does not require one either.
+        name = action.get("prop")
+        for hand, entry in list(actor["held"].items()):
+            if name and not _matches_prop(entry, name):
+                continue
+            del actor["held"][hand]
+            _set_down(world, entry, actor, hand)
 
     elif verb == "prop":
         if prop is None:
             warn(f"prop: {actor_id!r} is not a placed prop")
+            return
+        if prop["held_by"] is not None:
+            # A held prop rides its hand: `place` would write a location that
+            # is read relative to the bone and put the cup through the actor.
+            warn(f"prop: {actor_id!r} is in {prop['held_by']}'s hand; "
+                 f"move the actor, or release it first")
             return
         if action.get("to"):
             to = action["to"]
