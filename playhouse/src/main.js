@@ -13,6 +13,7 @@ import { direct } from './director.js';
 import { ABILITIES, parseScript } from './parser.js';
 import { saveAvatarFile, loadStoredAvatars, clearStoredAvatar } from './avatar.js';
 import { SpeechDirector } from './speech.js';
+import { Score, cueFor } from './score.js';
 import { NoteStack, parseNote } from './notes.js';
 import { propsMentioned } from './props.js';
 
@@ -74,6 +75,7 @@ const audio = new AudioTrack();
 // Speak dialogue by default — a silent play was the app's biggest reported
 // surprise. Lyrics stay silent unless opted in (spoken TTS undercuts a song).
 const speech = new SpeechDirector();
+const score = new Score();
 
 const ui = {
   boot: document.getElementById('boot'),
@@ -91,6 +93,7 @@ const ui = {
   btnPlay: document.getElementById('btnPlay'),
   btnFull: document.getElementById('btnFull'),
   btnLetterbox: document.getElementById('btnLetterbox'),
+  btnScore: document.getElementById('btnScore'),
   sheet: document.getElementById('sheet'),
   sheetTitle: document.getElementById('sheetTitle'),
   sheetBody: document.getElementById('sheetBody'),
@@ -144,6 +147,7 @@ fitCanvas();
 
 const SCRIPT_KEY = 'playhouse.script';
 const SPEECH_KEY = 'playhouse.speech';
+const SCORE_KEY = 'playhouse.score';
 const VOICE_KEY = 'playhouse.voices';
 const HINT_KEY = 'playhouse.hint.notes';
 
@@ -176,6 +180,14 @@ try {
   if (typeof prefs.enabled === 'boolean') speech.enabled = prefs.enabled;
   if (typeof prefs.speakLyrics === 'boolean') speech.speakLyrics = prefs.speakLyrics;
 } catch { /* corrupt prefs: defaults stand */ }
+
+// --- Score preferences -------------------------------------------------------
+// Default OFF. An underscore that starts itself the first time someone opens
+// the page is the behaviour every user hates in every site that has it, and
+// the one-tap cost of turning it on is far smaller than the cost of playing
+// music at somebody who did not ask for any.
+score.setEnabled(recall(SCORE_KEY) === 'on');
+
 try {
   state.voices = JSON.parse(recall(VOICE_KEY) || '{}') || {};
   // Unknown URIs (the voice list changed since) are ignored gracefully inside.
@@ -295,6 +307,11 @@ function frame() {
     if (src !== null) animator.setMouthOpen(src);
   }
 
+  // The underscore is always under something. Ducking on `speaking` alone
+  // would pump between lines, so an uploaded recording ducks for its whole
+  // duration and TTS ducks per line, which is the shape of the two sources.
+  score.duck(audio.playing || speech.speaking || speech.holding);
+
   engine.render(elapsed);
   updateTransport();
 }
@@ -309,10 +326,37 @@ production.onBeatChange = (beat) => {
   lastSpeaker = beat?.character || null;
   if (!beat) return;
   if (state.audioMaster && audio.loaded) return; // the recording is the voice
+  scoreBeat(beat);
   // Mirrors director.js's slot maths exactly; speakBeat rate-fits into it.
   const slot = Math.max(0.8, (beat.duration || 1.5) / (production.pace ?? 1));
   speech.speakBeat(beat, production.specs.get(beat.character), { slotSeconds: slot });
 };
+
+// --- Underscore --------------------------------------------------------------
+
+/**
+ * Re-cue the music for a beat.
+ *
+ * The beat's own text is thin evidence — one line of dialogue rarely says what
+ * a scene *is* — so the surrounding beats are read too. That window is why the
+ * music does not lurch: a quiet line inside a chase stays scored as the chase.
+ */
+let scoredCue = null;
+function scoreBeat(beat) {
+  if (!score.enabled) return;
+  const beats = production.script?.beats || [];
+  const index = beats.indexOf(beat);
+  const window = index >= 0 ? beats.slice(Math.max(0, index - 2), index + 3) : [beat];
+  const text = window.map((b) => `${b.text || ''} ${b.action || ''}`).join(' ');
+  const { cue } = cueFor(text, production.stage?.userData?.mood);
+  if (cue !== scoredCue) {
+    scoredCue = cue;
+    score.setCue(cue);
+  }
+  // Dialogue beats sit back; action beats lean in. The picture is doing the
+  // work during dialogue and the music should get out of its way.
+  score.setIntensity(beat.type === 'dialogue' || beat.type === 'lyric' ? 0.35 : 0.65);
+}
 
 function updateTransport() {
   const d = production.duration || 1;
@@ -349,6 +393,9 @@ ui.btnPlay.addEventListener('click', async () => {
   // MUST be the first statement: on Safari an `await` before this breaks the
   // gesture chain and every later speechSynthesis.speak() is silently dropped.
   speech.unlock();
+  // Same gesture rule as speech: an AudioContext created outside a user
+  // gesture starts suspended on iOS and never produces a sound.
+  if (score.enabled) score.start();
   if (!production.playing) {
     await audio.resume();
     production.play();
@@ -358,7 +405,17 @@ ui.btnPlay.addEventListener('click', async () => {
     if (audio.playing) audio.pause();
     // cancel, never speechSynthesis.pause() — pause/resume is broken on iOS.
     speech.cancel();
+    score.stop();
   }
+});
+
+ui.btnScore?.addEventListener('click', () => {
+  const on = !score.enabled;
+  score.setEnabled(on);
+  remember(SCORE_KEY, on ? 'on' : 'off');
+  ui.btnScore.classList.toggle('on', on);
+  if (on && production.playing) score.start();
+  toast(on ? 'Score on — cues follow the script' : 'Score off');
 });
 
 let scrubbing = false;

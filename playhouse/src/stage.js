@@ -648,6 +648,9 @@ function surfaceMaterial(kind, colour, repeat) {
   else if (kind === 'stone') map = stoneTexture();
   else if (kind === 'grass') map = grassTexture();
   else if (kind === 'cobble') map = cobbleTexture();
+  // Sand has no dedicated texture: plaster's fine speckle at a high repeat is
+  // already what sand looks like from standing height, and inventing a second
+  // near-identical noise generator would be work for no visible difference.
   else map = plasterTexture(colour);
 
   const m = map.clone();
@@ -849,7 +852,7 @@ export function buildStage(scene, options = {}) {
 
 const GROUND_COLOUR = {
   grass: '#4a6238', dirt: '#6a5238', cobble: '#5e564c',
-  stone: '#6e675c', plank: '#6b4a2c',
+  stone: '#6e675c', plank: '#6b4a2c', sand: '#c2ab84',
 };
 
 /**

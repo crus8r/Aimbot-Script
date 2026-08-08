@@ -26,7 +26,7 @@ const SIZES = ['ECU', 'CU', 'MCU', 'MS', 'MWS', 'WS', 'EWS'];
 const MOVES = ['static', 'push', 'pull', 'dolly', 'crane', 'handheld', 'orbit', 'track'];
 const HEIGHTS = ['low', 'eye', 'high'];
 const MOODS = ['NIGHT', 'DAY', 'DUSK', 'DAWN', 'STORM'];
-const GROUNDS = ['grass', 'dirt', 'cobble', 'stone', 'plank'];
+const GROUNDS = ['grass', 'dirt', 'cobble', 'stone', 'plank', 'sand'];
 
 /** Action verbs a shot may contain. */
 const VERBS = [

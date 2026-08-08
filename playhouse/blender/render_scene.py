@@ -169,39 +169,67 @@ def _forward_of(facing):
     return Vector((math.sin(facing), 0.0, math.cos(facing)))
 
 
-def _fit_pair(position, aim, a, b, fov, margin=0.12):
-    """Back the camera off until two world points both sit inside the frame.
+def _pair_distance(aim, place, points, fov, min_dist, max_dist, margin=0.12):
+    """How far out the lens must sit to hold every point in frame.
 
-    Returns (position, fov). Only ever retreats along the existing view axis, so
-    the shot keeps the angle the director asked for and loses only its tightness
-    — a wider version of the intended shot is a far smaller betrayal than a tight
-    shot of the wrong thing.
+    `place(distance)` returns the camera position that distance out -- a
+    callable rather than a direction vector because the camera's *height* is
+    not a free consequence of the distance: a low-angle shot pins the lens at
+    a fixed height whatever the distance, and a version of this function that
+    solved along a straight ray and let the caller drop the camera afterwards
+    was solving a framing that never got rendered. On the surrender shot,
+    where the second subject is a drone 3.75 m up, the fit was computed at
+    lens height 2.4 m and then shot from 0.5 m.
+
+    Two-shot framing used to work by *nudging an existing camera backwards*
+    along its own view axis, and that is subtly but fatally wrong: the axis it
+    retreated along ran from the camera to the pair's midpoint, and when the
+    second subject stands between the camera and the first, that midpoint is
+    behind the lens. The retreat then solved a camera 0.20 m from what it was
+    pointing at -- shot 08 came back as an unreadable smear of shoulder -- and
+    no amount of backing off could fix it, because backing off was moving the
+    camera the wrong way.
+
+    Solving for a *distance from the pair* instead makes that unrepresentable.
+    The camera is always outside both subjects, always at least the distance
+    the declared shot size implies (so a CU can never solve tighter than a CU),
+    and never further than three times it (so a two-shot cannot quietly become
+    a wide). The half-angle a point subtends shrinks monotonically with
+    distance, so a bisection is exact rather than iterative guesswork.
+
+    :returns: ``(distance, fits)`` -- `fits` is False when even `max_dist` will
+        not hold both, which is a framing the director should hear about.
     """
-    view = aim - position
-    dist = view.length
-    if dist < 1e-4:
-        return position, fov
-    view = view / dist
-
-    # Half-angle each point subtends from the lens axis.
-    worst = 0.0
-    for point in (a, b):
-        to_point = point - position
-        if to_point.length < 1e-4:
-            continue
-        cos_a = max(-1.0, min(1.0, to_point.normalized().dot(view)))
-        worst = max(worst, math.acos(cos_a))
-
-    # Vertical half-FOV is the binding constraint on a 16:9 frame.
     half = math.radians(fov) * 0.5
-    needed = worst * (1.0 + margin)
-    if needed <= half:
-        return position, fov
 
-    # Retreat far enough that the pair fits, capped so a shot never runs away.
-    scale = math.tan(needed) / max(1e-4, math.tan(half))
-    new_dist = min(dist * scale, dist * 3.0)
-    return aim - view * new_dist, fov
+    def holds(d):
+        position = place(d)
+        view = (aim - position)
+        if view.length < 1e-6:
+            return False
+        view.normalize()
+        worst = 0.0
+        for point in points:
+            to_point = point - position
+            if to_point.length < 1e-4:
+                return False  # lens is on top of a subject
+            cos_a = max(-1.0, min(1.0, to_point.normalized().dot(view)))
+            worst = max(worst, math.acos(cos_a))
+        return worst * (1.0 + margin) <= half
+
+    if holds(min_dist):
+        return min_dist, True
+    if not holds(max_dist):
+        return max_dist, False
+
+    low, high = min_dist, max_dist
+    for _ in range(28):
+        mid = (low + high) * 0.5
+        if holds(mid):
+            high = mid
+        else:
+            low = mid
+    return high, True
 
 
 def _aim_point(actor, aim):
@@ -255,7 +283,35 @@ def refresh_aim_points(world):
         actor["aim_points"] = points
 
 
-def solve_shot(shot, world, t=1.0):
+def secondary_point(shot, world, aim="body"):
+    """Where the second thing in a two-shot is, cast member or prop alike.
+
+    A shot names a secondary to say "this frame is about both of these". The
+    scene file has always been free to name a prop -- the forest scene points
+    three shots at ``droneA``/``droneB`` -- but the translator only ever looked
+    the name up in the cast, so those three shots silently degraded to single
+    subjects and rendered without a drone anywhere in frame. Their camera
+    transforms came back byte-identical to the version before two-shot framing
+    existed, which is what gave the bug away: the solver had never seen a
+    secondary at all.
+
+    Props have no eyeline, so they are framed on the middle of their own
+    height -- the same rule `solve_shot`'s insert path uses.
+    """
+    ident = shot["secondary"]
+    if not ident:
+        return None
+    actor = world["cast"].get(ident)
+    if actor is not None:
+        return _aim_point(actor, aim)
+    prop = world["props"].get(ident)
+    if prop is not None:
+        x, y, z = prop["pos"]
+        return Vector((x, y + prop["size_y"] * 0.5, z))
+    return None
+
+
+def solve_shot(shot, world, t=1.0, warn=None):
     """Resolve a shot into a camera placement, in three.js space.
 
     Ported from director.js solveShot. Divergences, all deliberate:
@@ -270,6 +326,7 @@ def solve_shot(shot, world, t=1.0):
 
     :returns: ``{"position": Vector, "look_at": Vector, "fov": float}``
     """
+    warn = warn or (lambda _message: None)
     spec = SHOT_SIZES.get(shot["size"], SHOT_SIZES["MS"])
     subject = world["cast"].get(shot["subject"]) if shot["subject"] else None
     secondary = world["cast"].get(shot["secondary"]) if shot["secondary"] else None
@@ -324,6 +381,25 @@ def solve_shot(shot, world, t=1.0):
     dist = spec["dist"]
     fov = float(spec["fov"])
 
+    # Lens height, decided up front. director.js applies this *after* framing
+    # because in the browser nothing depends on it; here the two-shot solver
+    # does, so it has to be known before the framing runs. The numbers are
+    # director.js's, unchanged.
+    eye = subject["pos"][1] + subject["eye"]
+    if shot["height"] == "low":
+        cam_y = max(0.5, eye - 0.55 - dist * 0.08)
+    elif shot["height"] == "high":
+        cam_y = eye + 0.45 + dist * 0.10
+    else:
+        cam_y = eye - 0.03
+
+    if shot["ots"] and secondary is None:
+        # An over-the-shoulder needs a shoulder. A prop has none, so rather
+        # than shoot over a hovering drone's non-existent head, say so and let
+        # the shot fall through to the pair framing below, which a prop can do.
+        warn(f"shot {shot['id']!r}: ots wants a cast secondary, but "
+             f"{shot['secondary']!r} is not one; framed as a two-shot instead")
+
     if shot["ots"] and secondary is not None:
         # Over the shoulder: behind and outside the listener's head, looking
         # past them. Requested by camera.ots in the scene file.
@@ -340,10 +416,8 @@ def solve_shot(shot, world, t=1.0):
             position += to_subject * -(1.15 - have)
         fov = 40.0
     elif shot["size"] == "EWS":
-        if secondary is not None:
-            centre = (target + _aim_point(secondary, "body")) * 0.5
-        else:
-            centre = target.copy()
+        other = secondary_point(shot, world, "body")
+        centre = (target + other) * 0.5 if other is not None else target.copy()
         # Exterior stages get the fixed crane height director.js uses outdoors.
         bounds = world["bounds"]
         height = 3.4 if bounds["exterior"] else min(bounds["height"] - 0.5, 2.9)
@@ -359,26 +433,84 @@ def solve_shot(shot, world, t=1.0):
         direction = _rot_y(facing, swing)
         position = target + direction * dist
 
-        if secondary is not None:
+        other = secondary_point(shot, world, "body")
+        if other is not None:
             # A shot that names a secondary is about the PAIR. Bias the aim
-            # toward the subject so it still reads as their shot, then back off
-            # along the view axis until both points sit inside the frustum with
-            # a margin. Two separated points also make bullseye framing
-            # impossible by construction, which is the other thing wrong with
-            # single-subject solves.
-            other = _aim_point(secondary, "body")
+            # toward the subject so it still reads as their shot, then choose
+            # the distance -- outward along the same three-quarter axis the
+            # single would have used -- at which both points sit inside the
+            # frustum with a margin. Two separated points also make bullseye
+            # framing impossible by construction, which is the other thing
+            # wrong with single-subject solves.
             pair_aim = target * 0.65 + other * 0.35
-            position, fov = _fit_pair(position, pair_aim, target, other, fov)
-            two_shot_aim = pair_aim
+            # Distance is the expensive way to hold two subjects and the only
+            # one a fixed camera axis leaves you. Backing a WS off from 5.4 m
+            # to 14.3 m does technically get a drone into frame, but what it
+            # actually delivers is an EWS with a shot label that says WS, and
+            # every subsequent cut is scaled against a lie.
+            #
+            # The cheap way is the one an operator reaches for first: walk
+            # round until the two subjects line up in depth rather than across
+            # the frame. Stacked, they subtend almost nothing and fit at the
+            # size that was asked for. So search the azimuth too, ordered by
+            # how far it strays from the angle the director specified, and
+            # take the first that holds the pair without stretching the
+            # distance past a stop of the declared size.
+            swings = [swing]
+            for delta in range(6, 51, 4):
+                for sign in (1, -1):
+                    swings.append(swing + math.radians(delta * sign))
 
-    # --- Height -----------------------------------------------------------
-    eye = subject["pos"][1] + subject["eye"]
-    if shot["height"] == "low":
-        position.y = max(0.5, eye - 0.55 - dist * 0.08)
-    elif shot["height"] == "high":
-        position.y = eye + 0.45 + dist * 0.10
-    else:
-        position.y = eye - 0.03
+            def placer(candidate_dir):
+                # Distance is horizontal; height is whatever the shot asked
+                # for. This is the camera that will actually be rendered, so
+                # it is the camera the fit must be tested against.
+                def place(d):
+                    at = pair_aim + candidate_dir * d
+                    at.y = cam_y
+                    return at
+                return place
+
+            best = None
+            for candidate_swing in swings:
+                place = placer(_rot_y(facing, candidate_swing))
+                span, fits = _pair_distance(pair_aim, place, (target, other),
+                                            fov, dist, dist * 3.0)
+                if not fits:
+                    continue
+                if span <= dist * 1.35:
+                    best = (place, span, candidate_swing)
+                    break
+                if best is None or span < best[1]:
+                    best = (place, span, candidate_swing)
+
+            if best is not None:
+                place, span, chosen = best
+                if abs(chosen - swing) > 1e-6:
+                    warn(f"shot {shot['id']!r}: swung "
+                         f"{math.degrees(chosen - swing):+.0f} deg to line "
+                         f"{shot['subject']!r} up with {shot['secondary']!r} "
+                         f"and hold the {shot['size']} at {span:.1f} m")
+                position = place(span)
+                two_shot_aim = pair_aim
+            else:
+                # Two subjects too far apart to hold at this size. Retreating
+                # to the cap satisfies neither promise -- a CU solved 3.2 m
+                # out is not a close-up and still crops the pair -- so the
+                # declared shot size wins and the secondary is left to fall
+                # where it falls, usually in the background of frame. That is
+                # what a DP does: they shoot the close-up and get the other
+                # actor in the edge of it, they do not invent a wide.
+                warn(f"shot {shot['id']!r}: {shot['subject']!r} and "
+                     f"{shot['secondary']!r} are {(target - other).length:.1f} m "
+                     f"apart, too far to hold together in a {shot['size']}; "
+                     f"framed as a single on {shot['subject']!r}")
+
+    # A two-shot solve has already placed the lens at `cam_y` and framed
+    # against it; re-imposing the height here would be a no-op at best and, if
+    # these two ever drift apart, would silently invalidate the fit again.
+    if two_shot_aim is None:
+        position.y = cam_y
 
     # --- Moves, evaluated at `t` ------------------------------------------
     to_target = target - position
@@ -937,6 +1069,16 @@ def apply_action(action, world, warn):
             warn(f"hold: no ph_assets.make_{action['prop']}")
             return
         held.name = f"held:{actor_id}:{action['prop']}"
+        # The frontal kick is light-linked to the cast, and that link was set
+        # up before this prop existed. Without this the rifle is the only lit
+        # actor's only unlit object.
+        receivers = (world.get("lights") or {}).get("kick_receivers")
+        if receivers is not None:
+            for part in [held, *_descendants(held)]:
+                try:
+                    receivers.objects.link(part)
+                except RuntimeError:
+                    pass
         hand = action.get("hand", "R")
         actor["held"][hand] = held
         _seat_held(world, actor_id)
@@ -998,15 +1140,39 @@ def camera_is_buried(scene, dg, blender_pos, radius=1.25, votes=4):
 
 
 def view_is_blocked(scene, dg, blender_pos, blender_look, ignore, clearance):
-    """Is something sitting right on the lens between camera and subject?"""
+    """Is something between the camera and what it is pointing at?
+
+    ``clearance`` is how far down the sightline to care about. A short reach
+    only catches scenery pressed against the lens; ``None`` walks the whole
+    span and catches a tree standing squarely in front of the subject, which
+    is a different and more embarrassing failure -- shot 06 shipped with the
+    runner behind a trunk.
+
+    Rays are re-cast past anything ignorable rather than stopping at the first
+    hit, so a shot framed *through* the subject's own outstretched arm is not
+    reported as blocked.
+    """
     delta = blender_look - blender_pos
     span = delta.length
     if span < 1e-6:
         return False
-    reach = min(clearance, span * 0.9)
-    hit, _, _, _, obj, _ = scene.ray_cast(dg, blender_pos, delta.normalized(),
-                                          distance=reach)
-    return bool(hit) and obj not in ignore
+    direction = delta / span
+    reach = span * 0.94 if clearance is None else min(clearance, span * 0.9)
+
+    travelled = 0.0
+    for _ in range(8):
+        origin = blender_pos + direction * travelled
+        hit, location, _n, _i, obj, _m = scene.ray_cast(
+            dg, origin, direction, distance=reach - travelled)
+        if not hit:
+            return False
+        if obj not in ignore:
+            return True
+        # Skim past the ignorable surface and keep looking.
+        travelled = (location - blender_pos).length + 1e-3
+        if travelled >= reach:
+            return False
+    return False
 
 
 def unblock_camera(scene, world, position, look_at, ignore, warn, shot_id):
@@ -1037,20 +1203,31 @@ def unblock_camera(scene, world, position, look_at, ignore, warn, shot_id):
                       0.75, -0.75, 1.0, -1.0):
             trials.append((swing, lift))
 
-    for swing, lift in trials:
-        candidate = look_at + _rot_y(offset, swing)
-        candidate.y = position.y + lift
+    def usable(candidate, clearance):
         blender_pos = to_blender(candidate)
         # Never drop the lens through the floor chasing a clear line.
         floor = terrain_height(ground, blender_pos.x, blender_pos.y) + 0.35
         if blender_pos.z < floor:
-            continue
-        blocked = (camera_is_buried(scene, dg, blender_pos)
-                   or view_is_blocked(scene, dg, blender_pos,
-                                      to_blender(look_at), ignore, 0.55))
-        if not blocked:
+            return False
+        return not (camera_is_buried(scene, dg, blender_pos)
+                    or view_is_blocked(scene, dg, blender_pos,
+                                       to_blender(look_at), ignore, clearance))
+
+    # Two passes over the same candidates. The first insists on a completely
+    # clear sightline; the second only insists the lens is not buried and
+    # nothing is jammed against it. Ranked, not merged, because a swung camera
+    # with a clean view of the subject beats the intended angle through a
+    # trunk, but the intended angle with a leaf in the corner beats a camera
+    # swung 60 degrees away from the shot that was asked for.
+    for clearance, label in ((None, "the subject was hidden behind scenery"),
+                             (0.55, "the camera was inside scenery")):
+        for swing, lift in trials:
+            candidate = look_at + _rot_y(offset, swing)
+            candidate.y = position.y + lift
+            if not usable(candidate, clearance):
+                continue
             if swing or lift:
-                warn(f"shot {shot_id!r}: camera was inside scenery; swung "
+                warn(f"shot {shot_id!r}: {label}; swung "
                      f"{math.degrees(swing):.0f} deg and {lift:+.1f} m to clear it")
             return candidate
 
@@ -1143,18 +1320,23 @@ def light_for_camera(world, heading_deg, fov_deg=None, aspect=16.0 / 9.0):
 # Shot normalisation -- mirrors production.js loadScene
 # ---------------------------------------------------------------------------
 
-def prepare_shots(scene_data, world):
+def prepare_shots(scene_data, world, warn=None):
     """Turn scene-file shots into the shape solve_shot wants.
 
     This is production.js loadScene's shot mapping, including its rule that a
     camera subject which is not a cast member makes the shot an insert.
     """
+    warn = warn or (lambda _message: None)
     shots = []
     for index, entry in enumerate(scene_data["shots"]):
         cam = entry.get("camera") or {}
         subject = cam.get("subject")
         subject_is_cast = bool(subject) and subject in world["cast"]
         move = cam.get("move") or "static"
+        second = cam.get("secondary")
+        if second and second not in world["cast"] and second not in world["props"]:
+            warn(f"shot {entry.get('id') or index!r}: secondary {second!r} is "
+                 f"neither cast nor a placed prop; framed as a single")
         shots.append({
             "index": index,
             "id": entry.get("id") or f"shot{index}",
@@ -1164,8 +1346,12 @@ def prepare_shots(scene_data, world):
             "subject": subject if subject_is_cast else None,
             "subject_prop": None if subject_is_cast else subject,
             "insert": bool(subject) and not subject_is_cast,
+            # A secondary may be a cast member OR a placed prop -- see
+            # secondary_point. Only a name that is neither is dropped.
             "secondary": (cam.get("secondary")
-                          if cam.get("secondary") in world["cast"] else None),
+                          if (cam.get("secondary") in world["cast"]
+                              or cam.get("secondary") in world["props"])
+                          else None),
             # `track` is a dolly that holds the subject; the solver already
             # holds the subject, so only the lateral move is left.
             "move": "dolly" if move == "track" else move,
@@ -1241,6 +1427,12 @@ def main(argv):
              "shows a move landed, matching actors shown arrived.")
     parser.add_argument("--save-blend", action="store_true",
                         help="also write scene.blend, for opening the setup by hand")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="build the set and solve every camera, but rasterise nothing. "
+             "Writes the manifest and the warnings in about a second, so a "
+             "framing change can be checked before spending a quarter hour "
+             "of Cycles on it.")
     args = parser.parse_args(argv)
     if not 0.0 <= args.t <= 1.0:
         parser.error("--t is progress through a shot, so it must be within 0..1")
@@ -1274,7 +1466,7 @@ def main(argv):
     configure_render(scene, args.samples, args.res)
 
     world = build_world(scene_data, warn)
-    shots = prepare_shots(scene_data, world)
+    shots = prepare_shots(scene_data, world, warn)
     cam = make_camera(scene)
     print(f"  {scene_data.get('title', 'Untitled')}: {len(shots)} shots, "
           f"{len(world['props'])} props, cast {'/'.join(world['cast'])}")
@@ -1291,7 +1483,7 @@ def main(argv):
         bpy.context.view_layer.update()
         refresh_aim_points(world)
 
-        solved = solve_shot(shot, world, t=args.t)
+        solved = solve_shot(shot, world, t=args.t, warn=warn)
         position = Vector(shot["explicit_at"]) if shot["explicit_at"] else solved["position"]
         look_at = Vector(shot["world_target"]) if shot["world_target"] else solved["look_at"]
         fov = float(shot["lens"]) if shot["lens"] else solved["fov"]
@@ -1299,12 +1491,15 @@ def main(argv):
         # A position the director asked for explicitly is honoured as written;
         # one the solver invented is checked against the actual set first.
         if not shot["explicit_at"]:
-            focus = world["cast"].get(shot["subject"]) or \
-                world["props"].get(shot["subject_prop"])
+            # Whatever the shot is *about* cannot be what is blocking it: a
+            # two-shot's second subject standing near the sightline is the
+            # shot working, not the shot failing.
             ignore = set()
-            if focus is not None:
-                ignore.add(focus["obj"])
-                ignore.update(_descendants(focus["obj"]))
+            for ident in (shot["subject"], shot["subject_prop"], shot["secondary"]):
+                focus = world["cast"].get(ident) or world["props"].get(ident)
+                if focus is not None:
+                    ignore.add(focus["obj"])
+                    ignore.update(_descendants(focus["obj"]))
             position = unblock_camera(scene, world, position, look_at,
                                       ignore, warn, shot["id"])
 
@@ -1314,7 +1509,8 @@ def main(argv):
 
         name = f"{shot['index']:02d}-{shot['id']}.png"
         path = os.path.join(args.outdir, name)
-        selected = (not wanted) or shot["id"] in wanted or str(shot["index"]) in wanted
+        selected = (not args.dry_run) and (
+            (not wanted) or shot["id"] in wanted or str(shot["index"]) in wanted)
 
         manifest.append({
             "index": shot["index"],

@@ -639,6 +639,12 @@ _GROUND_LOOK = {
               0.05, 'NOISE', 1.8),
     'plank': ((0.068, 0.044, 0.026), (0.036, 0.023, 0.014), 0.74, 0.28, 60.0,
               0.12, 'WAVE', 3.0),
+    # Sand is the brightest ground here by a wide margin, and deliberately so:
+    # its whole character is that it bounces a great deal of light back up
+    # into everything standing on it. The two tones are dry and damp sand, and
+    # the fine bump at a high scale is what makes a low sun rake across it.
+    'sand': ((0.310, 0.255, 0.180), (0.160, 0.135, 0.105), 0.80, 0.22, 120.0,
+             0.06, 'NOISE', 1.4),
 }
 
 
@@ -1039,6 +1045,130 @@ def make_drone(scale=1.0):
             smooth_angle=34.0)
     ob.scale = (scale, scale, scale)
     ob['ph_kind'] = 'drone'
+    return ob
+
+
+# ---------------------------------------------------------------------------
+# Small dressing props
+#
+# These exist because the asset library is the vocabulary the director can
+# speak in: a scene file may ask for anything, but only `make_<type>` names
+# actually build. A scene saying "a beach with buckets and a ball scattered
+# about" needs a bucket and a ball to exist before any amount of direction
+# will put one on screen.
+#
+# They are deliberately cheap. Dressing sits in the background of a wide shot
+# and is read as a coloured shape at twenty pixels; the budget belongs in the
+# silhouette and in a saturated albedo that survives the fog, not in detail
+# nobody will resolve.
+# ---------------------------------------------------------------------------
+
+
+def _scallop(count, depth):
+    """A `lobes` callable that ripples a ring's radius `count` times round."""
+    return lambda a: 1.0 + depth * math.cos(a * count)
+
+
+def make_ball(seed=0, scale=1.0):
+    """A beach ball: bright, banded, and slightly settled into the ground.
+
+    The bands are the point. A single-coloured sphere in a background reads as
+    a rendering artifact -- a bubble, a lens flare, a hole in the mesh --
+    because nothing outdoors is a uniform circle. Two alternating colours make
+    it read as an object at any size.
+    """
+    rng = Rng(seed * 7919 + 41)
+    hue = rng.pick([(0.62, 0.10, 0.09), (0.14, 0.30, 0.60),
+                    (0.72, 0.55, 0.08), (0.10, 0.42, 0.24)])
+    m_a = principled(f'ball_a{seed}', hue, rough=0.30, rough_var=0.08,
+                     noise_scale=70.0)
+    m_b = principled(f'ball_b{seed}', (0.74, 0.72, 0.68), rough=0.30,
+                     rough_var=0.08, noise_scale=70.0)
+
+    radius = 0.17
+    bm = bmesh.new()
+    _blob(bm, (0.0, 0.0, radius * 0.94), radius, subdiv=3, amp=0.015,
+          seed=seed, mat=0)
+    ob = _obj_from_bm(f'ball{seed}', bm, [m_a, m_b])
+    # Bands by latitude, assigned after the mesh exists because _blob writes a
+    # single material index over everything it makes.
+    for poly in ob.data.polygons:
+        z = (poly.center.z - radius * 0.94) / radius
+        poly.material_index = 1 if int((z + 1.0) * 3.0) % 2 else 0
+    _finish(ob, bevel=False, smooth_angle=180.0)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'ball'
+    return ob
+
+
+def make_bucket(seed=0, scale=1.0):
+    """A child's sand bucket: a tapered open cylinder with a handle.
+
+    Open at the top, which is why it is lofted rather than blobbed -- a solid
+    lump the same size reads as a rock, and the dark ellipse of the opening is
+    the entire cue that says "container".
+    """
+    rng = Rng(seed * 7919 + 97)
+    hue = rng.pick([(0.66, 0.16, 0.06), (0.10, 0.34, 0.62),
+                    (0.76, 0.58, 0.06), (0.44, 0.14, 0.50)])
+    m_body = principled(f'bucket{seed}', hue, rough=0.34, rough_var=0.10,
+                        noise_scale=80.0)
+
+    height, base, mouth = 0.20, 0.085, 0.115
+    bm = bmesh.new()
+    rings = [_ring(z, rx=base + (mouth - base) * (z / height), n=20)
+             for z in (0.0, height * 0.5, height * 0.92, height)]
+    _loft(bm, rings, cap_start=True, cap_end=False, mat=0)
+    # A rolled lip, so the rim is not a zero-thickness edge.
+    _loft(bm, [_ring(height, rx=mouth, n=20),
+               _ring(height - 0.012, rx=mouth * 0.90, n=20)],
+          cap_start=False, cap_end=True, mat=0)
+    # Handle: a thin arc from rim to rim.
+    arc = [Vector((math.cos(a) * mouth * 0.98, 0.0,
+                   height + math.sin(a) * mouth * 0.55))
+           for a in [math.radians(d) for d in range(0, 181, 20)]]
+    _tube(bm, arc, [0.006] * len(arc), n=6, mat=0, up=Vector((0.0, 1.0, 0.0)))
+
+    ob = _obj_from_bm(f'bucket{seed}', bm, [m_body])
+    _finish(ob, bevel_width=0.004, smooth_angle=52.0)
+    ob.rotation_mode = 'XYZ'
+    ob.rotation_euler[2] = rng.range(0.0, TAU)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'bucket'
+    return ob
+
+
+def make_parasol(seed=0, scale=1.0):
+    """A beach parasol, planted at a lean.
+
+    The lean is not decoration. A vertical pole with a symmetric disc on top
+    is the most obviously procedural shape it is possible to put in a frame;
+    tilting it four to eight degrees costs one line and is the difference
+    between "placed by a person" and "instanced by a loop".
+    """
+    rng = Rng(seed * 7919 + 151)
+    hue = rng.pick([(0.60, 0.14, 0.11), (0.12, 0.28, 0.55), (0.70, 0.52, 0.10)])
+    m_canopy = principled(f'parasol{seed}', hue, rough=0.62, rough_var=0.12,
+                          noise_scale=30.0, sheen=0.30)
+    m_pole = principled(f'parasol_pole{seed}', (0.085, 0.070, 0.048),
+                        rough=0.55, rough_var=0.12, noise_scale=60.0)
+
+    top, span = 1.95, 0.92
+    bm = bmesh.new()
+    _tube(bm, [Vector((0, 0, -0.06)), Vector((0, 0, top))],
+          [0.020, 0.016], n=8, mat=1)
+    # Scalloped canopy: eight lobes, domed. A smooth cone reads as a lampshade.
+    _loft(bm, [_ring(top, rx=0.028, n=24),
+               _ring(top - 0.14, rx=span * 0.62, n=24, lobes=_scallop(8, 0.05)),
+               _ring(top - 0.30, rx=span, n=24, lobes=_scallop(8, 0.07))],
+          cap_start=True, cap_end=False, mat=0)
+    ob = _obj_from_bm(f'parasol{seed}', bm, [m_canopy, m_pole])
+    _finish(ob, bevel_width=0.004, smooth_angle=46.0)
+    ob.rotation_mode = 'XYZ'
+    ob.rotation_euler[0] = math.radians(rng.range(4.0, 8.0))
+    ob.rotation_euler[2] = rng.range(0.0, TAU)
+    ob.scale = (scale, scale, scale)
+    ob['ph_kind'] = 'parasol'
     return ob
 
 
@@ -1786,12 +1916,28 @@ _AMBIENT = {
 
 
 def _sky_world(name, horizon, zenith, strength):
-    """A vertical gradient sky.
+    """A vertical gradient sky, dark below the horizon.
 
     A flat background colour is the single difference between "dusk" and "a
     grey studio". The warm-low / cool-high split also gives every shadow a
     colour rather than making it a hole, which is most of what stops CG
     shadows looking like cut-outs.
+
+    THE LOWER HEMISPHERE IS NOT SKY.
+        This gradient's first version clamped everything below the horizon to
+        the horizon colour, which meant the whole bottom half of the world --
+        every direction a downward-facing surface samples -- radiated warm
+        light at full strength. Moving the ambient into sky strength then
+        turned that into a genuine uplight rig: the set was lit from beneath
+        as brightly as from above. Measured across ten frames it lifted the
+        near-black coverage from 1.5% of pixels to 0.06%, i.e. it deleted the
+        blacks, and with them the contrast the low key was there to create.
+
+        A real environment reflects a fraction of the sky back up, tinted by
+        whatever the ground is, and that fraction is small. Two extra stops
+        below the horizon do it: a dim, desaturated bounce far down, and a
+        tight ramp through the horizon line so the transition still reads as
+        a horizon rather than as a smear.
     """
     world = bpy.data.worlds.new(name)
     world.use_nodes = True
@@ -1804,16 +1950,28 @@ def _sky_world(name, horizon, zenith, strength):
     tc = nt.nodes.new('ShaderNodeTexCoord')
     sep = nt.nodes.new('ShaderNodeSeparateXYZ')
     mr = nt.nodes.new('ShaderNodeMapRange')
-    mr.inputs['From Min'].default_value = -0.15
+    # Reaches well below the horizon now, so the ground bounce has somewhere
+    # to live. Positions below are (z + 0.55) / 0.97.
+    mr.inputs['From Min'].default_value = -0.55
     mr.inputs['From Max'].default_value = 0.42
     mr.clamp = True
+
+    grey = sum(horizon) / 3.0
+    # Ground bounce: 14% of the horizon's energy, pulled most of the way to
+    # neutral because earth and leaf litter are not the colour of a sunset.
+    bounce = tuple((c * 0.35 + grey * 0.65) * 0.14 for c in horizon)
+
     ramp = nt.nodes.new('ShaderNodeValToRGB')
-    ramp.color_ramp.elements[0].color = (*horizon, 1.0)
-    ramp.color_ramp.elements[1].color = (*zenith, 1.0)
-    # A third stop just above the horizon keeps the gradient from being a
-    # linear wash, which is what makes a procedural sky look procedural.
-    mid = ramp.color_ramp.elements.new(0.30)
-    mid.color = (*[(a * 0.62 + b * 0.38) for a, b in zip(horizon, zenith)], 1.0)
+    ramp.color_ramp.elements[0].color = (*bounce, 1.0)          # straight down
+    ramp.color_ramp.elements[1].color = (*zenith, 1.0)          # straight up
+    for position, colour in (
+            (0.50, bounce),                                     # z = -0.065
+            (0.58, horizon),                                    # z = +0.013
+            # A stop just above the horizon keeps the gradient from being a
+            # linear wash, which is what makes a procedural sky look procedural.
+            (0.72, tuple(a * 0.62 + b * 0.38 for a, b in zip(horizon, zenith))),
+    ):
+        ramp.color_ramp.elements.new(position).color = (*colour, 1.0)
     nt.links.new(tc.outputs['Generated'], sep.inputs['Vector'])
     nt.links.new(sep.outputs['Z'], mr.inputs['Value'])
     nt.links.new(mr.outputs['Result'], ramp.inputs['Fac'])
@@ -1865,14 +2023,22 @@ def set_world(mood='DUSK', fog=0.0, scene=None, heading_deg=0.0,
     # roughly half that it does its actual job, which is to keep a backlit
     # face from being a silhouette without ever becoming the key.
     kick_data = bpy.data.lights.new('kick', 'SUN')
-    kick_data.energy = 1.1 if mood != 'NIGHT' else 0.4
-    kick_data.angle = math.radians(14.0)
+    kick_data.energy = 1.35 if mood != 'NIGHT' else 0.5
+    # A 5-degree disc, not the 14 it was built with. The kick sits 28 degrees
+    # off the lens axis, so it is the one light in the rig whose specular lobe
+    # can actually reflect back into the camera -- the key is behind the
+    # subject and reflects away, and the sky fill is the whole hemisphere. At
+    # 14 degrees its highlight was smeared across so much of each surface that
+    # it read as diffuse: measuring the ten rendered frames found no pixel
+    # anywhere sitting more than a stop above its neighbours, on a set
+    # containing a metal rifle and two metal drones. Tightening the disc is
+    # what turns those materials' metalness back into something visible.
+    kick_data.angle = math.radians(5.0)
     kick_data.color = kelvin_rgb(6800)
     kick = bpy.data.objects.new('kick', kick_data)
     scene.collection.objects.link(kick)
     aim_kick_light(kick, heading_deg)
-    if cast_objects:
-        link_kick(kick, cast_objects, scene)
+    receivers = link_kick(kick, cast_objects, scene) if cast_objects else None
 
     # The environment fill. Unlike the kick this is deliberately NOT light
     # linked: the trees and the ground are the things that were unlit, and a
@@ -1893,8 +2059,12 @@ def set_world(mood='DUSK', fog=0.0, scene=None, heading_deg=0.0,
     if fog and fog > 0.0:
         fog_obj = add_fog(scene, density=fog * fog_k, colour=fog_col,
                           size=fog_size, centre=fog_centre)
+    # `kick_receivers` is handed back so the caller can add things the cast
+    # picks up later. The collection is built here, before any `hold` action
+    # has run, so a rifle drawn in shot 7 would otherwise be the one object on
+    # a lit actor that the frontal light does not touch.
     return {'world': world, 'sun': sun, 'kick': kick, 'fill': fill,
-            'fog': fog_obj}
+            'fog': fog_obj, 'kick_receivers': receivers}
 
 
 def aim_key_light(sun, heading_deg, offset=165.0, elev=None):
