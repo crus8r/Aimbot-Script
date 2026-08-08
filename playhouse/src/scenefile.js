@@ -116,6 +116,7 @@ export function validateScene(scene) {
       if (cam.height && !HEIGHTS.includes(cam.height)) E(`${at}.camera.height "${cam.height}" not in ${HEIGHTS.join('|')}`);
       if (cam.subject && !known(cam.subject)) E(`${at}.camera.subject "${cam.subject}" is not a cast or prop id`);
       if (cam.secondary && !known(cam.secondary)) E(`${at}.camera.secondary "${cam.secondary}" is not a cast or prop id`);
+      if (cam.ots && !cam.secondary) E(`${at}.camera.ots needs a secondary to shoot over`);
       if (cam.at !== undefined && !isVec3(cam.at)) E(`${at}.camera.at must be [x, y, z]`);
       if (cam.lookAt !== undefined && !isVec3(cam.lookAt)) E(`${at}.camera.lookAt must be [x, y, z]`);
       if (!cam.subject && !cam.at && !cam.lookAt) {
@@ -200,6 +201,7 @@ export function normaliseScene(scene) {
         move: cam.move || 'static',
         height: cam.height || 'eye',
         side: cam.side ?? 1,
+        ots: cam.ots || false,
         at: cam.at || null,
         lookAt: cam.lookAt || null,
         lens: cam.lens || null,

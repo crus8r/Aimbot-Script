@@ -1606,11 +1606,14 @@ POSES = {
         'head': (-6, 0, 0), 'hips': (4, 0, 0),
     },
     'handsUp': {
-        'upperArmL': (-8, 0, 152), 'foreArmL': (-26, 0, 22),
-        'upperArmR': (-8, 0, -152), 'foreArmR': (-26, 0, -22),
-        'clavL': (0, 0, 14), 'clavR': (0, 0, -14),
-        'spine': (3, 0, 0), 'chest': (2, 0, 0), 'neck': (4, 0, 0),
-        'head': (2, 0, 0),
+        # Arms to ~115 degrees with the elbows folded hard, so the hands sit
+        # beside the ears rather than straight overhead. Straight arms read as a
+        # touchdown signal; bent ones read as surrender.
+        'upperArmL': (-14, 0, 115), 'foreArmL': (-95, 0, 16),
+        'upperArmR': (-14, 0, -115), 'foreArmR': (-95, 0, -16),
+        'clavL': (0, 0, 16), 'clavR': (0, 0, -16),
+        'spine': (-6, 0, 0), 'chest': (-3, 0, 0), 'neck': (6, 0, 0),
+        'head': (4, 0, 0),
     },
     'aim': {
         'upperArmR': (-74, -18, -22), 'foreArmR': (-58, 0, -6),
@@ -1741,11 +1744,11 @@ def pose_character(obj, pose='idle', intensity=1.0):
 MOODS = {
     # horizon, zenith, sky strength, sun elev, sun temp, sun energy, disc deg,
     # fog colour, fog density multiplier
-    'DAY': ((0.52, 0.50, 0.48), (0.11, 0.20, 0.44), 1.5, 44.0, 5200, 5.4, 1.5,
+    'DAY': ((0.52, 0.50, 0.48), (0.11, 0.20, 0.44), 3.2, 44.0, 5200, 9.0, 1.5,
             (0.76, 0.78, 0.84), 0.34),
-    'DUSK': ((0.30, 0.17, 0.10), (0.055, 0.085, 0.17), 1.0, 4.0, 2400, 3.2, 3.0,
+    'DUSK': ((0.30, 0.17, 0.10), (0.055, 0.085, 0.17), 3.0, 4.0, 2400, 9.0, 3.0,
              (0.62, 0.66, 0.78), 0.52),
-    'DAWN': ((0.26, 0.19, 0.20), (0.060, 0.100, 0.20), 1.1, 6.0, 2900, 2.9, 3.0,
+    'DAWN': ((0.26, 0.19, 0.20), (0.060, 0.100, 0.20), 3.0, 6.0, 2900, 8.0, 3.0,
              (0.68, 0.70, 0.80), 1.15),
     'NIGHT': ((0.030, 0.042, 0.075), (0.008, 0.014, 0.036), 1.0, 24.0, 8600,
               0.55, 4.0, (0.52, 0.60, 0.82), 0.85),
@@ -1768,12 +1771,17 @@ MOODS = {
 # silhouettes in it, and turning the fog down reveals that there was never any
 # light on the set. A wide, soft, slightly cool fill from over the camera's
 # shoulder is the missing element; it is what a real unit would bounce in.
+# Ambient belongs in SKY strength, not in a fill sun. A fill sun is flat and
+# self-occludes nothing, so it floods out the roughness and bump detail the
+# materials already carry. Sky lighting darkens canopy interiors and the contact
+# under each figure for free, and lets the low key rake across the displaced
+# ground the way the ground mesh was built to be lit.
 _AMBIENT = {
-    'DAY': 2.2,
-    'DUSK': 2.4,
-    'DAWN': 2.2,
-    'NIGHT': 0.35,
-    'STORM': 1.8,
+    'DAY': 0.6,
+    'DUSK': 0.5,
+    'DAWN': 0.5,
+    'NIGHT': 0.12,
+    'STORM': 0.5,
 }
 
 
@@ -2001,7 +2009,7 @@ def add_fog(scene=None, density=0.022, anisotropy=0.66,
 # ---------------------------------------------------------------------------
 
 
-def apply_film_look(scene=None, samples=64, resolution=None, exposure=0.15,
+def apply_film_look(scene=None, samples=64, resolution=None, exposure=-0.2,
                     vignette=0.35, grain=0.010, bloom=0.30,
                     motion_blur=True):
     """The whole measured recipe in one call.

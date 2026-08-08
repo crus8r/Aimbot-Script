@@ -43,9 +43,9 @@ export default {
     { id: 'RUNNER', spec: { build: 'slim', outfitType: 'workwear', primary: '#3c4a3a', secondary: '#2a2f28' },
       at: [0, 0, -15], facing: 0 },
     { id: 'GUARD_L', spec: { build: 'broad', outfitType: 'coat', primary: '#23282e', secondary: '#171a1e', accent: '#23282e' },
-      at: [-7.5, 0, 6.5], facing: -0.9 },
+      at: [-5.2, 0, 5.2], facing: -0.9 },
     { id: 'GUARD_R', spec: { build: 'sturdy', outfitType: 'coat', primary: '#23282e', secondary: '#171a1e', accent: '#23282e' },
-      at: [7.8, 0, 7.2], facing: 0.9 },
+      at: [5.6, 0, 5.8], facing: 0.9 },
   ],
 
   shots: [
@@ -61,7 +61,7 @@ export default {
 
     // 3 — Hard cut low and wide: the drones own the frame he is running into.
     { id: 'blockade', duration: 2.2,
-      camera: { size: 'WS', subject: 'RUNNER', move: 'static', height: 'low', side: 1 },
+      camera: { size: 'WS', subject: 'RUNNER', secondary: 'droneA', move: 'static', height: 'low', side: 1 },
       actions: [
         { actor: 'RUNNER', do: 'move', to: [0, PATH_Z - 1.2], speed: 1.1, pose: 'flinch' },
         { actor: 'RUNNER', do: 'look', target: 'droneA' },
@@ -69,7 +69,7 @@ export default {
 
     // 4 — His reaction, close.
     { id: 'reaction', duration: 2.0,
-      camera: { size: 'MCU', subject: 'RUNNER', move: 'push', height: 'eye', side: 1 },
+      camera: { size: 'MCU', subject: 'RUNNER', secondary: 'droneA', move: 'push', height: 'eye', side: 1 },
       actions: [{ actor: 'RUNNER', do: 'look', target: 'droneB', weight: 1 }] },
 
     // 5 — Insert on the sensor. The machine looking back.
@@ -78,7 +78,7 @@ export default {
 
     // 6 — Hands up, seen wide so the gesture reads as surrender to the space.
     { id: 'surrender', duration: 2.6,
-      camera: { size: 'MWS', subject: 'RUNNER', move: 'static', height: 'low', side: 1 },
+      camera: { size: 'MWS', subject: 'RUNNER', secondary: 'droneB', move: 'static', height: 'low', side: 1 },
       actions: [
         { actor: 'RUNNER', do: 'pose', pose: 'handsUp' },
         { actor: 'RUNNER', do: 'face', to: 0.15 },
@@ -90,15 +90,15 @@ export default {
       actions: [
         { actor: 'GUARD_L', do: 'hold', prop: 'rifle', hand: 'R' },
         { actor: 'GUARD_R', do: 'hold', prop: 'rifle', hand: 'R' },
-        { actor: 'GUARD_L', do: 'move', to: [-2.4, 2.0], speed: 1.5, facing: 0.4 },
-        { actor: 'GUARD_R', do: 'move', to: [2.6, 2.4], speed: 1.5, facing: -0.4 },
+        { actor: 'GUARD_L', do: 'move', to: [-2.2, 1.8], speed: 2.0, facing: 0.45 },
+        { actor: 'GUARD_R', do: 'move', to: [2.4, 2.2], speed: 2.0, facing: -0.45 },
         { actor: 'GUARD_L', do: 'look', target: 'RUNNER' },
         { actor: 'GUARD_R', do: 'look', target: 'RUNNER' },
       ] },
 
     // 8 — Over the guard's shoulder: weapon up, the man small beyond it.
     { id: 'ots', duration: 2.4,
-      camera: { size: 'MS', subject: 'RUNNER', secondary: 'GUARD_L', move: 'handheld', height: 'eye', side: -1 },
+      camera: { size: 'MS', subject: 'RUNNER', secondary: 'GUARD_L', ots: true, move: 'handheld', height: 'eye', side: -1 },
       actions: [
         { actor: 'GUARD_L', do: 'pose', pose: 'aim' },
         { actor: 'GUARD_R', do: 'pose', pose: 'aim' },
@@ -106,7 +106,7 @@ export default {
 
     // 9 — Hold on him. Nothing moves. This is the beat the scene is about.
     { id: 'held', duration: 2.8,
-      camera: { size: 'CU', subject: 'RUNNER', move: 'push', height: 'eye', side: 1 } },
+      camera: { size: 'CU', subject: 'RUNNER', secondary: 'GUARD_R', move: 'push', height: 'eye', side: 1 } },
 
     // 10 — Pull all the way out and let the wood swallow it.
     { id: 'wide', duration: 3.4, fade: 'out',

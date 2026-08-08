@@ -169,6 +169,41 @@ def _forward_of(facing):
     return Vector((math.sin(facing), 0.0, math.cos(facing)))
 
 
+def _fit_pair(position, aim, a, b, fov, margin=0.12):
+    """Back the camera off until two world points both sit inside the frame.
+
+    Returns (position, fov). Only ever retreats along the existing view axis, so
+    the shot keeps the angle the director asked for and loses only its tightness
+    — a wider version of the intended shot is a far smaller betrayal than a tight
+    shot of the wrong thing.
+    """
+    view = aim - position
+    dist = view.length
+    if dist < 1e-4:
+        return position, fov
+    view = view / dist
+
+    # Half-angle each point subtends from the lens axis.
+    worst = 0.0
+    for point in (a, b):
+        to_point = point - position
+        if to_point.length < 1e-4:
+            continue
+        cos_a = max(-1.0, min(1.0, to_point.normalized().dot(view)))
+        worst = max(worst, math.acos(cos_a))
+
+    # Vertical half-FOV is the binding constraint on a 16:9 frame.
+    half = math.radians(fov) * 0.5
+    needed = worst * (1.0 + margin)
+    if needed <= half:
+        return position, fov
+
+    # Retreat far enough that the pair fits, capped so a shot never runs away.
+    scale = math.tan(needed) / max(1e-4, math.tan(half))
+    new_dist = min(dist * scale, dist * 3.0)
+    return aim - view * new_dist, fov
+
+
 def _aim_point(actor, aim):
     """director.js aimPoint(): the height on a body a shot size frames on.
 
@@ -283,6 +318,7 @@ def solve_shot(shot, world, t=1.0):
             "fov": 34.0,
         }
 
+    two_shot_aim = None
     target = _aim_point(subject, spec["aim"])
     facing = _forward_of(subject["facing"])
     dist = spec["dist"]
@@ -290,10 +326,7 @@ def solve_shot(shot, world, t=1.0):
 
     if shot["ots"] and secondary is not None:
         # Over the shoulder: behind and outside the listener's head, looking
-        # past them. Scene files cannot request this today (production.js never
-        # sets `ots` for a scene-file shot), so this branch stays dormant and
-        # the two renderers agree; it is here so that adding `camera.ots` is a
-        # one-line change on both sides rather than a re-derivation.
+        # past them. Requested by camera.ots in the scene file.
         s_head = _aim_point(secondary, "head")
         to_subject = (target - s_head)
         to_subject.y = 0.0
@@ -326,6 +359,18 @@ def solve_shot(shot, world, t=1.0):
         direction = _rot_y(facing, swing)
         position = target + direction * dist
 
+        if secondary is not None:
+            # A shot that names a secondary is about the PAIR. Bias the aim
+            # toward the subject so it still reads as their shot, then back off
+            # along the view axis until both points sit inside the frustum with
+            # a margin. Two separated points also make bullseye framing
+            # impossible by construction, which is the other thing wrong with
+            # single-subject solves.
+            other = _aim_point(secondary, "body")
+            pair_aim = target * 0.65 + other * 0.35
+            position, fov = _fit_pair(position, pair_aim, target, other, fov)
+            two_shot_aim = pair_aim
+
     # --- Height -----------------------------------------------------------
     eye = subject["pos"][1] + subject["eye"]
     if shot["height"] == "low":
@@ -356,7 +401,7 @@ def solve_shot(shot, world, t=1.0):
         position = target + _rot_y(position - target, angle)
     # 'static' and 'handheld' need nothing: a still cannot shake.
 
-    look_at = target.copy()
+    look_at = (two_shot_aim if two_shot_aim is not None else target).copy()
     look_at.y += spec["headroom"] * 0.35
     return {"position": position, "look_at": look_at, "fov": fov}
 
