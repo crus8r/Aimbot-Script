@@ -1,0 +1,584 @@
+/**
+ * Character animation.
+ *
+ * Poses are authored as bone euler targets and blended toward; on top of that
+ * sit additive layers — breathing, weight shift, head/eye aim, jaw — that run
+ * continuously. The additive layers are what stop a held pose reading as a
+ * mannequin, and they cost almost nothing.
+ *
+ * Bind pose has every bone axis-aligned with world, so for the LEFT arm a
+ * positive Z rotation abducts and a negative X rotation swings forward; the
+ * right arm mirrors Z and Y.
+ */
+
+import * as THREE from 'three';
+
+const d = THREE.MathUtils.degToRad;
+
+/**
+ * Pose library. Values are euler triples in degrees for readability.
+ * Only bones that differ from bind need listing.
+ */
+export const POSES = {
+  idle: {
+    upperArmL: [-4, 0, 6], foreArmL: [-14, 0, 3],
+    upperArmR: [-4, 0, -6], foreArmR: [-14, 0, -3],
+    spine: [1, 0, 0], chest: [-1, 0, 0], neck: [2, 0, 0],
+  },
+  idleAlt: {
+    upperArmL: [-6, 0, 9], foreArmL: [-22, 0, 5],
+    upperArmR: [-3, 0, -5], foreArmR: [-10, 0, -2],
+    spine: [1, 3, 0], chest: [-1, -2, 0], neck: [1, -3, 0], hips: [0, 2, 0],
+  },
+  listen: {
+    upperArmL: [-8, 0, 8], foreArmL: [-38, 0, 6],
+    upperArmR: [-8, 0, -8], foreArmR: [-38, 0, -6],
+    spine: [2, 0, 0], chest: [-2, 0, 0], neck: [4, 0, 3], head: [2, 0, 4],
+  },
+  talk: {
+    upperArmL: [-16, 0, 14], foreArmL: [-58, 0, 10],
+    upperArmR: [-6, 0, -8], foreArmR: [-22, 0, -4],
+    spine: [1, -3, 0], chest: [-2, 2, 0], neck: [2, 2, 0],
+  },
+  talkBoth: {
+    upperArmL: [-20, 0, 20], foreArmL: [-66, 0, 12],
+    upperArmR: [-20, 0, -20], foreArmR: [-66, 0, -12],
+    spine: [-2, 0, 0], chest: [3, 0, 0], neck: [-2, 0, 0],
+  },
+  sing: {
+    upperArmL: [-14, 0, 28], foreArmL: [-30, 0, 10],
+    upperArmR: [-14, 0, -28], foreArmR: [-30, 0, -10],
+    spine: [-5, 0, 0], chest: [7, 0, 0], neck: [-6, 0, 0], head: [-4, 0, 0],
+  },
+  singBig: {
+    upperArmL: [-30, 0, 68], foreArmL: [-24, 0, 8],
+    upperArmR: [-30, 0, -68], foreArmR: [-24, 0, -8],
+    spine: [-8, 0, 0], chest: [11, 0, 0], neck: [-9, 0, 0], head: [-7, 0, 0],
+  },
+  point: {
+    upperArmL: [-72, 0, 16], foreArmL: [-8, 0, 2], handL: [0, 0, 0],
+    upperArmR: [-4, 0, -6], foreArmR: [-14, 0, -3],
+    spine: [2, -8, 0], chest: [-1, 6, 0], neck: [0, 4, 0],
+  },
+  cast: {
+    upperArmL: [-84, 0, 24], foreArmL: [-30, 0, 10],
+    upperArmR: [-84, 0, -24], foreArmR: [-30, 0, -10],
+    spine: [-6, 0, 0], chest: [9, 0, 0], neck: [-8, 0, 0], head: [-5, 0, 0],
+  },
+  castOne: {
+    upperArmL: [-96, 0, 18], foreArmL: [-18, 0, 6],
+    upperArmR: [-10, 0, -8], foreArmR: [-26, 0, -4],
+    spine: [-3, -6, 0], chest: [5, 4, 0], neck: [-4, 2, 0],
+  },
+  reach: {
+    upperArmL: [-64, 0, 12], foreArmL: [-16, 0, 4],
+    upperArmR: [-58, 0, -12], foreArmR: [-20, 0, -4],
+    spine: [-4, 0, 0], chest: [6, 0, 0], neck: [-3, 0, 0],
+  },
+  afraid: {
+    upperArmL: [-30, 0, 4], foreArmL: [-84, 0, 8],
+    upperArmR: [-30, 0, -4], foreArmR: [-84, 0, -8],
+    clavL: [0, 0, 8], clavR: [0, 0, -8],
+    spine: [8, 0, 0], chest: [6, 0, 0], neck: [8, 0, 0], head: [6, 0, 0],
+  },
+  angry: {
+    upperArmL: [-14, 0, 12], foreArmL: [-46, 0, 8],
+    upperArmR: [-14, 0, -12], foreArmR: [-46, 0, -8],
+    spine: [7, 0, 0], chest: [4, 0, 0], neck: [-4, 0, 0], head: [-3, 0, 0],
+    hips: [3, 0, 0],
+  },
+  tender: {
+    upperArmL: [-40, 0, 6], foreArmL: [-76, 0, 12],
+    upperArmR: [-8, 0, -7], foreArmR: [-20, 0, -3],
+    spine: [3, 0, 0], chest: [-2, 0, 0], neck: [5, 0, 2], head: [3, 0, 3],
+  },
+  resolute: {
+    upperArmL: [-2, 0, 5], foreArmL: [-10, 0, 2],
+    upperArmR: [-2, 0, -5], foreArmR: [-10, 0, -2],
+    spine: [-3, 0, 0], chest: [4, 0, 0], neck: [-4, 0, 0], head: [-3, 0, 0],
+  },
+  sad: {
+    upperArmL: [-2, 0, 3], foreArmL: [-18, 0, 2],
+    upperArmR: [-2, 0, -3], foreArmR: [-18, 0, -2],
+    clavL: [0, 0, -6], clavR: [0, 0, 6],
+    spine: [9, 0, 0], chest: [5, 0, 0], neck: [12, 0, 0], head: [8, 0, 0],
+  },
+  joyful: {
+    upperArmL: [-40, 0, 74], foreArmL: [-30, 0, 14],
+    upperArmR: [-40, 0, -74], foreArmR: [-30, 0, -14],
+    spine: [-7, 0, 0], chest: [9, 0, 0], neck: [-8, 0, 0], head: [-6, 0, 0],
+  },
+  wonder: {
+    upperArmL: [-56, 0, 22], foreArmL: [-52, 0, 10],
+    upperArmR: [-8, 0, -6], foreArmR: [-18, 0, -3],
+    spine: [-5, 0, 0], chest: [6, 0, 0], neck: [-10, 0, 0], head: [-8, 0, 0],
+  },
+  run: {
+    upperArmL: [-62, 0, 10], foreArmL: [-92, 0, 8],
+    upperArmR: [38, 0, -10], foreArmR: [-78, 0, -8],
+    spine: [14, 0, 0], chest: [6, 0, 0], neck: [-12, 0, 0], head: [-6, 0, 0],
+    hips: [4, 0, 0],
+  },
+  handsUp: {
+    upperArmL: [-8, 0, 152], foreArmL: [-26, 0, 22],
+    upperArmR: [-8, 0, -152], foreArmR: [-26, 0, -22],
+    clavL: [0, 0, 14], clavR: [0, 0, -14],
+    spine: [3, 0, 0], chest: [2, 0, 0], neck: [4, 0, 0], head: [2, 0, 0],
+  },
+  aim: {
+    // Right hand on the grip, left forward on the handguard, shoulders squared.
+    upperArmR: [-74, -18, -22], foreArmR: [-58, 0, -6],
+    upperArmL: [-82, 22, 16], foreArmL: [-42, 0, 4],
+    spine: [4, -10, 0], chest: [-2, 8, 0], neck: [0, 6, 0], head: [-2, 4, 0],
+  },
+  flinch: {
+    upperArmL: [-42, 0, 10], foreArmL: [-96, 0, 12],
+    upperArmR: [-42, 0, -10], foreArmR: [-96, 0, -12],
+    clavL: [0, 0, 12], clavR: [0, 0, -12],
+    spine: [12, 0, 0], chest: [8, 0, 0], neck: [10, 0, 0], head: [8, 0, 0],
+  },
+  bow: {
+    upperArmL: [-18, 0, 10], foreArmL: [-40, 0, 6],
+    upperArmR: [-18, 0, -10], foreArmR: [-40, 0, -6],
+    spine: [34, 0, 0], chest: [12, 0, 0], neck: [-20, 0, 0], head: [-10, 0, 0],
+    hips: [8, 0, 0],
+  },
+  // The trailing leg is folded so the shin lies along the floor. It used to
+  // be near straight (thigh -24, shin 30), which is not a kneel at all — it
+  // is a lunge, and no pelvis height puts both legs on the ground from it:
+  // measured, one leg hung 0.41 m in the air whatever the drop.
+  //
+  // These angles are DELIBERATELY not ph_assets.py's (10 / 100). Both tables
+  // were solved the same way — vary the angles and the root drop together,
+  // measure the lowest vertex of each leg, minimise the gap — and the two
+  // rigs land on different answers because their thigh-to-shin ratios differ
+  // (0.390/0.430 here against ph_assets' 0.2615/0.226). Cross-applying either
+  // answer leaves one leg ~9 cm off the floor. What has to match between the
+  // renderers is that the pose READS the same and both figures touch their
+  // own floor, not that the numbers are equal. tools/vocabulary.mjs reports
+  // every value-level divergence between the tables so this stays a choice
+  // rather than becoming a drift.
+  kneel: {
+    thighL: [-88, 0, 4], shinL: [96, 0, 0], footL: [-12, 0, 0],
+    thighR: [2, 0, -6], shinR: [92, 0, 0], footR: [-52, 0, 0],
+    upperArmL: [-14, 0, 8], foreArmL: [-40, 0, 6],
+    upperArmR: [-14, 0, -8], foreArmR: [-40, 0, -6],
+    spine: [6, 0, 0], hips: [0, 0, 0],
+  },
+  sit: {
+    thighL: [-84, 2, 3], shinL: [80, 0, 0], footL: [4, 0, 0],
+    thighR: [-84, -2, -3], shinR: [80, 0, 0], footR: [4, 0, 0],
+    upperArmL: [-10, 0, 6], foreArmL: [-46, 0, 6],
+    upperArmR: [-10, 0, -6], foreArmR: [-46, 0, -6],
+    spine: [3, 0, 0], chest: [-1, 0, 0],
+  },
+};
+
+/** Emotion -> a pose that reads it, for speaking and for singing. */
+const EMOTION_POSE = {
+  neutral: ['talk', 'idle'],
+  angry: ['angry', 'talkBoth'],
+  tender: ['tender', 'talk'],
+  afraid: ['afraid', 'talk'],
+  sad: ['sad', 'talk'],
+  joyful: ['joyful', 'talkBoth'],
+  resolute: ['resolute', 'talk'],
+  wonder: ['wonder', 'talk'],
+};
+
+/** Choose a speaking pose for an emotion and intensity. */
+export function poseForBeat(beat) {
+  const emotion = beat.emotion || 'neutral';
+  const options = EMOTION_POSE[emotion] || EMOTION_POSE.neutral;
+  if (beat.type === 'lyric' || beat.singing) {
+    return (beat.intensity ?? 0.4) > 0.55 ? 'singBig' : 'sing';
+  }
+  return (beat.intensity ?? 0.3) > 0.5 ? options[0] : options[1] || options[0];
+}
+
+const BONE_KEYS = [
+  'hips', 'spine', 'chest', 'neck', 'head',
+  'clavL', 'upperArmL', 'foreArmL', 'handL',
+  'clavR', 'upperArmR', 'foreArmR', 'handR',
+  'thighL', 'shinL', 'footL', 'thighR', 'shinR', 'footR',
+];
+
+/** Standing height of the hips bone, from human.js's BONE_TABLE. */
+const HIP_HEIGHT = 0.950;
+
+/**
+ * How far the pelvis drops for a pose that folds the legs, in metres.
+ *
+ * A pose is only a set of bone rotations, and rotations cannot move the root.
+ * Fold the legs without lowering the hips and the feet leave the floor: `sit`
+ * hangs the figure 35 cm in the air, which is the "seated on nothing" read.
+ *
+ * Read off human.js's BONE_TABLE, where the thigh runs 0.905 -> 0.515 (0.390)
+ * and the shin 0.515 -> 0.085 (0.430), so the hip joint stands 0.820 m above
+ * the ankle. Folding shortens that to thigh*cos(thigh from vertical) +
+ * shin*cos(shin from vertical), and the drop is the difference:
+ *
+ *   sit    thigh 84 deg, shin 4 deg (-84 + 80 from the table):
+ *          0.390*cos84 + 0.430*cos4 = 0.041 + 0.429 = 0.470  ->  0.350
+ *   kneel  the pelvis rides on the kneeling thigh alone — the shin runs
+ *          backward along the floor rather than downward — so the drop is
+ *          nearly a whole shin: 0.390*cos2 = 0.390 left under the hip joint,
+ *          against 0.820 standing  ->  0.430 by arithmetic, 0.395 measured.
+ *          The 3.5 cm difference is the raised leg's sole and ankle, which
+ *          bone lengths alone do not account for; the measurement wins.
+ *
+ * The kneel figure was found by measuring, not derived: pose angles and drop
+ * were varied together and the lowest vertex of each leg read off the built
+ * mesh until the two contacts agreed. Result: both within 1.4 mm, and
+ * identical across all five builds, because BUILDS only scales arm length and
+ * mesh radius — never the legs.
+ *
+ * ph_assets._ROOT_OFFSET is the same idea for the Blender rig and carries
+ * DIFFERENT numbers on purpose: that figure has a longer thigh and a higher
+ * hip, so it has further to fall. Each is derived from its own skeleton, which
+ * is the only way both sets of feet land on the same floor.
+ */
+const ROOT_DROP = { sit: 0.350, kneel: 0.395 };
+
+/**
+ * Layered animator for one character.
+ */
+export class Animator {
+  constructor(character, seed = 0) {
+    this.character = character;
+    this.bones = character.userData.bones;
+    this.eyes = character.userData.eyes || [];
+    this.seed = seed;
+
+    this.current = {};
+    this.target = {};
+    for (const key of BONE_KEYS) {
+      this.current[key] = new THREE.Vector3();
+      this.target[key] = new THREE.Vector3();
+    }
+
+    this.poseName = 'idle';
+    this.blendRate = 3.2;
+    this.talking = 0;
+    this.mouthOpen = 0;
+    this.mouthTarget = 0;
+    this.externalMouth = false;
+    this.lookTarget = null;
+    this.lookWeight = 0;
+    this.blinkTimer = 1 + Math.random() * 3;
+    this.blinkPhase = -1;
+    this.blinkAmount = 0;   // read by the avatar expression driver
+    this.emotion = 'neutral';
+    this.gestureTimer = 0;
+    this.walkPhase = 0;
+    this.walkSpeed = 0;
+    this.sitting = false;
+    this.rootDrop = 0;
+    this.rootDropTarget = 0;
+
+    this.setPose('idle', true);
+  }
+
+  /** Apply a named pose as the new blend target. */
+  setPose(name, immediate = false) {
+    const pose = POSES[name] || POSES.idle;
+    this.poseName = name;
+    this.sitting = name === 'sit' || name === 'kneel';
+    this.rootDropTarget = ROOT_DROP[name] || 0;
+    for (const key of BONE_KEYS) {
+      const v = pose[key];
+      this.target[key].set(v ? d(v[0]) : 0, v ? d(v[1]) : 0, v ? d(v[2]) : 0);
+      if (immediate) this.current[key].copy(this.target[key]);
+    }
+    if (immediate) this.rootDrop = this.rootDropTarget;
+  }
+
+  /** Aim head and eyes at a world position. */
+  lookAt(worldPosition, weight = 1) {
+    this.lookTarget = worldPosition;
+    this.lookWeightTarget = weight;
+  }
+
+  clearLook() { this.lookWeightTarget = 0; }
+
+  /** 0..1 — drive from audio RMS for real lip sync, or leave to the talk layer. */
+  setMouthOpen(v) { this.mouthTarget = THREE.MathUtils.clamp(v, 0, 1); }
+
+  /**
+   * While an external mouth source (a recording's RMS, TTS envelope) is live,
+   * it must OWN mouthTarget — otherwise the procedural talk layer floors the
+   * value with an uncorrelated envelope and the jaw never fully closes.
+   */
+  setExternalMouth(on) { this.externalMouth = !!on; }
+
+  setTalking(on, intensity = 0.5) {
+    this.talking = on ? Math.max(0.25, intensity) : 0;
+  }
+
+  /** Trigger a one-off emphasis gesture. */
+  gesture(duration = 0.6) { this.gestureTimer = duration; }
+
+  setWalking(speed) { this.walkSpeed = speed; }
+
+  update(dt, elapsed) {
+    const t = elapsed + this.seed * 7.31;
+
+    // --- Blend toward the pose target ------------------------------------
+    const k = 1 - Math.exp(-this.blendRate * dt);
+    for (const key of BONE_KEYS) {
+      this.current[key].lerp(this.target[key], k);
+    }
+    // On the same easing as the rotations, so the figure lowers as the legs
+    // fold rather than dropping first and folding afterwards.
+    this.rootDrop += (this.rootDropTarget - this.rootDrop) * k;
+
+    // --- Write base pose --------------------------------------------------
+    for (const key of BONE_KEYS) {
+      const bone = this.bones[key];
+      if (!bone) continue;
+      const c = this.current[key];
+      bone.rotation.set(c.x, c.y, c.z);
+    }
+    // Written every frame, not only while seated: the idle and walk layers
+    // below both set this outright, and between them and a held sit there is
+    // no other owner of the pelvis height.
+    if (this.bones.hips) this.bones.hips.position.y = HIP_HEIGHT - this.rootDrop;
+
+    // --- Additive: breathing ---------------------------------------------
+    const breath = Math.sin(t * 1.15) * 0.5 + 0.5;
+    if (this.bones.chest) {
+      this.bones.chest.rotation.x += (breath - 0.5) * 0.035;
+      this.bones.chest.scale.setScalar(1 + breath * 0.012);
+    }
+    if (this.bones.spine) this.bones.spine.rotation.x += (breath - 0.5) * 0.018;
+
+    // --- Additive: idle weight shift and sway ----------------------------
+    // Gated on the pelvis having actually come back up, not on `sitting`.
+    // `sitting` is a property of the pose NAME and flips the instant setPose
+    // is called, whereas rootDrop takes about a second to ease out — so a
+    // boolean gate handed this layer the pelvis one frame after a stand-up
+    // began, and it wrote HIP_HEIGHT outright while the legs were still
+    // folded. The figure snapped 35 cm upright and then unfolded in mid-air,
+    // which is the seated bug this run was called to kill, moved to the exit.
+    const risen = 1 - Math.min(1, this.rootDrop / 0.08);
+    if (risen > 0 && this.walkSpeed < 0.05) {
+      const sway = (Math.sin(t * 0.42) * 0.030 + Math.sin(t * 0.27) * 0.018) * risen;
+      const bobY = Math.sin(t * 0.84) * 0.006 * risen;
+      if (this.bones.hips) {
+        this.bones.hips.rotation.z += sway * 0.4;
+        this.bones.hips.rotation.y += Math.sin(t * 0.31) * 0.035 * risen;
+        // Additive. The base-pose write above owns the pelvis height and is
+        // the only thing that knows how far through a sit we are.
+        this.bones.hips.position.y += bobY;
+      }
+      if (this.bones.chest) this.bones.chest.rotation.z -= sway * 0.25;
+      // Arms trail the body sway slightly.
+      if (this.bones.upperArmL) this.bones.upperArmL.rotation.x += Math.sin(t * 0.42 - 0.4) * 0.03;
+      if (this.bones.upperArmR) this.bones.upperArmR.rotation.x += Math.sin(t * 0.42 - 0.6) * 0.03;
+    }
+
+    // --- Walk cycle -------------------------------------------------------
+    if (this.walkSpeed > 0.05) {
+      this.walkPhase += dt * this.walkSpeed * 4.6;
+      const p = this.walkPhase;
+      const swing = Math.sin(p) * 0.62 * Math.min(1, this.walkSpeed);
+      const lift = Math.max(0, Math.sin(p)) * 0.5;
+      const liftOpp = Math.max(0, Math.sin(p + Math.PI)) * 0.5;
+      if (this.bones.thighL) this.bones.thighL.rotation.x += -swing;
+      if (this.bones.thighR) this.bones.thighR.rotation.x += swing;
+      if (this.bones.shinL) this.bones.shinL.rotation.x += lift;
+      if (this.bones.shinR) this.bones.shinR.rotation.x += liftOpp;
+      if (this.bones.upperArmL) this.bones.upperArmL.rotation.x += swing * 0.55;
+      if (this.bones.upperArmR) this.bones.upperArmR.rotation.x += -swing * 0.55;
+      if (this.bones.hips) {
+        // Additive, for the same reason as the idle layer: someone who stands
+        // and immediately walks off is still easing out of the sit for the
+        // first stride, and this must not fight that.
+        this.bones.hips.position.y += Math.abs(Math.sin(p)) * 0.022;
+        this.bones.hips.rotation.y += Math.sin(p) * 0.09;
+        this.bones.hips.rotation.z += Math.cos(p) * 0.05;
+      }
+      if (this.bones.chest) this.bones.chest.rotation.y -= Math.sin(p) * 0.07;
+    }
+
+    // --- Gesture beat -----------------------------------------------------
+    if (this.gestureTimer > 0) {
+      this.gestureTimer -= dt;
+      const g = Math.sin((1 - Math.max(0, this.gestureTimer) / 0.6) * Math.PI);
+      if (this.bones.foreArmL) this.bones.foreArmL.rotation.x -= g * 0.42;
+      if (this.bones.upperArmL) this.bones.upperArmL.rotation.x -= g * 0.16;
+      if (this.bones.chest) this.bones.chest.rotation.x -= g * 0.05;
+    }
+
+    // --- Talking: jaw and micro-motion -----------------------------------
+    if (this.talking > 0) {
+      // Syllabic envelope. Layered primes avoid an audible loop.
+      const syl = (Math.sin(t * 11.0) * 0.5 + 0.5) * (Math.sin(t * 6.3) * 0.5 + 0.5);
+      const emphasis = (Math.sin(t * 2.7) * 0.5 + 0.5);
+      // Only the mouth is guarded — the head micro-motion below must keep
+      // running while an external source drives the jaw, or the speaker
+      // freezes into a ventriloquist's dummy.
+      if (!this.externalMouth) {
+        this.mouthTarget = Math.max(this.mouthTarget, syl * (0.35 + this.talking * 0.55) * (0.6 + emphasis * 0.6));
+      }
+      if (this.bones.head) {
+        this.bones.head.rotation.x += Math.sin(t * 5.1) * 0.020 * this.talking;
+        this.bones.head.rotation.y += Math.sin(t * 3.3) * 0.032 * this.talking;
+        this.bones.head.rotation.z += Math.sin(t * 2.1) * 0.016 * this.talking;
+      }
+    }
+
+    this.mouthOpen += (this.mouthTarget - this.mouthOpen) * Math.min(1, dt * 22);
+    this.mouthTarget *= Math.max(0, 1 - dt * 9);
+    if (this.bones.jaw) {
+      this.bones.jaw.rotation.x = this.mouthOpen * 0.34;
+    }
+
+    // --- Head / eye aim ---------------------------------------------------
+    const lw = this.lookWeightTarget ?? 0;
+    this.lookWeight += (lw - this.lookWeight) * Math.min(1, dt * 4);
+    if (this.lookTarget && this.lookWeight > 0.01 && this.bones.head) {
+      const head = this.bones.head;
+      head.updateWorldMatrix(true, false);
+      const headWorld = new THREE.Vector3().setFromMatrixPosition(head.matrixWorld);
+      const toTarget = this.lookTarget.clone().sub(headWorld);
+
+      // Express the aim in the character's own frame.
+      const inv = new THREE.Matrix4().copy(this.character.matrixWorld).invert();
+      const localDir = toTarget.clone().transformDirection(inv).normalize();
+      const yaw = THREE.MathUtils.clamp(Math.atan2(localDir.x, localDir.z), -1.0, 1.0);
+      const pitch = THREE.MathUtils.clamp(-Math.asin(localDir.y), -0.5, 0.5);
+
+      const w = this.lookWeight;
+      if (this.bones.neck) {
+        this.bones.neck.rotation.y += yaw * 0.35 * w;
+        this.bones.neck.rotation.x += pitch * 0.35 * w;
+      }
+      head.rotation.y += yaw * 0.55 * w;
+      head.rotation.x += pitch * 0.5 * w;
+
+      // Eyes finish the aim — this is what actually sells eye contact.
+      const eyeYaw = THREE.MathUtils.clamp(yaw * 0.35, -0.28, 0.28);
+      const eyePitch = THREE.MathUtils.clamp(pitch * 0.3, -0.2, 0.2);
+      this.eyes.forEach((e) => {
+        e.root.rotation.y = eyeYaw * w;
+        e.root.rotation.x = eyePitch * w;
+      });
+    } else {
+      this.eyes.forEach((e) => {
+        e.root.rotation.y *= 1 - Math.min(1, dt * 3);
+        e.root.rotation.x *= 1 - Math.min(1, dt * 3);
+      });
+    }
+
+    // --- Blinking ---------------------------------------------------------
+    this.blinkTimer -= dt;
+    if (this.blinkTimer <= 0 && this.blinkPhase < 0) {
+      this.blinkPhase = 0;
+      this.blinkTimer = 2.2 + Math.random() * 4.0;
+    }
+    if (this.blinkPhase >= 0) {
+      this.blinkPhase += dt / 0.13;
+      const closed = Math.sin(Math.min(1, this.blinkPhase) * Math.PI);
+      this.blinkAmount = closed;
+      this.eyes.forEach((e) => { e.lid.rotation.x = -0.30 + closed * 1.35; });
+      if (this.blinkPhase >= 1) this.blinkPhase = -1;
+    } else {
+      this.blinkAmount = 0;
+    }
+  }
+}
+
+/**
+ * Move a character toward a mark over time, driving the walk cycle.
+ * Returns true once it has arrived.
+ */
+export class Mover {
+  constructor(character, animator) {
+    this.character = character;
+    this.animator = animator;
+    this.destination = null;
+    this.path = [];      // waypoints walked after `destination` is reached
+    this.facing = null;
+    this.speed = 1.15;
+  }
+
+  moveTo(position, facing = null, speed = 1.15) {
+    this.destination = position.clone();
+    this.path = [];
+    this.facing = facing;
+    this.speed = speed;
+  }
+
+  /**
+   * Walk a multi-point route — what makes "walks around JON" read as an arc
+   * on screen instead of a straight cut across the circle.
+   * @param {THREE.Vector3[]} points waypoints in order
+   */
+  followPath(points, facing = null, speed = 1.0) {
+    if (!points || !points.length) return;
+    this.moveTo(points[0], facing, speed);
+    this.path = points.slice(1).map((p) => p.clone());
+  }
+
+  snapTo(position, facing = 0) {
+    this.character.position.copy(position);
+    this.character.rotation.y = facing;
+    this.destination = null;
+    this.path = [];
+    this.animator.setWalking(0);
+  }
+
+  update(dt) {
+    if (!this.destination) {
+      if (this.facing !== null) {
+        const cur = this.character.rotation.y;
+        let diff = this.facing - cur;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        this.character.rotation.y = cur + diff * Math.min(1, dt * 4);
+      }
+      this.animator.setWalking(0);
+      return true;
+    }
+
+    const pos = this.character.position;
+    const flat = this.destination.clone().setY(pos.y);
+    const dist = pos.distanceTo(flat);
+    if (dist < 0.06) {
+      if (this.path.length) {
+        // Keep walking: pop the next waypoint without dropping to idle.
+        this.destination = this.path.shift();
+        return false;
+      }
+      // Land on the mark, not near it. The tolerance is here so a walk ends
+      // cleanly instead of shuffling the last millimetre, but simply clearing
+      // the destination left the actor wherever the last step happened to put
+      // them and never closed the gap: forest-stop's runner finished 4.5 cm
+      // short of an authored [0, -1.2] and stood there for the rest of the
+      // scene, while the Blender render placed him on it exactly. Centimetres
+      // of body position are not nothing — the camera solver's two-shot search
+      // accepts the first azimuth that fits inside a stop of the declared
+      // size, so a few centimetres either way can flip the lens to the far
+      // side of the actor.
+      pos.copy(flat);
+      this.destination = null;
+      this.animator.setWalking(0);
+      return true;
+    }
+
+    const step = Math.min(dist, this.speed * dt);
+    const dir = flat.clone().sub(pos).normalize();
+    pos.addScaledVector(dir, step);
+
+    // Face the direction of travel while moving.
+    const wanted = Math.atan2(dir.x, dir.z);
+    let diff = wanted - this.character.rotation.y;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    this.character.rotation.y += diff * Math.min(1, dt * 5);
+
+    this.animator.setWalking(Math.min(1, this.speed));
+    return false;
+  }
+}
