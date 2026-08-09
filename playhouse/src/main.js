@@ -372,11 +372,13 @@ function updateTransport() {
   const speaker = cap?.speaker || '';
   const text = cap?.text || '';
   if (ui.speaker.textContent !== speaker) ui.speaker.textContent = speaker;
-  if (ui.caption.textContent !== text) {
-    ui.caption.textContent = text;
-    ui.caption.className = cap?.kind === 'lyric' || cap?.kind === 'sung'
-      ? 'lyric' : cap?.kind === 'action' ? 'action' : '';
-  }
+  if (ui.caption.textContent !== text) ui.caption.textContent = text;
+  // Styling is compared on its own rather than ridden along with the text: a
+  // shot captioned with the same words as the one before it, but attributed to
+  // a speaker this time, kept the previous caption's italic action styling.
+  const style = cap?.kind === 'lyric' || cap?.kind === 'sung'
+    ? 'lyric' : cap?.kind === 'action' ? 'action' : '';
+  if (ui.caption.className !== style) ui.caption.className = style;
 }
 
 function fmt(s) {

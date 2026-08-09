@@ -430,8 +430,19 @@ export class Production {
       mover.snapTo(new THREE.Vector3(c.at[0], c.at[1], c.at[2]), c.facing);
     });
 
+    const placed = this.stage.userData.byId;
     const shots = scene.shots.map((s) => {
       const subjectIsCast = !!s.camera.subject && this.cast.has(s.camera.subject);
+      // A secondary may name a cast member OR a placed prop: "this frame is
+      // about both of these" is as true of a drone as of a person. Keeping
+      // only cast names framed forest-stop's three drone shots as singles, and
+      // a scene whose second subject is a parasol previewed as a shot of one
+      // person standing next to nothing. validateScene already refuses a name
+      // that is neither, so the fallback below is only ever reached by a
+      // caller that skipped it.
+      const secondary = s.camera.secondary;
+      const secondaryExists = !!secondary
+        && (this.cast.has(secondary) || placed.has(secondary));
       return {
         id: s.id,
         scene: 0,
@@ -442,12 +453,13 @@ export class Production {
         subject: subjectIsCast ? s.camera.subject : null,
         subjectProp: !subjectIsCast && s.camera.subject ? s.camera.subject : null,
         insert: !subjectIsCast && !!s.camera.subject,
-        secondary: s.camera.secondary && this.cast.has(s.camera.secondary) ? s.camera.secondary : null,
+        secondary: secondaryExists ? secondary : null,
         // `track` is a dolly that holds the subject; the solver already does
         // that, so it only needs the lateral move.
         move: s.camera.move === 'track' ? 'dolly' : s.camera.move,
         side: s.camera.side,
         height: s.camera.height,
+        ots: !!s.camera.ots,
         worldTarget: s.camera.lookAt ? new THREE.Vector3(...s.camera.lookAt) : null,
         explicitAt: s.camera.at ? new THREE.Vector3(...s.camera.at) : null,
         sceneShot: s,
@@ -477,7 +489,6 @@ export class Production {
   #applySceneShot(shot) {
     const s = shot.sceneShot;
     if (!s) return;
-    this.caption = s.caption || null;
 
     for (const a of s.actions || []) {
       const animator = this.animators.get(a.actor);
@@ -521,13 +532,27 @@ export class Production {
           break;
         }
         case 'hold': {
-          const held = this.#propForHand(a.prop, true);
+          if (!character) break;
+          let held = this.#propForHand(a.prop, a.actor);
+          if (held && a.options) {
+            // Options are decided when a prop is built. Silently ignoring them
+            // on a pick-up would let a scene ask for a yellow cup, get the cup
+            // that is already on the table, and never learn the colour did
+            // nothing.
+            console.warn(`scene file: hold: ${a.actor} picks up the existing `
+              + `"${held.userData.sceneId || held.userData.propName}", so its options `
+              + `were ignored; set them where the prop is first built`);
+          }
+          if (!held) held = this.#buildPropForHand(a.prop, a.actor, a.options);
           if (held) this.#holdProp(held, a.actor, a.hand || 'R');
           break;
         }
         case 'release': {
-          const held = this.#heldPropNamed(a.prop);
-          if (held) this.#releaseProp(held);
+          // No prop named empties this actor's hands. The verb has an actor
+          // and that actor is who it is about: "GUARD_L releases" cannot
+          // sensibly mean the drones' pilot drops something too.
+          if (!character) break;
+          for (const held of this.#heldPropsNamed(a.prop, a.actor)) this.#releaseProp(held);
           break;
         }
         case 'vfx': {
@@ -652,6 +677,14 @@ export class Production {
     // A scene file may pin the camera outright; the solver still supplies the
     // aim, headroom and lens so an explicit position is a nudge, not an escape.
     if (staged.explicitAt) solved.position.copy(staged.explicitAt);
+    // `camera.lookAt` is honoured on every shot, not only on an insert. The
+    // solver reads it inside its insert branch and nowhere else, so a scene
+    // file that aimed a shot of a person at a point on the ground was obeyed
+    // by the Blender render and ignored here — the one renderer the author can
+    // actually watch was the one that disregarded the instruction. Applied
+    // last, and after the headroom lift the solver adds, exactly as
+    // render_scene.py's `look_at = world_target if world_target else solved`.
+    if (staged.worldTarget) solved.lookAt.copy(staged.worldTarget);
     if (isCut) {
       this.camPos.copy(solved.position);
       this.camLook.copy(solved.lookAt);
@@ -695,8 +728,21 @@ export class Production {
   // Beat handling
   // -------------------------------------------------------------------------
 
+  /**
+   * Shot-start staging for an inferred script.
+   *
+   * Scene files deliberately do not come through here. Everything below is a
+   * guess dressing up blocking nobody wrote down, and a scene file wrote it
+   * down: its cast carry authored facings, and the Blender render — the film —
+   * places bodies exactly as authored and turns nobody for a camera angle. A
+   * preview that quietly swung a body the film leaves alone would be teaching
+   * the wrong scene.
+   */
   #onShotStart(shot) {
     // Subtle: on an over-the-shoulder, the listener turns in a little more.
+    // The 0.75 is a partial turn toward the speaker rather than a full one
+    // because 0 rad is square to the audience on `blockScene`'s marks, so this
+    // keeps the cheat those marks are built on instead of undoing it.
     if (!shot.ots || !shot.secondary) return;
     const listener = this.cast.get(shot.secondary);
     const speaker = this.cast.get(shot.subject);
@@ -848,7 +894,8 @@ export class Production {
   /** "picks up the apple" — parent the named prop to the actor's hand. */
   #stageHold(entry) {
     if (!entry.prop) return; // objectWord-only: honest "no model", nothing to lift
-    const prop = this.#propForHand(entry.prop, true);
+    const prop = this.#propForHand(entry.prop, entry.actor)
+      || this.#buildPropForHand(entry.prop, entry.actor);
     if (!prop) return;
     if (this.#holdProp(prop, entry.actor, entry.hand || 'R')) {
       const animator = this.animators.get(entry.actor);
@@ -863,40 +910,102 @@ export class Production {
     if (prop) this.#releaseProp(prop);
   }
 
+  /** Does this prop answer to `name` — its scene-file id, or its type? */
+  static #propAnswersTo(prop, key) {
+    return prop.userData.sceneId?.toLowerCase() === key
+      || prop.userData.propName?.toLowerCase() === key;
+  }
+
   /**
-   * A prop instance to put in a hand: an unheld one from the set, the held
-   * one as a fallback, or — when the script/notes call for something the set
-   * doesn't have — a freshly built one.
+   * The prop already on the set that a `hold` should put in a hand, or null
+   * when nothing there answers and the caller must build one.
+   *
+   * A name is either a scene-file id ("rifleA": that one rifle, still that one
+   * rifle after it has been handed on) or a registry type ("rifle": any
+   * rifle). An id beats a type, because an id is the more specific request.
+   *
+   * What this actor already holds wins, so re-firing a hold is a no-op rather
+   * than a second rifle. Then anything free — placed by the scene file, or set
+   * down by whoever had it last — because that is what makes a hand-off a
+   * hand-off: BEN picks up the cup ANNA put down, not a new cup that merely
+   * shares its name.
+   *
+   * A prop in somebody else's hand is deliberately never taken. Both guards in
+   * forest-stop are told to hold a rifle and want one each, not one rifle and
+   * a disarmed guard; a director who means a hand-off writes the `release`
+   * that frees it first.
    */
-  #propForHand(name, create = false) {
+  #propForHand(name, actorName = null) {
     const key = String(name).toLowerCase();
-    const all = (this.stage?.userData.props || [])
-      .filter((p) => p.userData.propName?.toLowerCase() === key);
-    let prop = all.find((p) => !p.userData.heldBy) || all[0] || null;
-    if (!prop && create && this.stage) {
-      prop = createProp(name);
-      if (prop) {
-        this.stage.add(prop);
-        this.stage.userData.props.push(prop);
-        if (prop.userData.update) this.stage.userData.animated.push(prop);
-      }
+    const holder = actorName ? this.cast.get(actorName) : null;
+    const matches = (this.stage?.userData.props || [])
+      .filter((p) => Production.#propAnswersTo(p, key));
+    const byId = matches.filter((p) => p.userData.sceneId?.toLowerCase() === key);
+    const ordered = [...byId, ...matches.filter((p) => !byId.includes(p))];
+    return ordered.find((p) => holder && p.userData.heldBy === holder)
+      || ordered.find((p) => !p.userData.heldBy)
+      || null;
+  }
+
+  /**
+   * Build a prop the set cannot supply and dress it into the stage, so the
+   * next actor to ask for that type finds this one instead of building a
+   * second.
+   *
+   * It is stood where the actor is standing first: a prop's "home" is wherever
+   * it was when first lifted, and one conjured at the world origin walks back
+   * to the middle of the set the moment the timeline is scrubbed.
+   */
+  #buildPropForHand(name, actorName = null, options = null) {
+    if (!this.stage) return null;
+    const prop = createProp(name, options || {});
+    if (!prop) {
+      // Either a scene-file id whose one object is in another hand, or a type
+      // this renderer cannot build. Both are things the director asked for and
+      // will not get, so neither may pass in silence.
+      console.warn(`hold: nothing free answers to "${name}", and the prop `
+        + `registry cannot build one`);
+      return null;
     }
+    const character = this.cast.get(actorName);
+    if (character) {
+      prop.position.copy(character.position);
+      prop.rotation.y = character.rotation.y;
+    }
+    this.stage.add(prop);
+    this.stage.userData.props.push(prop);
+    if (prop.userData.update) this.stage.userData.animated.push(prop);
     return prop;
   }
 
-  #heldPropNamed(name) {
-    if (!name) return null;
-    const key = String(name).toLowerCase();
+  /**
+   * Held props answering to `name` — id or type, as `#propForHand` reads it.
+   * A null name matches everything held, which is what a `release` that names
+   * no prop means; a named actor restricts it to that actor's own hands.
+   */
+  #heldPropsNamed(name, actorName = null) {
+    const key = name ? String(name).toLowerCase() : null;
+    const holder = actorName ? this.cast.get(actorName) : null;
+    const out = [];
     for (const p of this._held) {
-      if (p.userData.propName?.toLowerCase() === key) return p;
+      if (holder && p.userData.heldBy !== holder) continue;
+      if (key && !Production.#propAnswersTo(p, key)) continue;
+      out.push(p);
     }
-    return null;
+    return out;
+  }
+
+  #heldPropNamed(name, actorName = null) {
+    if (!name) return null;
+    return this.#heldPropsNamed(name, actorName)[0] || null;
   }
 
   #holdProp(prop, actorName, hand = 'R') {
     const character = this.cast.get(actorName);
     if (!character || !prop) return false;
-    if (prop.userData.heldBy === character) return true; // idempotent re-fire
+    // Re-firing the same hold is a no-op, but naming the other hand is a real
+    // instruction — the prop crosses over rather than staying put.
+    if (prop.userData.heldBy === character && prop.userData.heldSide === hand) return true;
     if (prop.userData.heldBy) detachFromHand(prop);
     if (!prop.userData.home) {
       // First lift: remember where it lives so seeks can put it back.
@@ -912,18 +1021,27 @@ export class Production {
     return true;
   }
 
-  /** Let go and settle the prop on the floor at the holder's feet. */
+  /**
+   * Let go and settle the prop on the floor at the holder's feet.
+   *
+   * 0.45 m in front, because a prop dropped on the character's own origin
+   * intersects their shins — and offset to the side of the hand that was
+   * carrying it, or an actor emptying both hands at once stands two props in
+   * exactly the same place, which renders as one object growing out of
+   * another.
+   */
   #releaseProp(prop) {
     if (!prop?.userData?.heldBy) return;
     const holder = prop.userData.heldBy;
+    const side = prop.userData.heldSide === 'L' ? -0.18 : 0.18;
     detachFromHand(prop);
     this._held.delete(prop);
     prop.userData.noteHeld = false;
     const yaw = holder.rotation?.y || 0;
     prop.position.set(
-      holder.position.x + Math.sin(yaw) * 0.45,
+      holder.position.x + Math.sin(yaw) * 0.45 + Math.cos(yaw) * side,
       0,
-      holder.position.z + Math.cos(yaw) * 0.45,
+      holder.position.z + Math.cos(yaw) * 0.45 - Math.sin(yaw) * side,
     );
     prop.rotation.set(0, prop.rotation.y, 0);
     if (prop.userData.home) prop.scale.copy(prop.userData.home.scale);
@@ -1047,12 +1165,31 @@ export class Production {
         current.userData.noteHeld = true; // adopt a staged hold as noted
         continue;
       }
-      const prop = this.#propForHand(name, true);
+      const prop = this.#propForHand(name, actor) || this.#buildPropForHand(name, actor);
       if (prop && this.#holdProp(prop, actor, 'R')) prop.userData.noteHeld = true;
     }
   }
 
+  /**
+   * The caption to show under this shot, or null.
+   *
+   * A scene file states its captions outright; a script's are lifted from the
+   * beat that is playing. Both go through here because `update` calls it on
+   * every frame: setting `this.caption` anywhere else — as the scene-shot
+   * action pass used to, on the cut — is undone before the frame is drawn, and
+   * an authored caption appeared nowhere at all.
+   */
   #captionFor(shot) {
+    const authored = shot.sceneShot?.caption;
+    // A caption with a speaker is somebody talking and takes the dialogue
+    // styling; one without is a title, and reads as an action line.
+    if (authored) {
+      return {
+        speaker: authored.speaker || null,
+        text: authored.text,
+        kind: authored.speaker ? 'spoken' : 'action',
+      };
+    }
     const beat = shot.beat;
     if (!beat) return null;
     if (beat.type === 'dialogue') {

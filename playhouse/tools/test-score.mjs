@@ -76,15 +76,20 @@ check('cue selection is deterministic',
         cueFor(CASES[0][0], CASES[0][1]).cue)).size === 1);
 
 console.log('\n  cue sheet');
+// Captions are `{ text }` objects, which is the only form validateScene
+// accepts — a bare string is a hard error there. This fixture used to write
+// them as strings, and that is precisely why it never caught cueSheet joining
+// the caption object into the literal "[object Object]": the fixture was the
+// one caption shape the real pipeline can never produce.
 const scene = {
   environment: { mood: 'DUSK' },
   shots: [
-    { id: 'establish', start: 0, camera: { size: 'EWS' }, caption: 'The wood, empty.' },
-    { id: 'travel', start: 3, camera: { size: 'MS' }, caption: 'He runs.',
+    { id: 'establish', start: 0, camera: { size: 'EWS' }, caption: { text: 'The wood, empty.' } },
+    { id: 'travel', start: 3, camera: { size: 'MS' }, caption: { text: 'He runs.' },
       actions: [{ do: 'move' }] },
-    { id: 'blockade', start: 6, camera: { size: 'WS' }, caption: 'Drones drop into the path.' },
-    { id: 'held', start: 9, camera: { size: 'CU' }, caption: 'A guard aims the rifle.' },
-    { id: 'quiet', start: 12, camera: { size: 'MS' }, music: 'grief', caption: 'x' },
+    { id: 'blockade', start: 6, camera: { size: 'WS' }, caption: { text: 'Drones drop into the path.' } },
+    { id: 'held', start: 9, camera: { size: 'CU' }, caption: { text: 'A guard aims the rifle.' } },
+    { id: 'quiet', start: 12, camera: { size: 'MS' }, music: 'grief', caption: { text: 'x' } },
   ],
 };
 const sheet = cueSheet(scene);

@@ -551,6 +551,17 @@ export class Mover {
         this.destination = this.path.shift();
         return false;
       }
+      // Land on the mark, not near it. The tolerance is here so a walk ends
+      // cleanly instead of shuffling the last millimetre, but simply clearing
+      // the destination left the actor wherever the last step happened to put
+      // them and never closed the gap: forest-stop's runner finished 4.5 cm
+      // short of an authored [0, -1.2] and stood there for the rest of the
+      // scene, while the Blender render placed him on it exactly. Centimetres
+      // of body position are not nothing — the camera solver's two-shot search
+      // accepts the first azimuth that fits inside a stop of the declared
+      // size, so a few centimetres either way can flip the lens to the far
+      // side of the actor.
+      pos.copy(flat);
       this.destination = null;
       this.animator.setWalking(0);
       return true;

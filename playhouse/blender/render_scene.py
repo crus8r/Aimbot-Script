@@ -336,6 +336,16 @@ def solve_shot(shot, world, t=1.0, warn=None):
     # --- Insert: a close-up on a thing, not a person ----------------------
     if shot["insert"]:
         centre = None
+        # Bound before the branch, not inside it: an insert that also pins
+        # `camera.lookAt` takes the first arm, and the bounding-sphere fit
+        # below then read a `prop` that had never been assigned and crashed the
+        # whole render with an UnboundLocalError. That scene file is valid --
+        # validateScene accepts subject-names-a-prop together with lookAt -- so
+        # the film could be killed outright by a file the preview draws. None
+        # is also the truthful value: an explicit look-at means there is no
+        # prop whose radius the framing should be grown to hold, which is how
+        # director.js reads it.
+        prop = None
         if shot["world_target"] is not None:
             centre = Vector(shot["world_target"])
         else:
@@ -1257,8 +1267,25 @@ def apply_action(action, world, warn):
     elif verb == "release":
         if actor is None:
             return
-        # production.js has a release with no prop meaning "drop everything",
-        # and the scene file does not require one either.
+        # Two decisions here, spelt out because the browser has to match them
+        # and a mismatch is invisible until someone compares two frames.
+        #
+        # SCOPE is this actor and nobody else. `release` carries an actor and
+        # that actor is who it is about: "GUARD_L releases" cannot sensibly
+        # reach into the other guard's hands, let alone stand every prop on the
+        # set back on the ground. So the loop is over `actor["held"]`, which is
+        # at most one entry per hand, and never over `world["props"]`.
+        #
+        # A BARE `release` -- no `prop` -- therefore means "this actor empties
+        # both hands", not "everything everywhere is dropped". Named, it frees
+        # only the hands holding something that answers to that name, by scene
+        # id or by type, which is `_matches_prop`'s rule and the same one
+        # `hold` resolves with. Both forms set the prop down (see `_set_down`);
+        # neither deletes it, because a released prop is still a prop.
+        #
+        # If the browser lands somewhere else on the bare form, the whole of
+        # the disagreement is the `if name and ...` line below: widening the
+        # sequence being iterated is the only edit that can change the scope.
         name = action.get("prop")
         for hand, entry in list(actor["held"].items()):
             if name and not _matches_prop(entry, name):

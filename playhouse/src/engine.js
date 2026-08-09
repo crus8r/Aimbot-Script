@@ -45,6 +45,14 @@ void main() {
   gl_FragColor = vec4(c, 1.0);
 }`;
 
+// three.js keeps its tone-mapping functions in a shader chunk that the renderer
+// splices into materials it owns. A raw ShaderMaterial gets none of them, so
+// the chunk is spliced in by hand below. Taking it from ShaderChunk rather than
+// transcribing it means an upgrade of three carries its own curve with it.
+// Note the chunk declares `toneMappingExposure` itself; this pipeline drives
+// exposure through its own uniform instead, so that one is pinned to 1.
+const TONEMAP_CHUNK = THREE.ShaderChunk.tonemapping_pars_fragment;
+
 const COMPOSITE_FRAG = `
 uniform sampler2D tDiffuse;
 uniform sampler2D tBloom;
@@ -58,7 +66,16 @@ uniform float uFade;
 uniform vec3 uLift;
 uniform vec3 uGain;
 uniform float uSaturation;
+uniform float uExposure;
 varying vec2 vUv;
+
+// three.js's own tone-mapping functions, pasted in rather than relied upon.
+// WebGLRenderer only applies renderer.toneMapping when it renders to the
+// DEFAULT framebuffer; this pipeline renders the scene into a HalfFloat target
+// and composites, so the renderer's setting was never reached and both
+// toneMapping and toneMappingExposure were dead the whole time. The tonemap
+// belongs at the end of the chain anyway, which is here.
+${TONEMAP_CHUNK}
 
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -77,6 +94,13 @@ void main() {
   col.b = texture2D(tDiffuse, uv + centred * ca).b;
 
   col += texture2D(tBloom, uv).rgb * uBloom;
+
+  // Exposure, then AgX — the same transform the Blender half grades with, so
+  // the preview and the film agree about how bright a scene is. Under ACES
+  // (the previous setting, and unreachable besides) a backlit dusk exterior
+  // came out at a mean luminance of 12/255 against the film's 111: the viewer
+  // saw night and the render came back dusk.
+  col = AgXToneMapping(col * uExposure);
 
   // Lift / gain grade.
   col = col * uGain + uLift * (1.0 - col);
@@ -107,6 +131,12 @@ function fullscreenMaterial(fragmentShader, uniforms) {
     fragmentShader,
     depthTest: false,
     depthWrite: false,
+    // The renderer splices <tonemapping_pars_fragment> into any material whose
+    // `toneMapped` is true, so leaving this on gave the composite shader two
+    // copies of every tone-mapping function and a shader that would not
+    // compile. These passes grade explicitly; none of them wants an implicit
+    // transform applied on top.
+    toneMapped: false,
   });
 }
 
@@ -127,7 +157,13 @@ export class Engine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.mobile ? 2 : 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // AgX, not ACES. The Blender half of this project grades with AgX and the
+    // preview must not disagree with the film about how bright the scene is.
+    // ACES crushes shadows hard on the way to its filmic roll-off, and on a
+    // backlit dusk exterior — which is most of what this program renders — it
+    // took the preview to a mean luminance of 12/255 against the film's 111.
+    // A viewer opening the preview saw night and the render came back dusk.
+    this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
@@ -194,6 +230,11 @@ export class Engine {
       uLift: { value: new THREE.Vector3(0, 0, 0) },
       uGain: { value: new THREE.Vector3(1, 1, 1) },
       uSaturation: { value: 1.05 },
+      uExposure: { value: 1.0 },
+      // Pinned: the spliced-in chunk declares this and every function in it
+      // multiplies by it. Exposure is driven by uExposure so that all the
+      // grading lives in one place.
+      toneMappingExposure: { value: 1.0 },
     });
   }
 
@@ -253,12 +294,14 @@ export class Engine {
     this.scene.fog = mood.fog
       ? new THREE.FogExp2(new THREE.Color(mood.fog[1]), mood.fog[0])
       : null;
+    // Both paths: the composite when post is on, the renderer when it is off.
     this.renderer.toneMappingExposure = mood.exposure ?? 1.0;
+    this.compositeMaterial.uniforms.uExposure.value = mood.exposure ?? 1.0;
 
     const grades = {
       NIGHT: { lift: [0.012, 0.016, 0.034], gain: [0.95, 0.98, 1.10], sat: 0.98, bloom: 0.72 },
       DAY: { lift: [0.006, 0.006, 0.008], gain: [1.03, 1.01, 0.98], sat: 1.06, bloom: 0.42 },
-      DUSK: { lift: [0.028, 0.014, 0.020], gain: [1.10, 0.98, 0.94], sat: 1.12, bloom: 0.68 },
+      DUSK: { lift: [0.020, 0.012, 0.016], gain: [1.04, 1.00, 0.98], sat: 1.00, bloom: 0.62 },
       DAWN: { lift: [0.022, 0.018, 0.024], gain: [1.06, 1.00, 0.99], sat: 1.05, bloom: 0.60 },
       STORM: { lift: [0.010, 0.014, 0.020], gain: [0.96, 0.99, 1.06], sat: 0.88, bloom: 0.50 },
     };

@@ -21,6 +21,8 @@
 
 import {
   BLENDER_PROPS, BROWSER_PROPS, BLENDER_POSES, BROWSER_POSES, ABILITIES, PROP_META,
+  PROP_SYNONYMS, OPTION_KEYS, OPTION_SUPPORT, HOLDABLE, UNMEASURED_PROPS,
+  CONVENTIONS, FIELD_TYPES, SCENE_GRAMMAR, ACTION_GRAMMAR,
 } from './vocabulary.js';
 
 export const SCENE_VERSION = 1;
@@ -49,12 +51,10 @@ const CAST_VERBS = ['move', 'pose', 'look', 'hold', 'release', 'face'];
 
 const HANDS = ['L', 'R'];
 
-/**
- * CONTRACT 1's whole option vocabulary. build_prop forwards an option only to a
- * builder that declares a parameter of that name, and `colour`/`size` are the
- * only two any builder declares, so this list is the whole of it.
- */
-const OPTION_KEYS = ['colour', 'size'];
+/** The fields a prop entry itself carries, as against the ones inside `options`. */
+const ENTRY_FIELDS = Object.keys({
+  ...SCENE_GRAMMAR.prop.required, ...SCENE_GRAMMAR.prop.optional,
+});
 
 /** Every type either renderer can build, and every pose either can strike. */
 const PROP_TYPES = [...new Set([...BROWSER_PROPS, ...BLENDER_PROPS])];
@@ -87,15 +87,49 @@ function editDistance(a, b) {
   return prev[b.length];
 }
 
+/** A name reduced to the letters and digits in it, for loose comparison. */
+const fold = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * The prose word to prop type index, from props.js by way of the vocabulary.
+ *
+ * The commonest mistake with a prop is not a typo, it is English: a model asked
+ * for a weapon writes "gun", which is five edits from "rifle" and is never
+ * recovered by measuring letters. propsMentioned reads the same table to find
+ * props in a screenplay, so a word that works in prose works here too. First
+ * word wins, so a table listing 'clock' under grandfatherClock keeps it.
+ */
+const SYNONYM_OF = new Map();
+for (const [type, words] of Object.entries(PROP_SYNONYMS)) {
+  SYNONYM_OF.set(fold(type), type);
+  for (const word of words) if (!SYNONYM_OF.has(fold(word))) SYNONYM_OF.set(fold(word), type);
+}
+function synonymFor(name) {
+  if (typeof name !== 'string') return null;
+  const key = fold(name);
+  // Half the table is written singular and half plural; a director writes
+  // whichever the sentence wanted.
+  return SYNONYM_OF.get(key) ?? (key.endsWith('s') ? SYNONYM_OF.get(key.slice(0, -1)) ?? null : null);
+}
+
 /**
  * The valid name a mistake most likely meant, or null.
  *
- * Plain edit distance is not enough for the mistakes that actually happen: a
- * model reaching for a pose writes the English word, and "sitting" is four
- * edits from "sit" — further than the threshold anything useful can carry.
- * So a candidate that starts the attempt, or is contained by it, is scored as
- * the near miss it plainly is.
+ * Two rules, because there are two mistakes. A model reaching for a pose often
+ * writes the English word, and "sitting" is four edits from "sit" — further
+ * than any threshold worth having — so a candidate the attempt begins or ends
+ * with is taken as the near miss it plainly is, and ranked ahead of everything
+ * measured in edits.
+ *
+ * Everything else is edit distance against a budget that scales with the
+ * shorter name. The budget is tight on purpose. A flat threshold of three edits
+ * answered "crouch" with "reach", "stand" with "sad", "jump" with "run" and
+ * "wave" with "idle" — none of which is a typo for anything, and every one of
+ * which a model will dutifully write into the next attempt. A confidently wrong
+ * repair instruction is worse than no suggestion, because the full vocabulary
+ * printed instead is at least true.
  */
+const AFFIX_MIN = 3;
 function nearest(name, candidates) {
   if (typeof name !== 'string' || !name) return null;
   const want = name.toLowerCase();
@@ -103,12 +137,21 @@ function nearest(name, candidates) {
   let bestScore = Infinity;
   for (const candidate of candidates) {
     const have = String(candidate).toLowerCase();
-    let score = editDistance(want, have);
-    if (have.startsWith(want) || want.startsWith(have)) score -= 2;
-    else if (have.includes(want) || want.includes(have)) score -= 1;
+    const shared = Math.min(want.length, have.length);
+    const affix = shared >= AFFIX_MIN && (
+      want.startsWith(have) || have.startsWith(want)
+      || want.endsWith(have) || have.endsWith(want)
+    );
+    // Affix matches are scored in characters not shared, distance matches in
+    // edits, and the offset keeps the two scales from ever being compared.
+    const score = affix ? Math.abs(want.length - have.length) - 1000 : editDistance(want, have);
+    // One edit per four characters of the shorter name, and never fewer than
+    // one: room for a transposition or a doubled letter, not enough to turn a
+    // word into a different word.
+    if (!affix && score > Math.floor(shared / 4) + 1) continue;
     if (score < bestScore) { bestScore = score; best = candidate; }
   }
-  return bestScore <= 3 ? best : null;
+  return best;
 }
 
 /**
@@ -119,10 +162,13 @@ function nearest(name, candidates) {
  * meant; a name from nowhere gets the list, because the model has evidently
  * no idea what the vocabulary is and one more round trip is worse than one
  * more line of text.
+ *
+ * `hint` is a synonym lookup the caller has already done, and it outranks
+ * anything found by letters — "gun" is not a misspelling of anything.
  */
-function didYouMean(name, candidates) {
+function didYouMean(name, candidates, hint = null) {
   if (!candidates.length) return 'there are none to choose from';
-  const near = nearest(name, candidates);
+  const near = hint && candidates.includes(hint) ? hint : nearest(name, candidates);
   return near ? `did you mean "${near}"?` : `valid: ${candidates.join(', ')}`;
 }
 
@@ -185,7 +231,7 @@ export function validateScene(scene) {
   /** A type neither renderer can build is fatal; one only half of them has is a note. */
   const checkPropType = (type, at) => {
     if (typeof type !== 'string') { E(`${at} must be a string prop type`); return; }
-    if (!PROP_TYPES.includes(type)) finding('error', `type:${type}`, at, `${show(type)} is not a prop type; ${didYouMean(type, PROP_TYPES)}`);
+    if (!PROP_TYPES.includes(type)) finding('error', `type:${type}`, at, `${show(type)} is not a prop type; ${didYouMean(type, PROP_TYPES, synonymFor(type))}`);
     else checkPropCoverage(type, at);
   };
 
@@ -204,8 +250,18 @@ export function validateScene(scene) {
     else if (!browser) finding('warning', `pose-preview:${pose}`, at, `${show(pose)} is in ph_assets.POSES but not anim.js, so the browser preview will stand this actor in "idle"`);
   };
 
-  /** CONTRACT: options carry a "#rrggbb" `colour` and a [w, h, d] `size` in metres. */
-  const checkOptions = (options, at) => {
+  /**
+   * CONTRACT: options carry a "#rrggbb" `colour` and a [w, h, d] `size` in metres.
+   *
+   * `type` is what makes this more than a spell check. Both renderers forward
+   * an option only to a builder that declares a parameter of that name — the
+   * film through inspect.signature, the preview through the registry's own
+   * `options` list — so an option the type does not take is dropped where
+   * nobody sees it and the prop renders its default. OPTION_SUPPORT is read out
+   * of both libraries by tools/vocabulary.mjs, so this answer cannot go stale
+   * behind an asset.
+   */
+  const checkOptions = (options, at, type = null) => {
     if (typeof options !== 'object' || options === null || Array.isArray(options)) {
       E(`${at} must be an object of build options`);
       return;
@@ -215,14 +271,58 @@ export function validateScene(scene) {
     if (options.color !== undefined) E(`${at}.color is spelt "colour"`);
     if (options.colour !== undefined && !isHex(options.colour)) E(`${at}.colour must be a "#rrggbb" string, not ${show(options.colour)}`);
     if (options.size !== undefined && !isVec3(options.size)) E(`${at}.size must be [width, height, depth] in metres`);
-    // Same reason as `color`: build_prop forwards by parameter name, so a key
-    // no builder declares does nothing at all. Caught here rather than left to
-    // the render, where it is one warning among the directorial ones and the
-    // prop comes out the default colour with nobody the wiser.
     for (const key of Object.keys(options)) {
-      if (key === 'colour' || key === 'size' || key === 'color') continue;
-      const near = nearest(key, OPTION_KEYS);
-      E(`${at}.${key} is not a build option${near ? `; did you mean "${near}"?` : `; options are ${OPTION_KEYS.join(', ')}`}`);
+      if (key === 'color') continue;
+      // Same reason as `color`: a key no builder declares does nothing at all.
+      // Caught here rather than left to the render, where it is one warning
+      // among the directorial ones and the prop comes out the default with
+      // nobody the wiser.
+      if (!OPTION_KEYS.includes(key)) {
+        // `scale` and `rot` sit one level up, and reaching for them inside
+        // `options` is the mirror of writing `colour` outside it — the same
+        // confusion about which level a thing belongs to, in the other
+        // direction, so it gets the same kind of answer rather than a guess.
+        if (ENTRY_FIELDS.includes(key)) {
+          E(`${at}.${key} belongs on the prop entry itself, alongside at and type, not inside options`);
+          continue;
+        }
+        const near = nearest(key, OPTION_KEYS);
+        E(`${at}.${key} is not a build option${near ? `; did you mean "${near}"?` : `; options are ${OPTION_KEYS.join(', ')}`}`);
+        continue;
+      }
+      if (!type || !PROP_TYPES.includes(type)) continue;
+      const film = OPTION_SUPPORT[key].blender.includes(type);
+      const preview = OPTION_SUPPORT[key].browser.includes(type);
+      if (film && preview) continue;
+      if (!film && !preview) {
+        const takes = [...new Set([...OPTION_SUPPORT[key].blender, ...OPTION_SUPPORT[key].browser])];
+        // Whichever list is shorter is the one worth printing.
+        const hint = takes.length <= 8
+          ? `only ${takes.join(', ')} take a ${key}`
+          : `${PROP_TYPES.filter((t) => !takes.includes(t)).join(', ')} take no ${key}`;
+        E(`${at}.${key} does nothing for ${show(type)}: neither renderer's builder for it accepts one, so it is dropped in silence and the prop is built its own way; ${hint}`);
+      } else if (!film) {
+        finding('warning', `opt-film:${key}:${type}`, at, `.${key} is honoured by the browser preview, but ph_assets.make_${type} takes no ${key}, so the Blender render will build the default`);
+      } else {
+        finding('warning', `opt-preview:${key}:${type}`, at, `.${key} is honoured by the Blender render, but the browser registry does not list ${key} for ${show(type)}, so the preview will build the default`);
+      }
+    }
+  };
+
+  /**
+   * A build option written flat, beside `at` and `rot`, instead of in `options`.
+   *
+   * `options` is the one nesting level in a format that is otherwise
+   * deliberately flat, which makes this the mistake the shape invites. It used
+   * to validate perfectly and then be deleted by normaliseScene, which copies
+   * prop entries field by field — so the author saw a clean report and a prop
+   * in its default colour, with nothing anywhere connecting the two.
+   */
+  const checkFlatOptions = (entry, at) => {
+    for (const key of [...OPTION_KEYS, 'color']) {
+      if (entry[key] === undefined) continue;
+      const real = key === 'color' ? 'colour' : key;
+      E(`${at}.${key} is a build option and belongs inside options: write options: { ${real}: ${JSON.stringify(entry[key])} }`);
     }
   };
 
@@ -247,7 +347,8 @@ export function validateScene(scene) {
       if (!isVec3(p.at)) E(`${at}.at must be [x, y, z]`);
       if (p.rot !== undefined && !isNum(p.rot)) E(`${at}.rot must be a number (radians)`);
       if (p.scale !== undefined && (!isNum(p.scale) || p.scale <= 0)) E(`${at}.scale must be a positive number`);
-      if (p.options !== undefined) checkOptions(p.options, `${at}.options`);
+      if (p.options !== undefined) checkOptions(p.options, `${at}.options`, p.type);
+      checkFlatOptions(p, at);
     }
   }
 
@@ -284,7 +385,7 @@ export function validateScene(scene) {
   const checkHeldProp = (name, at, holding) => {
     if (typeof name !== 'string') { E(`${at} must be a prop id or a prop type`); return; }
     if (!propIds.has(name) && !PROP_TYPES.includes(name)) {
-      E(`${at} ${show(name)} is neither a prop id from environment.props nor a prop type; ${didYouMean(name, [...propIds, ...PROP_TYPES])}`);
+      E(`${at} ${show(name)} is neither a prop id from environment.props nor a prop type; ${didYouMean(name, [...propIds, ...PROP_TYPES], synonymFor(name))}`);
       return;
     }
     // A bare type conjures a prop that environment.props never declared, so
@@ -299,7 +400,14 @@ export function validateScene(scene) {
     // For a wardrobe it is not. HAND_SPAN is what a hand can plausibly close
     // on rather than anything measured off a frame, so this stays a note.
     const HAND_SPAN = 0.5;
-    if (holding && meta && !meta.tags.some((t) => t === 'held' || t === 'handheld')
+    if (holding && !meta) {
+      // Nothing states how big these are: they build only in Blender and their
+      // meshes are seeded, so the size exists only once one has been built and
+      // measured. Said out loud rather than passed over, because silence here
+      // reads as approval — and one of the three is a two-metre parasol.
+      finding('warning', `unmeasured:${type}`, at,
+        `${show(name)} has no entry in PROP_META, so nothing here can say whether a hand can close on it; ${UNMEASURED_PROPS.join(', ')} need measuring in Blender and declaring in ph_assets.PROP_META`);
+    } else if (holding && !meta.tags.some((t) => t === 'held' || t === 'handheld')
         && Math.max(...meta.size) > HAND_SPAN) {
       finding('warning', `carry:${type}`, at,
         `${show(name)} is ${meta.category} (${meta.size.join(' x ')} m) with no grip authored for it, so it will hang off the hand at its own origin; something that size wants a 'handheld' entry in the prop registry before an actor can hold it`);
@@ -307,6 +415,22 @@ export function validateScene(scene) {
   };
 
   // --- shots ---------------------------------------------------------------
+  // Where each actor is standing as the shot list is read, so a `move` can be
+  // measured against the time its shot actually gives it. The two renderers
+  // disagree about a walk that does not finish, and neither of them is wrong:
+  // the preview animates it at the authored speed, while the Blender render
+  // applies every action "landed, not in progress" because a still has no
+  // notion of half a walk. So an actor who cannot reach the mark in time is in
+  // one place in the preview and another in the film, the camera follows them,
+  // and the two frames stop matching. Nothing said so before.
+  const marks = new Map();
+  for (const c of (Array.isArray(scene.cast) ? scene.cast : [])) {
+    const a = c.at;
+    if (c.id && (isVec2(a) || isVec3(a))) {
+      marks.set(c.id, a.length === 2 ? [a[0], a[1]] : [a[0], a[2]]);
+    }
+  }
+
   const shotIds = new Set();
   if (!Array.isArray(scene.shots) || !scene.shots.length) E('shots must be a non-empty array');
   else {
@@ -364,19 +488,59 @@ export function validateScene(scene) {
           if (a.do !== 'pose' && a.do !== 'move') W(`${aat}.pose is only read by do:"pose" and do:"move"; here it will be ignored`);
         }
         if (a.hand !== undefined && !HANDS.includes(a.hand)) E(`${aat}.hand must be "L" or "R", not ${show(a.hand)}`);
-        if (a.colour !== undefined && !isHex(a.colour)) E(`${aat}.colour must be a "#rrggbb" string, not ${show(a.colour)}`);
         if (a.color !== undefined) E(`${aat}.color is spelt "colour"`);
+
+        // `colour` is the effect's colour and nothing else's: production.js
+        // hands it to vfx.spawn and no other verb so much as reads it. Accepted
+        // on all eight, it was a field an author could set on a `hold` in the
+        // reasonable belief they were tinting the prop, and watch the prop come
+        // out its default colour with the report clean.
+        if (a.colour !== undefined) {
+          if (a.do === 'vfx') {
+            if (!isHex(a.colour)) E(`${aat}.colour must be a "#rrggbb" string, not ${show(a.colour)}`);
+          } else if (a.do === 'hold') {
+            E(`${aat}.colour is not read by do:"hold"; to tint the prop write options: { colour: ${JSON.stringify(a.colour)} }, and note that only do:"vfx" takes a colour of its own`);
+          } else {
+            E(`${aat}.colour is only read by do:"vfx", which passes it to the effect; do:"${a.do}" ignores it`);
+          }
+        }
+        // The rest of the option vocabulary has no reading at all on an action.
+        for (const key of OPTION_KEYS) {
+          if (key === 'colour' || a[key] === undefined) continue;
+          E(`${aat}.${key} is a build option, not an action field; ${a.do === 'hold' ? `write options: { ${key}: ${JSON.stringify(a[key])} }` : 'and only do:"hold" builds a prop for an actor to carry'}`);
+        }
 
         if (a.do === 'move') {
           if (!isVec2(a.to) && !isVec3(a.to)) E(`${aat}.to must be [x, z] or [x, y, z]`);
           if (a.speed !== undefined && (!isNum(a.speed) || a.speed <= 0)) E(`${aat}.speed must be a positive number (metres per second; above 2.2 becomes a run)`);
           if (a.facing !== undefined && !isNum(a.facing)) E(`${aat}.facing must be a number (radians)`);
+
+          // Can they get there before the cut? See `marks` above for why this
+          // matters. Only checked when everything it needs is valid, so a bad
+          // `to` reports the bad `to` and not a consequence of it.
+          const from = marks.get(a.actor);
+          const to = isVec2(a.to) ? [a.to[0], a.to[1]] : (isVec3(a.to) ? [a.to[0], a.to[2]] : null);
+          if (from && to && isNum(s.duration) && s.duration > 0) {
+            const need = Math.hypot(to[0] - from[0], to[1] - from[1]);
+            const speed = isNum(a.speed) && a.speed > 0 ? a.speed : 1.2;
+            const reach = speed * s.duration;
+            if (need > reach + 1e-6) {
+              W(`${aat}: "${a.actor}" is ${need.toFixed(1)} m from that mark and the shot `
+                + `runs ${s.duration.toFixed(1)}s at ${speed} m/s, so the walk covers only `
+                + `${reach.toFixed(1)} m. The Blender render puts them on the mark anyway — a `
+                + `still is always "arrived" — while the preview leaves them `
+                + `${(need - reach).toFixed(1)} m short, and any shot framed on them will not `
+                + `match. Give the shot ${(need / speed).toFixed(1)}s, or a speed of `
+                + `${(need / s.duration).toFixed(1)} m/s.`);
+            }
+            marks.set(a.actor, to);
+          }
         }
         if (a.do === 'pose' && !a.pose) E(`${aat}.pose is required`);
         if (a.do === 'hold') {
           if (!a.prop) E(`${aat}.prop is required`);
           else checkHeldProp(a.prop, `${aat}.prop`, true);
-          if (a.options !== undefined) checkOptions(a.options, `${aat}.options`);
+          if (a.options !== undefined) checkOptions(a.options, `${aat}.options`, propTypes.get(a.prop) ?? a.prop);
         }
         if (a.do === 'release' && a.prop !== undefined) checkHeldProp(a.prop, `${aat}.prop`, false);
         if (a.do === 'look') {
@@ -403,7 +567,18 @@ export function validateScene(scene) {
         }
       }
 
-      if (s.caption && typeof s.caption.text !== 'string') E(`${at}.caption.text must be a string`);
+      if (s.caption !== undefined && s.caption !== null) {
+        if (typeof s.caption !== 'object' || Array.isArray(s.caption)) E(`${at}.caption must be an object with a text`);
+        else {
+          if (typeof s.caption.text !== 'string') E(`${at}.caption.text must be a string`);
+          // A caption with a speaker takes the dialogue styling and one without
+          // reads as an action line, so a speaker that resolves to nobody is a
+          // line of dialogue silently restyled as narration.
+          if (s.caption.speaker !== undefined && !castIds.has(s.caption.speaker)) {
+            E(`${at}.caption.speaker "${s.caption.speaker}" is not a cast id; ${didYouMean(s.caption.speaker, [...castIds])}`);
+          }
+        }
+      }
       if (s.fade && !['in', 'out'].includes(s.fade)) E(`${at}.fade must be "in" or "out"`);
     }
   }
@@ -555,16 +730,23 @@ export function describeScene(scene) {
 }
 
 /**
- * The complete authoring vocabulary, in one place.
+ * The complete authoring vocabulary and grammar, in one place.
  *
  * The LLM system prompt is written from exactly this export, and validateScene
  * checks against exactly these lists, so a director is never told about a prop
- * the validator will reject or refused a pose the prompt offered. The renderer
- * halves come from tools/vocabulary.mjs and cannot be edited into agreement by
- * hand.
+ * the validator will reject or refused a pose the prompt offered. The first
+ * line is the format's own closed sets, declared at the top of this file;
+ * everything after it is generated by tools/vocabulary.mjs and cannot be edited
+ * into agreement by hand. The names there are read out of the renderers that
+ * implement them, and the grammar is put to this validator before it is
+ * written, so a prompt cannot describe a field validateScene does not enforce,
+ * a unit the renderers do not use, or an option a builder will drop.
  */
 export {
-  SIZES, MOVES, HEIGHTS, MOODS, GROUNDS, VERBS, HANDS,
-  BLENDER_PROPS, BROWSER_PROPS, BLENDER_POSES, BROWSER_POSES, ABILITIES, PROP_META,
-  PROP_TYPES, POSE_NAMES, OPTION_KEYS,
+  SIZES, MOVES, HEIGHTS, MOODS, GROUNDS, VERBS, CAST_VERBS, HANDS,
+  BLENDER_PROPS, BROWSER_PROPS, BLENDER_POSES, BROWSER_POSES, ABILITIES,
+  PROP_TYPES, POSE_NAMES,
+  PROP_META, UNMEASURED_PROPS, PROP_SYNONYMS,
+  OPTION_KEYS, OPTION_SUPPORT, HOLDABLE,
+  CONVENTIONS, FIELD_TYPES, SCENE_GRAMMAR, ACTION_GRAMMAR,
 };

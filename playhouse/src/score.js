@@ -521,8 +521,14 @@ export function cueSheet(scene) {
   const TIGHT = { ECU: 1.0, CU: 0.85, MCU: 0.7, MS: 0.5, MWS: 0.4, WS: 0.3, EWS: 0.25 };
 
   return shots.map((shot, index) => {
+    // `.text`, not the caption itself: a caption is `{ text, speaker }` and
+    // has been since the scene format gained one, so joining the object gave
+    // every scored shot the literal string "[object Object]". Every caption in
+    // every scene file was invisible to the cue chooser — a shot captioned
+    // "the chase bursts through the trees" scored as `neutral`, and the words
+    // most likely to name the mood were the ones being dropped.
     const text = [
-      shot.caption,
+      shot.caption?.text,
       shot.music,
       ...(shot.actions || []).map((a) => `${a.do || ''} ${a.pose || ''} ${a.prop || ''}`),
     ].filter(Boolean).join(' ');
@@ -530,7 +536,7 @@ export function cueSheet(scene) {
     // chase is still the chase, and scoring it on its own text alone would
     // drop the music out for two seconds.
     const near = shots.slice(Math.max(0, index - 1), index + 2)
-      .map((s) => s.caption || '').join(' ');
+      .map((s) => s.caption?.text || '').join(' ');
 
     const explicit = shot.music || scene?.music;
     const chosen = CUES[explicit] ? explicit : cueFor(`${text} ${near}`, mood).cue;

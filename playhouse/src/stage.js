@@ -477,41 +477,77 @@ function chooseArchetype(location, interior, { prose = '' } = {}) {
  * Time-of-day lighting. Key/fill/rim is the workhorse three-point setup;
  * the rim is what stops characters merging into the background.
  */
+/**
+ * Lighting rigs, CALIBRATED AGAINST THE BLENDER RENDER rather than chosen by eye.
+ *
+ * The two halves of this project have to agree about how bright and how warm a
+ * scene is. They did not: measured as mean frame luminance over the same scene
+ * files, the preview ran 2.2x to 13.2x darker than the film depending on mood,
+ * so someone opening the preview saw night and got back dusk. Every `exposure`
+ * and every fog colour below now comes from that measurement, taken by
+ * rendering both ways and comparing. The residual is 0.94x to 1.36x.
+ *
+ * Two causes, both worth knowing about before touching these numbers:
+ *
+ * 1. THE FOG COLOUR WAS MOST OF IT. These moods shipped with fog tinted like
+ *    the sky at that hour — dark purple at dusk, near-black at night — which
+ *    over ten to forty metres of depth drives everything toward black. The
+ *    film tints its haze pale and slightly cool at every hour, because a
+ *    backlit haze GLOWS; that is the whole reason for shooting into it. The
+ *    values here are ph_assets.MOODS' own fog colours converted from linear.
+ *
+ * 2. TONE MAPPING WAS NOT RUNNING AT ALL. See engine.js — the renderer only
+ *    applies it when drawing to the default framebuffer, and this pipeline
+ *    renders to a target. So every `exposure` below was inert until that was
+ *    fixed, which is why they are so much larger than they used to be: they
+ *    are the first values that have ever done anything.
+ *
+ * Re-calibrate the same way if you change a rig: render a scene both ways and
+ * compare mean luminance. Do not adjust these by eye against a single monitor.
+ */
 const MOODS = {
   NIGHT: {
     key: { colour: '#ffd0a0', intensity: 0.95, dir: [-3, 5, 4] },
     fill: { colour: '#5a7aae', intensity: 0.55, dir: [4, 3, 2] },
     rim: { colour: '#a8c4f0', intensity: 1.9, dir: [1, 4, -6] },
     ambient: { colour: '#3a4668', intensity: 0.80 },
-    background: '#0d1220', fog: [0.016, '#0d1220'], exposure: 1.35,
+    background: '#1a2136', fog: [0.016, '#bfcbea'], exposure: 0.72,
   },
   DAY: {
     key: { colour: '#fff2dc', intensity: 2.5, dir: [-4, 7, 5] },
     fill: { colour: '#a8c8f0', intensity: 0.65, dir: [5, 3, 2] },
     rim: { colour: '#ffffff', intensity: 1.1, dir: [2, 5, -6] },
     ambient: { colour: '#93aacb', intensity: 0.75 },
-    background: '#9fc0dd', fog: [0.006, '#b8cfe4'], exposure: 1.0,
+    background: '#9fc0dd', fog: [0.006, '#e2e5ec'], exposure: 4.7,
   },
+  // Calibrated against the Blender render rather than chosen by eye: the two
+  // halves of this project must agree about how bright and how warm a scene
+  // is, or the preview teaches the author something the film will not deliver.
+  // Measured over three shots of forest-stop, mean luminance was 6.9x to 13.2x
+  // darker in the preview before this. The fog colour was most of it — a dark
+  // purple haze crushes a backlit exterior toward black where the film's pale
+  // blue-grey one glows — and the tone mapping, which was not running at all,
+  // was the rest. See engine.js.
   DUSK: {
-    key: { colour: '#ff9f5e', intensity: 1.7, dir: [-6, 2.4, 3] },
-    fill: { colour: '#6a7eb8', intensity: 0.62, dir: [4, 3, 2] },
-    rim: { colour: '#ffb27a', intensity: 1.9, dir: [-5, 2, -5] },
-    ambient: { colour: '#5a5480', intensity: 0.72 },
-    background: '#2e2740', fog: [0.012, '#3a2f42'], exposure: 1.08,
+    key: { colour: '#ffb079', intensity: 2.0, dir: [-6, 2.4, 3] },
+    fill: { colour: '#8fa0cc', intensity: 1.05, dir: [4, 3, 2] },
+    rim: { colour: '#ffc199', intensity: 2.2, dir: [-5, 2, -5] },
+    ambient: { colour: '#8d8a94', intensity: 1.45 },
+    background: '#b0a69c', fog: [0.012, '#ced3e6'], exposure: 4.4,
   },
   DAWN: {
     key: { colour: '#ffd9c0', intensity: 1.9, dir: [5, 2.6, 4] },
     fill: { colour: '#8aa4d8', intensity: 0.75, dir: [-4, 3, 2] },
     rim: { colour: '#ffc9a8', intensity: 1.8, dir: [3, 3, -6] },
     ambient: { colour: '#6a7090', intensity: 0.90 },
-    background: '#3c4562', fog: [0.010, '#4a5170'], exposure: 1.05,
+    background: '#8f97ad', fog: [0.010, '#d7dae7'], exposure: 6.2,
   },
   STORM: {
     key: { colour: '#c8d4e8', intensity: 0.85, dir: [-3, 6, 4] },
     fill: { colour: '#5a6478', intensity: 0.40, dir: [4, 3, 2] },
     rim: { colour: '#dce6f8', intensity: 1.2, dir: [1, 4, -6] },
     ambient: { colour: '#3a4252', intensity: 0.48 },
-    background: '#1e242e', fog: [0.018, '#242b36'], exposure: 1.10,
+    background: '#7c828e', fog: [0.018, '#cbced4'], exposure: 3.1,
   },
 };
 

@@ -8,6 +8,36 @@
  *
  * Props that move register a `userData.update(dt, elapsed)` callback — flame
  * flicker, clock pendulum, hands — so the scene has life even in a held shot.
+ *
+ * ---------------------------------------------------------------------------
+ * The scene file's `options`
+ * ---------------------------------------------------------------------------
+ *
+ * A prop entry may carry `options: { colour, size }`, and those two keys are
+ * the whole vocabulary — scenefile.js rejects any third. Which types honour
+ * which key is declared per entry in the registry below, because the film
+ * decides it: ph_assets forwards an option only to a builder that declares a
+ * parameter of that name, so `colour` on a type Blender cannot tint renders
+ * grey in the film. A preview that tinted it anyway would be showing the
+ * author something the finished film will not contain, which is worse than not
+ * offering the feature — the whole reason to have a preview is that it agrees.
+ * Hence `options: []` on drone, rifle and tree: ph_assets builds all three with
+ * fixed or seed-jittered liveries, so neither renderer tints them.
+ *
+ * `colour` is a "#rrggbb" sRGB string and names ONE surface, the type's primary
+ * one — a barrel's staves, not its iron hoops; a portrait's frame, not the
+ * painting inside it. Anything with a second material keeps it: recolouring a
+ * whole object to a single albedo is how a prop stops reading as an object and
+ * starts reading as a silhouette. The per-type list is in the registry.
+ *
+ * `size` is [width, height, depth] in three.js metres and is honoured by the
+ * three generic primitives ONLY. This follows ph_assets, and the reasoning is
+ * worth repeating because it looks like a gap: a named type's size is metadata
+ * that both renderers reason *with*. validateScene warns that a wardrobe is too
+ * big to carry, and blocking is solved against a 1.4 m table, from the `size`
+ * field below. A scene file that resized the cup would leave both of those
+ * facts wrong and nothing would say so. A scene that genuinely wants a
+ * three-metre box wants `slab`.
  */
 
 import * as THREE from 'three';
@@ -45,7 +75,7 @@ function lathe(profile, mat, seg = 20) {
 // Oil lamp — glass cylindrical chimney, live flame, flickering practical light
 // ---------------------------------------------------------------------------
 
-function buildOilLamp({ brass = '#b8873f', oil = '#c8862c' } = {}) {
+function buildOilLamp({ colour, brass = colour ?? '#b8873f', oil = '#c8862c' } = {}) {
   const g = new THREE.Group();
   const brassMat = metalMaterial(brass, 0.32);
 
@@ -231,7 +261,7 @@ function clockFaceTexture() {
   return tex;
 }
 
-function buildGrandfatherClock({ wood = '#4a2c18', brass = '#c9a24a' } = {}) {
+function buildGrandfatherClock({ colour, wood = colour ?? '#4a2c18', brass = '#c9a24a' } = {}) {
   const g = new THREE.Group();
   const woodMat = woodMaterial(wood, 0.48);
   const darkWood = woodMaterial('#33200f', 0.55);
@@ -380,7 +410,7 @@ function buildGrandfatherClock({ wood = '#4a2c18', brass = '#c9a24a' } = {}) {
 // Furniture and dressing
 // ---------------------------------------------------------------------------
 
-function buildChair({ wood = '#5a3a20', seat = '#7a4a3a' } = {}) {
+function buildChair({ colour, wood = colour ?? '#5a3a20', seat = '#7a4a3a' } = {}) {
   const g = new THREE.Group();
   const w = woodMaterial(wood);
   for (const [x, z] of [[0.19, 0.19], [-0.19, 0.19], [0.19, -0.19], [-0.19, -0.19]]) {
@@ -393,7 +423,7 @@ function buildChair({ wood = '#5a3a20', seat = '#7a4a3a' } = {}) {
   return g;
 }
 
-function buildArmchair({ fabric = '#5a3444', wood = '#3f2a18' } = {}) {
+function buildArmchair({ colour, fabric = colour ?? '#5a3444', wood = '#3f2a18' } = {}) {
   const g = new THREE.Group();
   const f = fabricMaterial(fabric);
   g.add(box(0.72, 0.30, 0.70, f, 0, 0.30, 0));
@@ -408,7 +438,7 @@ function buildArmchair({ fabric = '#5a3444', wood = '#3f2a18' } = {}) {
   return g;
 }
 
-function buildTable({ wood = '#4a2f1c', round = false, w = 1.4, d = 0.8, h = 0.76 } = {}) {
+function buildTable({ colour, wood = colour ?? '#4a2f1c', round = false, w = 1.4, d = 0.8, h = 0.76 } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(wood);
   if (round) {
@@ -428,7 +458,7 @@ function buildTable({ wood = '#4a2f1c', round = false, w = 1.4, d = 0.8, h = 0.7
   return g;
 }
 
-function buildBed({ wood = '#43291a', linen = '#d8cdb8', blanket = '#5a4a6a' } = {}) {
+function buildBed({ colour, blanket = colour ?? '#5a4a6a', wood = '#43291a', linen = '#d8cdb8' } = {}) {
   const g = new THREE.Group();
   const w = woodMaterial(wood);
   g.add(box(1.42, 0.22, 2.02, w, 0, 0.26, 0));
@@ -441,7 +471,7 @@ function buildBed({ wood = '#43291a', linen = '#d8cdb8', blanket = '#5a4a6a' } =
   return g;
 }
 
-function buildBookshelf({ wood = '#3f2a18' } = {}) {
+function buildBookshelf({ colour, wood = colour ?? '#3f2a18' } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(wood);
   const W = 0.94; const H = 1.92; const D = 0.30;
@@ -469,7 +499,7 @@ function buildBookshelf({ wood = '#3f2a18' } = {}) {
   return g;
 }
 
-function buildFireplace({ stone = '#6a6258' } = {}) {
+function buildFireplace({ colour, stone = colour ?? '#6a6258' } = {}) {
   const g = new THREE.Group();
   const s = woodMaterial(stone, 0.9);
   g.add(box(1.90, 1.55, 0.32, s, 0, 0.775, 0));
@@ -513,7 +543,7 @@ function buildFireplace({ stone = '#6a6258' } = {}) {
   return g;
 }
 
-function buildCandle({ wax = '#e8e0cc' } = {}) {
+function buildCandle({ colour, wax = colour ?? '#e8e0cc' } = {}) {
   const g = new THREE.Group();
   g.add(cyl(0.035, 0.045, 0.012, metalMaterial('#9a8a6a', 0.4), 14, 0, 0.006, 0));
   const h = 0.16 + Math.random() * 0.06;
@@ -533,7 +563,7 @@ function buildCandle({ wax = '#e8e0cc' } = {}) {
   return g;
 }
 
-function buildChandelier({ brass = '#b8933f' } = {}) {
+function buildChandelier({ colour, brass = colour ?? '#b8933f' } = {}) {
   const g = new THREE.Group();
   const m = metalMaterial(brass, 0.3);
   g.add(cyl(0.006, 0.006, 0.6, m, 6, 0, 0.3, 0));
@@ -559,7 +589,7 @@ function buildChandelier({ brass = '#b8933f' } = {}) {
   return g;
 }
 
-function buildRug({ primary = '#6a3038', secondary = '#c9a24a', w = 2.6, d = 1.8 } = {}) {
+function buildRug({ colour, primary = colour ?? '#6a3038', secondary = '#c9a24a', w = 2.6, d = 1.8 } = {}) {
   const g = new THREE.Group();
   const base = new THREE.Mesh(new THREE.PlaneGeometry(w, d), fabricMaterial(primary, 0.98));
   base.rotation.x = -Math.PI / 2;
@@ -580,7 +610,7 @@ function buildRug({ primary = '#6a3038', secondary = '#c9a24a', w = 2.6, d = 1.8
   return g;
 }
 
-function buildWardrobe({ wood = '#3a2412' } = {}) {
+function buildWardrobe({ colour, wood = colour ?? '#3a2412' } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(wood);
   g.add(box(1.10, 2.05, 0.58, m, 0, 1.025, 0));
@@ -592,7 +622,7 @@ function buildWardrobe({ wood = '#3a2412' } = {}) {
   return g;
 }
 
-function buildPortrait({ frame = '#8a6a2a', w = 0.62, h = 0.82 } = {}) {
+function buildPortrait({ colour, frame = colour ?? '#8a6a2a', w = 0.62, h = 0.82 } = {}) {
   const g = new THREE.Group();
   g.add(box(w, h, 0.05, metalMaterial(frame, 0.5), 0, 0, 0));
   const c = document.createElement('canvas');
@@ -617,7 +647,7 @@ function buildPortrait({ frame = '#8a6a2a', w = 0.62, h = 0.82 } = {}) {
   return g;
 }
 
-function buildTrunk({ wood = '#432a16', strap = '#7a6a4a' } = {}) {
+function buildTrunk({ colour, wood = colour ?? '#432a16', strap = '#7a6a4a' } = {}) {
   const g = new THREE.Group();
   g.add(box(0.86, 0.40, 0.48, woodMaterial(wood), 0, 0.20, 0));
   const lid = new THREE.Mesh(
@@ -634,7 +664,7 @@ function buildTrunk({ wood = '#432a16', strap = '#7a6a4a' } = {}) {
   return g;
 }
 
-function buildBarrel({ wood = '#5a3f22' } = {}) {
+function buildBarrel({ colour, wood = colour ?? '#5a3f22' } = {}) {
   const g = new THREE.Group();
   const profile = [];
   for (let i = 0; i <= 8; i++) {
@@ -661,7 +691,7 @@ function buildCup({ colour = '#d8d0c0' } = {}) {
   return g;
 }
 
-function buildBottle({ glass = '#3a5a3a' } = {}) {
+function buildBottle({ colour, glass = colour ?? '#3a5a3a' } = {}) {
   const g = new THREE.Group();
   g.add(lathe([
     new THREE.Vector2(0, 0), new THREE.Vector2(0.038, 0), new THREE.Vector2(0.040, 0.012),
@@ -672,7 +702,7 @@ function buildBottle({ glass = '#3a5a3a' } = {}) {
   return g;
 }
 
-function buildStool({ wood = '#5a3a20' } = {}) {
+function buildStool({ colour, wood = colour ?? '#5a3a20' } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(wood);
   g.add(cyl(0.19, 0.20, 0.045, m, 16, 0, 0.44, 0));
@@ -687,7 +717,7 @@ function buildStool({ wood = '#5a3a20' } = {}) {
   return g;
 }
 
-function buildDoor({ wood = '#3a2412' } = {}) {
+function buildDoor({ colour, wood = colour ?? '#3a2412' } = {}) {
   const g = new THREE.Group();
   g.add(box(1.06, 2.22, 0.10, woodMaterial('#2b1a0c'), 0, 1.11, 0));
   const leaf = new THREE.Group();
@@ -705,7 +735,7 @@ function buildDoor({ wood = '#3a2412' } = {}) {
   return g;
 }
 
-function buildWindow({ frame = '#3a2412', night = true } = {}) {
+function buildWindow({ colour, frame = colour ?? '#3a2412', night = true } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(frame);
   g.add(box(1.24, 1.58, 0.12, m, 0, 0, 0));
@@ -767,7 +797,7 @@ function buildTree({ trunk = '#3f2c1c', leaf = '#2f4a26', fruit = null, fruitCou
   return g;
 }
 
-function buildWell({ stone = '#6a6258' } = {}) {
+function buildWell({ colour, stone = colour ?? '#6a6258' } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(stone, 0.92);
   const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.76, 0.72, 20, 1, true), m);
@@ -782,7 +812,7 @@ function buildWell({ stone = '#6a6258' } = {}) {
   return g;
 }
 
-function buildCrate({ wood = '#6a4a28' } = {}) {
+function buildCrate({ colour, wood = colour ?? '#6a4a28' } = {}) {
   const g = new THREE.Group();
   const s = 0.52;
   g.add(box(s, s, s, woodMaterial(wood), 0, s / 2, 0));
@@ -800,7 +830,7 @@ function buildCrate({ wood = '#6a4a28' } = {}) {
  * An apple sized for a close insert: red body, offset stem, single leaf — the
  * three cues that make a 4 cm sphere read as fruit rather than a ball.
  */
-function buildApple({ skin = '#a8231f', leaf = '#3f6a2a' } = {}) {
+function buildApple({ colour, skin = colour ?? '#a8231f', leaf = '#3f6a2a' } = {}) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(
     new THREE.IcosahedronGeometry(0.04, 2),
@@ -827,7 +857,7 @@ function buildApple({ skin = '#a8231f', leaf = '#3f6a2a' } = {}) {
   return g;
 }
 
-function buildBasket({ weave = '#8a6a3c', apples = 0 } = {}) {
+function buildBasket({ colour, weave = colour ?? '#8a6a3c', apples = 0 } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(weave, 0.85);
   // Open flared body: DoubleSide so the camera can see inside.
@@ -870,7 +900,7 @@ function buildBasket({ weave = '#8a6a3c', apples = 0 } = {}) {
 }
 
 /** One fence section, built along local +X so runs and rings can rotate it. */
-function buildFence({ wood = '#6a5238' } = {}) {
+function buildFence({ colour, wood = colour ?? '#6a5238' } = {}) {
   const g = new THREE.Group();
   const m = woodMaterial(wood, 0.85);
   for (const y of [0.52, 0.86]) g.add(box(2.4, 0.07, 0.05, m, 0, y, 0));
@@ -882,7 +912,7 @@ function buildFence({ wood = '#6a5238' } = {}) {
  * A carry-lantern: caged candle with a ring on top, sized for a hand.
  * Distinct from the tabletop oil lamp — this one is meant to travel.
  */
-function buildLantern({ metal = '#4a4038' } = {}) {
+function buildLantern({ colour, metal = colour ?? '#4a4038' } = {}) {
   const g = new THREE.Group();
   const m = metalMaterial(metal, 0.5);
   g.add(cyl(0.055, 0.06, 0.02, m, 10, 0, 0.01, 0));
@@ -914,6 +944,292 @@ function buildLantern({ metal = '#4a4038' } = {}) {
   };
   g.userData.lightSource = light;
   g.userData.hero = true;
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// Generic primitives
+//
+// A board, a post and a stone: the three shapes ph_assets found 79.5% of the
+// set dressing in three screenplays could be built from. They are the only
+// types either renderer lets a scene file resize, so they are also the answer
+// whenever a script wants a box that is not one of the named types — a scene
+// asking for a three-metre crate wants a slab.
+//
+// Defaults are ph_assets' own, converted from its linear albedos: a slab left
+// untinted is #423f38 there and here. That is the point of having them.
+//
+// One divergence, and it is the browser's: ph_assets seeds each of these off
+// the prop's id and takes it a few degrees off plumb, because nothing a person
+// put down is vertical. `createProp` is never told the id, so the preview
+// builds them true. It reads as slightly tidier dressing, not as a different
+// prop, and closing it means widening the build signature to carry a seed.
+// ---------------------------------------------------------------------------
+
+/**
+ * materials.js has no neutral dielectric factory. `woodMaterial` is a
+ * MeshStandardMaterial with a roughness knob and nothing wood-specific in it,
+ * so it is the one to borrow — and the alias exists so the three call sites
+ * below do not read as a claim that a headstone is made of wood.
+ */
+const dressingMaterial = (colour, rough) => woodMaterial(colour, rough);
+
+// The three builders below take their default extents from their own registry
+// entries rather than from constants of their own. The registry `size` is what
+// the validator reasons with and what blocking is solved against, so an unsized
+// primitive that measured anything else would be a prop the rest of the system
+// has the wrong dimensions for. Reading it at build time is safe: nothing calls
+// a builder during module evaluation.
+
+/**
+ * A flat rectangular mass: a board, a panel, a lid, a step, a headstone.
+ *
+ * The grip is written onto the object rather than into the registry, because
+ * the registry entry describes the *catalogue* prop and this one has been
+ * resized. A 2 m plank held at the offset authored for a 0.20 m board hangs
+ * off the fingertips.
+ */
+function buildSlab({ colour = '#423f38', size } = {}) {
+  const g = new THREE.Group();
+  const [w, h, d] = size || PROPS.slab.size;
+  g.add(box(w, h, d, dressingMaterial(colour, 0.58), 0, h / 2, 0));
+  g.userData.hold = { offset: [0, -h * 0.5, 0.03] };
+  return g;
+}
+
+/** An upright cylinder: a post, a pipe, a bollard, a rolled carpet. */
+function buildRod({ colour = '#403b34', size } = {}) {
+  const g = new THREE.Group();
+  const [w, h, d] = size || PROPS.rod.size;
+  // ph_assets tapers each rod by a seeded 0.86–1.0, because a prism of exactly
+  // constant radius is a manufacturing achievement and a row of identical
+  // posts reads as one post instanced eight times. With no seed here, the
+  // middle of that range at least keeps a single post from reading as pipe.
+  const shaft = cyl(w * 0.5 * 0.93, w * 0.5, h, dressingMaterial(colour, 0.55), 20, 0, h / 2, 0);
+  // An elliptical footprint is width and depth disagreeing; three.js cylinders
+  // are circular, so the depth is taken out of the mesh's scale.
+  shaft.scale.z = d / w;
+  g.add(shaft);
+  // Held down the shaft, not in the middle: a torch or a broom balanced at its
+  // centre reads as a weightless prop.
+  g.userData.hold = { offset: [0, -h * 0.36, 0.03] };
+  return g;
+}
+
+/** A rounded mass: a stone, a pot, a fruit, a buoy, a snowball. */
+function buildOrb({ colour = '#3e3d3a', size } = {}) {
+  const g = new THREE.Group();
+  const [w, h, d] = size || PROPS.orb.size;
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.5, 20, 14), dressingMaterial(colour, 0.52));
+  m.scale.set(w, h, d);
+  // Sunk a fiftieth of its height, as ph_assets does: a sphere resting on a
+  // mathematical tangent point casts a contact shadow the size of a full stop
+  // and reads as hovering.
+  m.position.y = h * 0.48;
+  m.castShadow = true;
+  m.receiveShadow = true;
+  g.add(m);
+  g.userData.hold = { offset: [0, -h * 0.48, 0.03] };
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// Beach dressing — the three types the film could build and the preview could not
+//
+// ph_assets has built a ball, a bucket and a parasol since the beach scene was
+// written, and nothing here answered to those names. The cost was not that the
+// preview looked emptier than the film: it was that scenes/beach-night.mjs
+// points a shot at `nearPail` and gives another `secondary: 'nearShade'`, and
+// with no object on the stage to resolve either name the solver framed the
+// ground and framed a single. Two of that scene's four cameras sat 2.3 m and
+// 7.4 m from where the film put them.
+//
+// The dimensions below are ph_assets' own, measured rather than read off its
+// source: `ob.dimensions` over seeds 0-23, median. Its meshes are seeded, so
+// the extents are emergent — a blob's amplitude, a scalloped canopy, a rolled
+// lip and a handle arc — and the constants in the Python are the *inputs* to
+// those, not the answer. The registry `size` is what the validator warns from
+// and what blocking is solved against, so it has to be the answer.
+//
+// None of the three takes `colour`: make_ball, make_bucket and make_parasol
+// pick their hue off the seed and declare no colour parameter, so the film
+// cannot be told one. Offering it here would tint the preview and not the
+// film, which is the divergence this file exists to avoid. The defaults are
+// each builder's first seeded choice, converted from its linear albedo.
+//
+// Hence the empty `({} = {})` on all three. It is not decoration:
+// tools/vocabulary.mjs reads each builder's destructuring pattern and checks it
+// against the `options` the registry advertises, so a builder with no options
+// object at all cannot be checked and the generator refuses to guess.
+// ---------------------------------------------------------------------------
+
+/**
+ * Stack horizontal rings into a surface, each ring's radius free to ripple
+ * with angle.
+ *
+ * `lathe()` covers every profile that is a circle, which is why this is the
+ * only place in the file that needs its own geometry: the parasol's canopy is
+ * scalloped, and a lobed ring is not a circle. Mirrors ph_assets' `_ring` and
+ * `_loft`, including the closing seam and the cap over the first ring.
+ *
+ * @param {{y: number, radius: number, lobes?: (a: number) => number}[]} rings
+ * @param {number} segments vertices per ring
+ */
+function lobedLoft(rings, segments) {
+  const pos = [];
+  const ring = (r) => {
+    const out = [];
+    for (let i = 0; i < segments; i += 1) {
+      const a = (Math.PI * 2 * i) / segments;
+      const k = r.lobes ? r.lobes(a) : 1;
+      out.push(V3(Math.cos(a) * r.radius * k, r.y, Math.sin(a) * r.radius * k));
+    }
+    return out;
+  };
+  const built = rings.map(ring);
+  const push = (v) => pos.push(v.x, v.y, v.z);
+  for (let b = 0; b < built.length - 1; b += 1) {
+    const lower = built[b];
+    const upper = built[b + 1];
+    for (let i = 0; i < segments; i += 1) {
+      const j = (i + 1) % segments;
+      push(lower[i]); push(upper[i]); push(upper[j]);
+      push(lower[i]); push(upper[j]); push(lower[j]);
+    }
+  }
+  // Cap the first ring. On the parasol that is the 28 mm hub, which is a
+  // rounding error in the silhouette and a hole in the shading without it.
+  const cap = built[0];
+  const hub = V3(0, cap[0].y, 0);
+  for (let i = 0; i < segments; i += 1) {
+    push(hub); push(cap[(i + 1) % segments]); push(cap[i]);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * A beach ball, settled a centimetre into the sand.
+ *
+ * Banded, and the bands are the point: a single-coloured sphere in a
+ * background does not read as an object at all, it reads as a bubble or a hole
+ * in the mesh, because nothing outdoors is a uniform circle. ph_assets bands
+ * it by latitude and so does this, from the same alternation.
+ */
+function buildBall({} = {}) {
+  const g = new THREE.Group();
+  const radius = 0.17;
+  const bands = 6;
+  // Latitude bands as ph_assets assigns them: `int((z + 1) * 3) % 2` over the
+  // unit sphere, which is six equal slices of the vertical axis. A sphere
+  // sliced by phi gives the same figure with geometry instead of per-face
+  // material indices, which three.js has no cheap equivalent of.
+  const shell = [dressingMaterial('#ce5955', 0.30), dressingMaterial('#dfddd7', 0.30)];
+  for (let i = 0; i < bands; i += 1) {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(radius, 20, 4, 0, Math.PI * 2,
+        (Math.PI * i) / bands, Math.PI / bands),
+      shell[i % 2],
+    );
+    // Sunk to the depth ph_assets sinks it (centre at 0.94 of the radius): a
+    // sphere resting on a mathematical tangent point casts a contact shadow
+    // the size of a full stop and reads as hovering.
+    m.position.y = radius * 0.94;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    g.add(m);
+  }
+  return g;
+}
+
+/**
+ * A child's sand bucket: a tapered open cylinder with a rolled lip and a
+ * handle.
+ *
+ * Open at the top, which is the whole reason it is not a cone — a solid lump
+ * this size reads as a rock, and the dark ellipse of the opening is the only
+ * cue that says "container".
+ */
+function buildBucket({} = {}) {
+  const g = new THREE.Group();
+  const height = 0.20;
+  const base = 0.085;
+  const mouth = 0.115;
+  const body = dressingMaterial('#d46f45', 0.34);
+
+  // Open both ends so the inside is visible, and doubled back on itself for
+  // the rolled lip: an open cylinder is a zero-thickness edge at the rim,
+  // which catches the key light as a bright wire.
+  const wall = new THREE.Mesh(
+    new THREE.CylinderGeometry(mouth, base, height, 20, 1, true), body,
+  );
+  wall.position.y = height / 2;
+  wall.material.side = THREE.DoubleSide;
+  wall.castShadow = true;
+  wall.receiveShadow = true;
+  g.add(wall);
+  g.add(cyl(mouth * 0.9, mouth, 0.012, body, 20, 0, height - 0.006, 0));
+  // Floor, so the bucket is not a tube seen from above.
+  g.add(cyl(base, base, 0.008, body, 20, 0, 0.004, 0));
+
+  // Handle: a thin arc from rim to rim, which is what takes the silhouette
+  // from "cup" to "bucket" at any distance worth putting one in frame.
+  const arc = [];
+  for (let i = 0; i <= 9; i += 1) {
+    const a = (Math.PI * i) / 9;
+    arc.push(V3(Math.cos(a) * mouth * 0.98, height + Math.sin(a) * mouth * 0.55, 0));
+  }
+  const handle = new THREE.Mesh(
+    new THREE.TubeGeometry(new THREE.CatmullRomCurve3(arc), 12, 0.006, 6, false), body,
+  );
+  handle.castShadow = true;
+  g.add(handle);
+  return g;
+}
+
+/**
+ * A beach parasol, planted at a lean.
+ *
+ * The lean is not decoration. A vertical pole with a symmetric disc on top is
+ * the most obviously procedural shape it is possible to put in a frame, and
+ * ph_assets tilts every one of them four to eight degrees off plumb for that
+ * reason. The preview leans them by a fixed six degrees rather than a seeded
+ * angle, because `createProp` is never told the prop's id and so has nothing
+ * to seed from — the same gap the primitives' lean has. A row of parasols
+ * therefore leans as one here and individually in the film; it reads as
+ * tidier dressing, not as a different object.
+ */
+function buildParasol({} = {}) {
+  const g = new THREE.Group();
+  const top = 1.95;
+  const span = 0.92;
+  const canopy = dressingMaterial('#cb695d', 0.62);
+  const pole = dressingMaterial('#524b3e', 0.55);
+
+  // Driven into the sand rather than standing on it: the pole starts below
+  // zero, which is also where the measured height of 2.01 m comes from.
+  g.add(cyl(0.016, 0.020, top + 0.06, pole, 8, 0, (top - 0.06) / 2, 0));
+
+  // Domed AND scalloped, which is why this is lofted rather than lathed: a
+  // lathe can only make a circle, and ph_assets' own note is that a smooth
+  // cone reads as a lampshade. The eight lobes also account for the difference
+  // between the 1.84 m a plain disc of this span measures and the 1.91 m the
+  // film measures — the rim swings +-7%, so the registry's figure is the
+  // scalloped one and a circular rim would be 3.5% under it.
+  const scallop = (depth) => (a) => 1 + depth * Math.cos(a * 8);
+  const shade = new THREE.Mesh(lobedLoft([
+    { y: top, radius: 0.028 },
+    { y: top - 0.14, radius: span * 0.62, lobes: scallop(0.05) },
+    { y: top - 0.30, radius: span, lobes: scallop(0.07) },
+  ], 24), canopy);
+  shade.material.side = THREE.DoubleSide;
+  shade.castShadow = true;
+  shade.receiveShadow = true;
+  g.add(shade);
+
+  g.rotation.z = THREE.MathUtils.degToRad(6);
   return g;
 }
 
@@ -1050,63 +1366,163 @@ function buildRifle({ metal = '#2c3036', furniture = '#3f3a34' } = {}) {
 }
 
 /**
- * name -> { build, size [w,h,d], category, tags }
- * `size` is the footprint used for placement and collision avoidance.
+ * name -> { build, size [w,h,d], category, tags, options }
+ *
+ * `size` is the footprint used for placement and collision avoidance, and it is
+ * what validateScene reasons about a prop with, so it describes the type as
+ * built with no options — see the `size` note at the top of this file.
+ *
+ * `options` lists the scene-file option keys this type honours, and the list is
+ * the contract: `createProp` warns about anything a scene asks for that is not
+ * on it, and the vocabulary generator publishes it so a system prompt can say
+ * truthfully which props take a colour. It is a per-type fact rather than one
+ * rule because the film makes it one: ph_assets tints fifteen of its types and
+ * builds the drone, the rifle and the tree with liveries a scene file cannot
+ * reach. Every entry below is that same answer.
+ *
+ * `colour` names the type's primary surface, listed per entry where it is not
+ * simply "the whole thing".
  */
 export const PROPS = {
-  drone: { build: buildDrone, size: [0.55, 0.30, 0.55], category: 'vehicle', tags: ['air'] },
-  rifle: { build: buildRifle, size: [0.10, 0.20, 0.70], category: 'handheld', tags: ['held'] },
-  oilLamp: { build: buildOilLamp, size: [0.13, 0.37, 0.13], category: 'light', tags: ['table', 'hero'] },
-  grandfatherClock: { build: buildGrandfatherClock, size: [0.58, 2.20, 0.36], category: 'furniture', tags: ['wall', 'hero'] },
-  candle: { build: buildCandle, size: [0.09, 0.24, 0.09], category: 'light', tags: ['table'] },
-  chandelier: { build: buildChandelier, size: [0.70, 0.70, 0.70], category: 'light', tags: ['ceiling'] },
-  fireplace: { build: buildFireplace, size: [2.10, 1.55, 0.50], category: 'light', tags: ['wall'] },
-  chair: { build: buildChair, size: [0.50, 1.00, 0.50], category: 'seat', tags: ['floor'] },
-  stool: { build: buildStool, size: [0.40, 0.48, 0.40], category: 'seat', tags: ['floor'] },
-  armchair: { build: buildArmchair, size: [0.78, 0.95, 0.74], category: 'seat', tags: ['floor'] },
-  table: { build: buildTable, size: [1.40, 0.80, 0.80], category: 'surface', tags: ['floor'] },
-  roundTable: { build: (o) => buildTable({ ...o, round: true, w: 0.95 }), size: [0.95, 0.80, 0.95], category: 'surface', tags: ['floor'] },
-  bed: { build: buildBed, size: [1.50, 1.10, 2.10], category: 'furniture', tags: ['wall'] },
-  bookshelf: { build: buildBookshelf, size: [1.00, 1.95, 0.32], category: 'furniture', tags: ['wall'] },
-  wardrobe: { build: buildWardrobe, size: [1.20, 2.15, 0.60], category: 'furniture', tags: ['wall'] },
-  trunk: { build: buildTrunk, size: [0.90, 0.62, 0.50], category: 'furniture', tags: ['floor', 'wall'] },
-  barrel: { build: buildBarrel, size: [0.60, 0.82, 0.60], category: 'clutter', tags: ['floor'] },
-  crate: { build: buildCrate, size: [0.54, 0.54, 0.54], category: 'clutter', tags: ['floor'] },
-  rug: { build: buildRug, size: [2.60, 0.01, 1.80], category: 'floor', tags: ['floor'] },
-  portrait: { build: buildPortrait, size: [0.62, 0.82, 0.06], category: 'decor', tags: ['wall'] },
-  window: { build: buildWindow, size: [1.24, 1.58, 0.14], category: 'decor', tags: ['wall'] },
-  door: { build: buildDoor, size: [1.06, 2.22, 0.12], category: 'structure', tags: ['wall'] },
-  cup: { build: buildCup, size: [0.08, 0.08, 0.08], category: 'clutter', tags: ['table'] },
-  bottle: { build: buildBottle, size: [0.09, 0.29, 0.09], category: 'clutter', tags: ['table'] },
-  tree: { build: buildTree, size: [2.40, 4.20, 2.40], category: 'nature', tags: ['exterior'] },
-  well: { build: buildWell, size: [1.70, 2.10, 0.80], category: 'nature', tags: ['exterior'] },
+  // The drone's livery and its red sensor eye, the rifle's furniture and the
+  // tree's seeded bark and leaf are all fixed in ph_assets, so tinting them
+  // here would show the author a prop the film will not render.
+  drone: { build: buildDrone, size: [0.55, 0.30, 0.55], category: 'vehicle', tags: ['air'], options: [] },
+  rifle: { build: buildRifle, size: [0.10, 0.20, 0.70], category: 'handheld', tags: ['held'], options: [] },
+  tree: { build: buildTree, size: [2.40, 4.20, 2.40], category: 'nature', tags: ['exterior'], options: [] },
+
+  // Beach dressing. Sizes are measured off ph_assets rather than declared by
+  // it — see the builders above. Like the drone and the rifle, none of the
+  // three can be tinted from a scene file, because the film's builders take no
+  // colour. The bucket is deliberately NOT tagged 'held': make_bucket authors
+  // no ph_grip, so claiming a grip that does not exist would suppress the
+  // carry warning on the strength of a tag. Tag it when the grip is added.
+  ball: { build: buildBall, size: [0.34, 0.34, 0.34], category: 'clutter', tags: ['floor', 'exterior'], options: [] },
+  bucket: { build: buildBucket, size: [0.23, 0.27, 0.23], category: 'clutter', tags: ['floor', 'exterior'], options: [] },
+  parasol: { build: buildParasol, size: [1.91, 2.01, 1.91], category: 'structure', tags: ['floor', 'exterior'], options: [] },
+
+  // The generic primitives: the only three types either renderer resizes. The
+  // grips are the catalogue ones; a primitive built at a scene-file `size`
+  // overrides them with its own, measured from the size it was actually given.
+  slab: {
+    build: buildSlab, size: [0.30, 0.20, 0.04], category: 'clutter',
+    tags: ['floor', 'handheld'], hold: { offset: [0, -0.10, 0.03] },
+    options: ['colour', 'size'],
+  },
+  rod: {
+    build: buildRod, size: [0.12, 0.25, 0.12], category: 'clutter',
+    tags: ['floor', 'handheld'], hold: { offset: [0, -0.09, 0.03] },
+    options: ['colour', 'size'],
+  },
+  orb: {
+    build: buildOrb, size: [0.24, 0.24, 0.24], category: 'clutter',
+    tags: ['floor', 'handheld'], hold: { offset: [0, -0.115, 0.03] },
+    options: ['colour', 'size'],
+  },
+
+  // colour -> the brass: the chimney is glass and the flame is the flame.
+  oilLamp: { build: buildOilLamp, size: [0.13, 0.37, 0.13], category: 'light', tags: ['table', 'hero'], options: ['colour'] },
+  // colour -> the case timber; the dial, hands and pendulum stay brass.
+  grandfatherClock: { build: buildGrandfatherClock, size: [0.58, 2.20, 0.36], category: 'furniture', tags: ['wall', 'hero'], options: ['colour'] },
+  // colour -> the wax.
+  candle: { build: buildCandle, size: [0.09, 0.24, 0.09], category: 'light', tags: ['table'], options: ['colour'] },
+  chandelier: { build: buildChandelier, size: [0.70, 0.70, 0.70], category: 'light', tags: ['ceiling'], options: ['colour'] },
+  // colour -> the stonework; the fire is not dressing.
+  fireplace: { build: buildFireplace, size: [2.10, 1.55, 0.50], category: 'light', tags: ['wall'], options: ['colour'] },
+  // colour -> the frame timber, as ph_assets does; the seat pad keeps its own.
+  chair: { build: buildChair, size: [0.50, 1.00, 0.50], category: 'seat', tags: ['floor'], options: ['colour'] },
+  stool: { build: buildStool, size: [0.40, 0.48, 0.40], category: 'seat', tags: ['floor'], options: ['colour'] },
+  // colour -> the upholstery, which on an armchair is the object.
+  armchair: { build: buildArmchair, size: [0.78, 0.95, 0.74], category: 'seat', tags: ['floor'], options: ['colour'] },
+  table: { build: buildTable, size: [1.40, 0.80, 0.80], category: 'surface', tags: ['floor'], options: ['colour'] },
+  roundTable: { build: (o) => buildTable({ ...o, round: true, w: 0.95 }), size: [0.95, 0.80, 0.95], category: 'surface', tags: ['floor'], options: ['colour'] },
+  // colour -> the blanket. A bed is named by its bedding, and the frame is
+  // barely in shot; the sheets and pillows stay linen so it still reads as a
+  // made bed rather than one dyed object.
+  bed: { build: buildBed, size: [1.50, 1.10, 2.10], category: 'furniture', tags: ['wall'], options: ['colour'] },
+  // colour -> the carcass; the books are the point of a bookshelf.
+  bookshelf: { build: buildBookshelf, size: [1.00, 1.95, 0.32], category: 'furniture', tags: ['wall'], options: ['colour'] },
+  wardrobe: { build: buildWardrobe, size: [1.20, 2.15, 0.60], category: 'furniture', tags: ['wall'], options: ['colour'] },
+  // colour -> the timber; the iron straps stay iron.
+  trunk: { build: buildTrunk, size: [0.90, 0.62, 0.50], category: 'furniture', tags: ['floor', 'wall'], options: ['colour'] },
+  // colour -> the staves; the hoops stay iron.
+  barrel: { build: buildBarrel, size: [0.60, 0.82, 0.60], category: 'clutter', tags: ['floor'], options: ['colour'] },
+  // colour -> the boards; the battens keep their darker tone.
+  crate: { build: buildCrate, size: [0.54, 0.54, 0.54], category: 'clutter', tags: ['floor'], options: ['colour'] },
+  // colour -> the field; the border stays the contrasting trim.
+  rug: { build: buildRug, size: [2.60, 0.01, 1.80], category: 'floor', tags: ['floor'], options: ['colour'] },
+  // colour -> the frame, not the painting inside it.
+  portrait: { build: buildPortrait, size: [0.62, 0.82, 0.06], category: 'decor', tags: ['wall'], options: ['colour'] },
+  // colour -> the frame; the glazing is lit by the time of day.
+  window: { build: buildWindow, size: [1.24, 1.58, 0.14], category: 'decor', tags: ['wall'], options: ['colour'] },
+  // colour -> the leaf; the jamb and the knob stay put.
+  door: { build: buildDoor, size: [1.06, 2.22, 0.12], category: 'structure', tags: ['wall'], options: ['colour'] },
+  cup: { build: buildCup, size: [0.08, 0.08, 0.08], category: 'clutter', tags: ['table'], options: ['colour'] },
+  // colour -> the glass; the browser bottle has no label to keep white.
+  bottle: { build: buildBottle, size: [0.09, 0.29, 0.09], category: 'clutter', tags: ['table'], options: ['colour'] },
+  // colour -> the stonework; the windlass timber stays timber.
+  well: { build: buildWell, size: [1.70, 2.10, 0.80], category: 'nature', tags: ['exterior'], options: ['colour'] },
+  // colour -> the skin; the stalk and leaf are what make it read as fruit.
   apple: {
     build: buildApple, size: [0.08, 0.10, 0.08], category: 'clutter',
     tags: ['table', 'hero', 'handheld'], hold: { offset: [0, -0.10, 0.03] },
+    options: ['colour'],
   },
   basket: {
     build: buildBasket, size: [0.42, 0.42, 0.42], category: 'clutter',
     tags: ['floor', 'handheld'], hold: { offset: [0, -0.46, 0.05] },
+    options: ['colour'],
   },
-  fence: { build: buildFence, size: [2.40, 1.05, 0.12], category: 'structure', tags: ['exterior'] },
+  fence: { build: buildFence, size: [2.40, 1.05, 0.12], category: 'structure', tags: ['exterior'], options: ['colour'] },
+  // colour -> the metalwork; the pane and the flame are the light.
   lantern: {
     build: buildLantern, size: [0.12, 0.29, 0.12], category: 'light',
     tags: ['table', 'hero', 'handheld'], hold: { offset: [0, -0.36, 0.03] },
+    options: ['colour'],
   },
 };
 
 export const PROP_NAMES = Object.keys(PROPS);
 
+/** The scene file's whole option vocabulary; scenefile.js rejects any third. */
+const OPTION_KEYS = ['colour', 'size'];
+
 /**
  * Instantiate a prop by name.
+ *
+ * A scene-file option this type does not honour is dropped, and dropped
+ * loudly. That is the whole point: a builder that is never passed a `colour`
+ * has no way to complain about it, so a scene asking for a green drone would
+ * otherwise preview as an ordinary drone and say nothing — and then render as
+ * an ordinary drone too, with the author still none the wiser. It stays a
+ * warning rather than an error for ph_assets' reason: a mis-aimed option is a
+ * note to the author, not a reason to refuse to show them their scene.
+ *
+ * Only the two scene-file keys are policed. Anything else in `opts` came from
+ * inside the engine — the orchard passes `fruit` to its trees — and a builder's
+ * own parameters are not the scene file's business.
+ *
  * @returns {THREE.Group|null} group carrying `userData.propName` and metadata
  */
 export function createProp(name, opts = {}) {
   const def = PROPS[name];
   if (!def) return null;
-  const group = def.build(opts);
+  const honoured = def.options || [];
+  const build = { ...opts };
+  for (const key of OPTION_KEYS) {
+    if (build[key] === undefined || honoured.includes(key)) continue;
+    delete build[key];
+    console.warn(`scene file: prop type "${name}" takes no ${key}, so it was ignored`
+      + (key === 'size'
+        ? '; a named type\'s size is what blocking and the validator are solved against. Use "slab", "rod" or "orb" for a shape sized by the scene file'
+        : `; ${name} is built with a fixed livery in both renderers`));
+  }
+  const group = def.build(build);
   group.userData.propName = name;
-  group.userData.size = def.size;
+  // The size a prop was actually built at, which for a resized primitive is not
+  // the catalogue one. Placement and collision avoidance read this, and a 2 m
+  // plank announcing itself as a 0.30 m board is placed on top of something.
+  group.userData.size = (honoured.includes('size') && build.size) || def.size;
   group.userData.category = def.category;
   group.userData.tags = def.tags;
   group.traverse((o) => {
@@ -1143,11 +1559,20 @@ const PROP_KEYWORDS = {
   bottle: ['bottle', 'flask', 'decanter'],
   // 'branches'/'boughs' matter: writers describe the tree without naming it.
   tree: ['tree', 'trees', 'oak', 'birch', 'branches', 'boughs', 'orchard'],
+  ball: ['ball', 'balls', 'beachball', 'beach ball', 'football'],
+  bucket: ['bucket', 'buckets', 'pail', 'pails', 'sandcastle bucket'],
+  parasol: ['parasol', 'parasols', 'umbrella', 'umbrellas', 'sunshade', 'beach umbrella'],
   well: ['well'],
   chandelier: ['chandelier'],
   apple: ['apple', 'apples'],
   basket: ['basket', 'hamper'],
   fence: ['fence', 'gate', 'stile'],
+  // The generic primitives answer to the shapes prose asks for by name. Words
+  // that are usually adjectives are left out on purpose — 'stone' would dress
+  // a stone wall with a boulder in front of it.
+  slab: ['slab', 'board', 'plank', 'panel', 'headstone'],
+  rod: ['rod', 'post', 'pole', 'bollard'],
+  orb: ['orb', 'boulder'],
 };
 
 // ---------------------------------------------------------------------------
@@ -1169,7 +1594,10 @@ const PROP_KEYWORDS = {
 export function attachToHand(character, prop, side = 'R') {
   const hand = character?.userData?.bones?.[side === 'L' ? 'handL' : 'handR'];
   if (!hand || !prop) return false;
-  const hold = PROPS[prop.userData?.propName]?.hold || {};
+  // A builder that was told a `size` knows where its own grip is; the registry
+  // entry only describes the catalogue prop, and a 2 m plank held at the offset
+  // authored for a 0.20 m board hangs off the fingertips.
+  const hold = prop.userData?.hold || PROPS[prop.userData?.propName]?.hold || {};
   prop.userData.prevParent = prop.parent || null;
   hand.updateWorldMatrix(true, false);
   const ws = new THREE.Vector3();
