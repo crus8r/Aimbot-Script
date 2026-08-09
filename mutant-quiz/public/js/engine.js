@@ -181,9 +181,11 @@ var Engine = (function () {
     return { key: t.key, name: t.name, strength: strength, share: share, ceiling: ceiling };
   }
 
-  /* Produce the full derivation used by both output modes. */
-  function profile(state) {
-    var s = score(state);
+  /* Produce the full derivation used by both output modes.
+   * Split from score() so a profile can also be derived from a score vector
+   * directly — used by the test suite and by tools/profiles.js to exercise
+   * category combinations that would be tedious to reach by hand. */
+  function derive(s) {
     var order = ranked(s.cats);
 
     var totalPositive = 0;
@@ -249,6 +251,25 @@ var Engine = (function () {
     };
   }
 
+  function profile(state) {
+    return derive(score(state));
+  }
+
+  /* Build a score bundle from a plain {category: value} map. */
+  function bundle(cats, subs, traits) {
+    var c = blankCats(), sb = blankSubs();
+    Object.keys(cats || {}).forEach(function (k) { if (k in c) c[k] = cats[k]; });
+    Object.keys(subs || {}).forEach(function (k) { if (k in sb) sb[k] = subs[k]; });
+    var perSet = {};
+    QUESTION_SETS.forEach(function (s) {
+      perSet[s.n] = { cats: blankCats(), traits: {}, answered: 0, total: 10 };
+    });
+    return {
+      cats: c, subs: sb, traits: traits || {}, perSet: perSet,
+      answeredCount: 0, totalQuestions: QUESTIONS.length
+    };
+  }
+
   /* ---- answer mutation ------------------------------------------------ */
 
   function toggleOption(state, questionId, optionId) {
@@ -283,6 +304,8 @@ var Engine = (function () {
     MAXIMA: MAXIMA,
     blankCats: blankCats,
     score: score,
+    derive: derive,
+    bundle: bundle,
     profile: profile,
     ranked: ranked,
     toggleOption: toggleOption,
