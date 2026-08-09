@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X-Gene Sequencing</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>">
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">✕</span>
+      <span class="brand-text">GENE&nbsp;SEQ</span>
+    </div>
+
+    <div class="progress">
+      <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+      <span id="progress-text" class="progress-text">0 / 60</span>
+    </div>
+
+    <div class="toggles">
+      <button id="toggle-ai" class="toggle" aria-pressed="true">
+        <span class="toggle-dot"></span> AI-assist
+      </button>
+      <button id="toggle-demo" class="toggle" aria-pressed="false">
+        <span class="toggle-dot"></span> Demo
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <main id="stage" class="stage"></main>
+
+    <aside id="tally" class="tally">
+      <h3 class="tally-title">Live tally</h3>
+      <div id="tally-cats" class="tally-cats"></div>
+
+      <h4 class="tally-sub">Elemental bias</h4>
+      <div id="tally-subs" class="chips"></div>
+
+      <h4 class="tally-sub">Trait tags</h4>
+      <div id="tally-traits" class="chips"></div>
+
+      <h4 class="tally-sub">Signals</h4>
+      <div id="tally-log" class="tally-log"></div>
+
+      <p id="tally-meta" class="tally-meta"></p>
+    </aside>
+  </div>
+
+  <div id="busy" class="busy">
+    <div class="busy-card">
+      <div class="spinner"></div>
+      <p id="busy-text">Working…</p>
+    </div>
+  </div>
+
+  <script src="js/categories.js"></script>
+  <script src="js/questions.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/synergy.js"></script>
+  <script src="js/llm.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

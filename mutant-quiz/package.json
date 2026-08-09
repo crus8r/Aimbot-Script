@@ -1,0 +1,14 @@
+{
+  "name": "mutant-quiz",
+  "version": "1.0.0",
+  "private": true,
+  "description": "X-gene sequencing quiz. Hard-coded scoring engine, optional LLM fusion.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/engine.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
