@@ -122,17 +122,43 @@ hand back.
    sentences about the person. Keeps the final call's job small: six short
    notes plus a score table instead of sixty raw answers.
 3. **The fusion** (`effort: high`) — receives the score table, the shortlist,
-   the elemental bias, trait tags, the six notes, the typed answers, the tier
-   ceiling, and a deterministic skeleton showing *which* two categories fuse.
-   Writes name, tagline, mechanic, trigger, limit, cost, dilemma and a personal
-   read.
+   the elemental bias, trait tags, the six notes, the typed answers, the
+   optional life anchor, the tier ceiling, and a deterministic skeleton showing
+   *which* two categories fuse. Returns six fields: `name`, `who`, `power`,
+   `sting`, `tier_note`, `read`.
 
-The fusion prompt's load-bearing rule is that stapling is a failure: two
-capabilities joined by "and" is a wrong answer regardless of how impressive it
-sounds. It has to find the one verb that exists only where the two categories
-overlap — the method from one, the medium from the other. The tier is a hard
-ceiling, `reality_allowed` is passed explicitly, and interesting is explicitly
-ranked above strong.
+The fusion prompt carries five load-bearing rules, each fixing an observed
+failure:
+
+- **Anchor it in a life**, ideally a job. Powers are memorable when they belong
+  to someone ordinary — the work is where the ability lives and what it costs.
+- **Fuse, don't staple.** Two capabilities joined by "and" is a wrong answer.
+  One category supplies the method, the other the medium or the price.
+- **The third category is the ledger** — where it is paid for, triggered or
+  bounded. Never a second power.
+- **Pay with consequence, not shrinkage.** The commonest failure is making an
+  ability feeble so it feels balanced, which produces something nobody wants.
+  Let the effect be striking and charge for it — the body, the memory, someone
+  else, something small and nearby that never agreed to it.
+- **Don't explain yourself.** No category names in the ability, no "the twist
+  is", no marking its own homework.
+
+Plus: one **denial clause** ("not repair, transfusion") to rule out the obvious
+reading, and a preference for one exact physical detail over three
+abstractions.
+
+The schema is deliberately only six fields. An earlier version had separate
+`trigger` / `limit` / `cost` / `hook` slots and the slots *were* the problem — a
+form with six boxes gets filled in, and the result reads as a spec sheet.
+Mechanism and price belong in the same paragraph.
+
+### The life anchor
+
+Nothing in the sixty scored questions asks what anyone does for a living, and
+the fusion is markedly better when it has an ordinary life to hang on. So the
+final block ends with an optional free-text box that is **worth exactly zero
+points** — it never touches a score, a tier or the gate. It exists only to give
+the write-up something real to sit in.
 
 **If no model is reachable, nothing breaks.** Free-text falls back to a
 keyword heuristic, block notes to a trait digest, and the final result to the

@@ -26,7 +26,7 @@ var Synergy = (function () {
     'bio|elemental':       { name: 'Sympathetic Body',   line: 'your tissue takes on the properties of whatever element you are standing in' },
     'bio|energy':          { name: 'Kinetic Metabolism', line: 'you eat force and spend it as mass' },
     'bio|esoteric':        { name: 'Shed',               line: 'you can step out of your body and it keeps working without you in it' },
-    'bio|luck':            { name: 'Improbable Anatomy', line: 'nothing ever lands somewhere fatal; you are built wrong in a way that keeps saving you' },
+    'bio|luck':            { name: 'Spare Parts',        line: 'what should have killed you arrives late, somewhere quiet, and never in the place it struck — and whatever was standing nearest tends to give out instead' },
     'bio|psychic':         { name: 'Somatic Empathy',    line: 'you pull other people\'s injuries into your own body and carry them better than they could' },
     'bio|reality':         { name: 'Draft',              line: 'your body is a draft you keep revising, and each revision was always the truth' },
     'bio|tech':            { name: 'Assimilate',         line: 'anything mechanical you hold long enough becomes tissue' },

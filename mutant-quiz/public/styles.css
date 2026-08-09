@@ -270,15 +270,26 @@ body.demo-on .stage { margin: 0; }
 
 .power { border-color: var(--accent); background: linear-gradient(180deg, #1a1116, var(--panel) 55%); }
 .power-name { font-size: 2.6rem; letter-spacing: -.02em; margin-bottom: .2rem; }
-.power-tagline { font-size: 1.08rem; color: var(--accent-2); font-style: italic; margin-bottom: 1.1rem; }
-.power-mechanic { font-size: 1rem; color: var(--ink); margin-bottom: 1.25rem; }
+.power-who {
+  font-size: 1.02rem; color: var(--accent-2); font-style: italic;
+  margin-bottom: 1rem; padding-bottom: .9rem; border-bottom: 1px solid var(--line);
+}
+.power-body { font-size: 1.06rem; line-height: 1.65; color: var(--ink); margin-bottom: 1.1rem; }
+.power-sting {
+  font-size: 1rem; color: var(--ink-2);
+  border-left: 3px solid var(--accent); padding: .1rem 0 .1rem .9rem;
+  margin-bottom: 1.25rem;
+}
 
-.power-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; margin-bottom: 1.1rem; }
-.power-cell { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .75rem .85rem; }
-.power-cell p { font-size: .85rem; color: var(--ink-2); margin: 0; }
+.power-read { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .85rem 1rem; margin-bottom: 1rem; }
+.power-read p { margin: 0; font-size: .92rem; color: var(--ink-2); }
 
-.power-hook, .power-read { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .85rem 1rem; margin-bottom: 1rem; }
-.power-hook p, .power-read p { margin: 0; font-size: .92rem; color: var(--ink-2); }
+.anchor-card {
+  background: var(--panel); border: 1px dashed var(--line-2);
+  border-radius: var(--radius); padding: 1.15rem 1.25rem; margin-bottom: .85rem;
+  scroll-margin-top: 76px;
+}
+.anchor-input { margin-top: .2rem; }
 
 .power-tier { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; flex-wrap: wrap; }
 .tier-badge {

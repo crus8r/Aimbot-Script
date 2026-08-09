@@ -7,6 +7,7 @@ var App = (function () {
     screen: 'intro',      // intro | set | interstitial | results
     setIndex: 0,          // 0-based index into QUESTION_SETS
     notes: {},            // setNumber -> {observation, traits, source, stale}
+    anchor: '',
     aiMode: true,
     demoMode: false,
     result: null,
@@ -220,6 +221,13 @@ var App = (function () {
       el.stage.appendChild(renderQuestion(q, i + 1 + (setMeta.n - 1) * 10));
     });
 
+    // The fusion is much better when it has an ordinary life to hang on, and
+    // nothing in the scored questions asks about one. Unweighted on purpose:
+    // this changes no score, it only gives the final write-up something real.
+    if (state.aiMode && state.setIndex === QUESTION_SETS.length - 1) {
+      el.stage.appendChild(renderAnchor());
+    }
+
     var nav = h('div', 'nav-row');
 
     if (state.setIndex > 0) {
@@ -390,6 +398,28 @@ var App = (function () {
 
     paintStatus();
     return wrap;
+  }
+
+  function renderAnchor() {
+    var card = h('article', 'anchor-card');
+    var head = h('div', 'q-head');
+    head.appendChild(h('span', 'q-num', '—'));
+    var wrap = h('div');
+    wrap.appendChild(h('h3', 'q-text', 'Before it resolves: anything about your actual life?'));
+    wrap.appendChild(h('p', 'q-hint', 'What you do, where you spend your time, a habit, something that happened. Optional, and worth nothing — it scores zero. It only gives the result something real to sit in.'));
+    head.appendChild(wrap);
+    card.appendChild(head);
+
+    var ta = h('textarea', 'other-input anchor-input');
+    ta.rows = 3;
+    ta.placeholder = 'e.g. night shifts at a warehouse, two cats, haven\'t slept properly since March…';
+    ta.value = state.anchor || '';
+    ta.addEventListener('input', function () {
+      state.anchor = ta.value;
+      state.result = null;
+    });
+    card.appendChild(ta);
+    return card;
   }
 
   function redrawQuestion(q) {
@@ -607,6 +637,8 @@ var App = (function () {
           return { block: s.title, note: state.notes[s.n].observation };
         }),
 
+      their_life: (state.anchor || '').trim() || null,
+
       their_own_words: QUESTIONS
         .filter(function (q) {
           var a = state.answers[q.id];
@@ -660,6 +692,7 @@ var App = (function () {
       if (!confirm('Clear all sixty answers and start again?')) return;
       state.answers = {};
       state.notes = {};
+      state.anchor = '';
       state.result = null;
       state.setIndex = 0;
       state.screen = 'intro';
@@ -677,23 +710,9 @@ var App = (function () {
 
     card.appendChild(h('p', 'kicker', 'CLASSIFICATION · ' + p.tier.name.toUpperCase() + ' TIER'));
     card.appendChild(h('h1', 'power-name', pw.name));
-    card.appendChild(h('p', 'power-tagline', '“' + pw.tagline + '”'));
-
-    card.appendChild(h('p', 'power-mechanic', pw.mechanic));
-
-    var grid = h('div', 'power-grid');
-    [['Trigger', pw.trigger], ['Limit', pw.limit], ['Cost', pw.cost]].forEach(function (pair) {
-      var cell = h('div', 'power-cell');
-      cell.appendChild(h('h4', null, pair[0]));
-      cell.appendChild(h('p', null, pair[1]));
-      grid.appendChild(cell);
-    });
-    card.appendChild(grid);
-
-    var hook = h('div', 'power-hook');
-    hook.appendChild(h('h4', null, 'The problem with it'));
-    hook.appendChild(h('p', null, pw.hook));
-    card.appendChild(hook);
+    card.appendChild(h('p', 'power-who', pw.who));
+    card.appendChild(h('p', 'power-body', pw.power));
+    card.appendChild(h('p', 'power-sting', pw.sting));
 
     var tier = h('div', 'power-tier');
     tier.appendChild(h('span', 'tier-badge tier-' + p.tier.key, p.tier.name));
