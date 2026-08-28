@@ -8,54 +8,81 @@ local Config = {}
 Config.BOARD_WIDTH = 1000
 Config.BOARD_HEIGHT = 600
 
--- Simulation runs at a fixed step; snapshots go out less often than we tick.
 Config.TICK_RATE = 20
 Config.SNAPSHOT_RATE = 15
 
 Config.NEUTRAL = 0
 
--- Cell tiers. Bigger cells hold more, regenerate faster, and support more
--- outbound tentacles -- the slot count is what stops a single fat cell from
--- feeding the whole map at once.
-Config.CELL_TIERS = {
-	{ radius = 26, capacity = 30, regen = 0.90, slots = 2 },
-	{ radius = 34, capacity = 55, regen = 1.40, slots = 3 },
-	{ radius = 44, capacity = 90, regen = 2.00, slots = 4 },
-}
+Config.CELL_RADIUS = 26
 
--- A tentacle extends at a constant board-units/second rate, so distant targets
--- take proportionally longer to reach. This delay is the first half of the core
--- tension: you commit to an attack well before it can land.
-Config.TENTACLE_GROWTH_SPEED = 150
-Config.TENTACLE_THICKNESS = 7
+-- Every cell on a level shares one ceiling. Levels override it; low limits make
+-- for slow, careful boards and high ones for fast, violent boards.
+Config.POWER_LIMIT = 60
 
--- Energy leaves the source at FLOW_RATE, in discrete pulses, and then has to
--- physically travel the length of the tentacle at PULSE_SPEED. Because
--- PULSE_SPEED is slow, a long connected tentacle is a loaded pipe: it can hold
--- more energy in transit than most cells hold at rest.
+-- All owned cells tick up together. Neutral cells sit inert until taken.
+Config.REGEN_INTERVAL = 1.4
+
+-- Taking a neutral cell hands you a garrison outright rather than leaving you
+-- holding an empty cell.
+Config.NEUTRAL_CAPTURE_BONUS = 10
+
+--=============================================================================
+-- Tentacles
 --
--- That standing charge is the point. Cutting a tentacle severs it at the source
--- and shoves the entire column forward into the target at once, which is the
--- signature move -- see Simulation.cut.
-Config.FLOW_RATE = 3.2
-Config.PULSE_SPEED = 85
-Config.PULSE_INTERVAL = 0.25
+-- A tentacle is a physical chain of segments that the source cell pays to
+-- build: every SEGMENTS_PER_ENERGY segments extended costs one energy, drawn
+-- out of the source as it grows. Run out mid-reach and the chain is forced to
+-- reel back in. Reeling in refunds at exactly the same rate, so retreating
+-- costs you nothing but time.
+--
+-- The energy spent on length is therefore *stored in the chain*. Cutting it
+-- splits the chain at the cut point and collapses both halves outward: the near
+-- half refunds into the source, the far half discharges into the target. That
+-- is the whole game -- a long chain is a loaded weapon, and where you cut
+-- decides how much of it you keep versus how much you throw.
+--=============================================================================
 
--- Two tentacles running opposite directions between the same pair of cells
--- shoot past each other; where columns meet, they annihilate.
-Config.PULSE_COLLISION_RADIUS = 16
+Config.SEGMENT_LENGTH = 6
+Config.SEGMENTS_PER_ENERGY = 2
 
--- Neutral cells sit inert until somebody takes them.
-Config.NEUTRAL_REGENERATES = false
+Config.GROW_RATE = 12 -- segments/sec while extending (6 energy/sec)
+Config.COLLAPSE_RATE = 30 -- segments/sec while reeling in or discharging
 
 Config.MAX_CONNECT_DISTANCE = 430
 
-Config.ROUND_RESTART_DELAY = 6
+--=============================================================================
+-- Cell classes
+--
+-- A cell's capability is a function of what it is holding right now, not of any
+-- fixed size. Starve a cell and it drops a class; feed one and it gains one.
+-- This is why pumping energy into your own cells is worth doing: a fed cell
+-- attacks faster and can hold more lines open.
+--=============================================================================
 
--- Hard stop on a round. Without it a board can genuinely lock up: cells at
--- capacity stop regenerating, so two evenly matched factions can sit forever.
--- On timeout the faction holding the most ground wins.
-Config.ROUND_TIME_LIMIT = 420
+-- Seconds between pulses, by the source cell's current value. A cell at 1 or
+-- below cannot pulse at all.
+Config.PULSE_CLASSES = {
+	{ from = 60, interval = 0.55 },
+	{ from = 35, interval = 0.75 },
+	{ from = 15, interval = 1.05 },
+	{ from = 2, interval = 1.60 },
+}
+
+-- Simultaneous outbound tentacles, by the source cell's current value.
+Config.SLOT_CLASSES = {
+	{ from = 60, slots = 4 },
+	{ from = 35, slots = 3 },
+	{ from = 15, slots = 2 },
+	{ from = 0, slots = 1 },
+}
+
+-- How fast a pulse travels its chain, in segments/sec.
+Config.PULSE_SPEED = 26
+
+Config.ROUND_RESTART_DELAY = 6
+-- A single attacking line nets only about a third of a point per second
+-- against a defended cell, so rounds are genuinely long unless somebody cuts.
+Config.ROUND_TIME_LIMIT = 600
 
 -- Green is the player's antibody colour; red is the standard infection and
 -- purple is the smarter strain that cuts its own tentacles.
@@ -67,12 +94,32 @@ Config.FACTION_COLORS = {
 	[4] = Color3.fromRGB(250, 204, 21),
 }
 
-function Config.tierOf(tier: number)
-	return Config.CELL_TIERS[tier] or Config.CELL_TIERS[1]
-end
-
 function Config.colorOf(owner: number): Color3
 	return Config.FACTION_COLORS[owner] or Config.FACTION_COLORS[0]
+end
+
+-- Seconds between pulses for a cell holding `value`, or nil if it cannot pulse.
+function Config.pulseInterval(value: number): number?
+	for _, class in Config.PULSE_CLASSES do
+		if value >= class.from then
+			return class.interval
+		end
+	end
+	return nil
+end
+
+function Config.slotsFor(value: number): number
+	for _, class in Config.SLOT_CLASSES do
+		if value >= class.from then
+			return class.slots
+		end
+	end
+	return 1
+end
+
+-- Energy needed to span a given number of segments.
+function Config.costOf(segments: number): number
+	return segments / Config.SEGMENTS_PER_ENERGY
 end
 
 return Config

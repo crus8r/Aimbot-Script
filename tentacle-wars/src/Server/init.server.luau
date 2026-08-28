@@ -52,14 +52,7 @@ local function buildLayout(sim: Simulation.Simulation): { any }
 	local layout = {}
 	for _, id in sim.cellIds do
 		local cell = sim.cells[id]
-		table.insert(layout, {
-			id = cell.id,
-			position = cell.position,
-			tier = cell.tier,
-			radius = cell.radius,
-			capacity = cell.capacity,
-			slots = cell.slots,
-		})
+		table.insert(layout, { id = cell.id, position = cell.position, radius = cell.radius })
 	end
 	return layout
 end
@@ -70,6 +63,7 @@ local function sendRoundStart(player: Player, current: Round)
 		factions = current.sim.level.factions,
 		cells = current.layout,
 		faction = current.factionOf[player] or Config.NEUTRAL,
+		limit = current.sim.limit,
 	})
 end
 
@@ -184,8 +178,12 @@ RequestConnect.OnServerEvent:Connect(function(player, fromId, toId)
 	current.sim:connect(faction, fromId, toId)
 end)
 
-RequestCut.OnServerEvent:Connect(function(player, tentacleId)
-	if typeof(tentacleId) ~= "number" then
+RequestCut.OnServerEvent:Connect(function(player, tentacleId, fraction)
+	if typeof(tentacleId) ~= "number" or typeof(fraction) ~= "number" then
+		return
+	end
+	-- NaN survives every comparison, so reject it before it reaches the sim.
+	if fraction ~= fraction then
 		return
 	end
 	if throttled(player) then
@@ -196,7 +194,7 @@ RequestCut.OnServerEvent:Connect(function(player, tentacleId)
 	if not faction or not current then
 		return
 	end
-	current.sim:cut(faction, tentacleId)
+	current.sim:cut(faction, tentacleId, math.clamp(fraction, 0, 1))
 end)
 
 --=============================================================================

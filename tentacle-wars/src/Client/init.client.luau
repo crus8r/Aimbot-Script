@@ -1,7 +1,7 @@
 --!strict
 -- Input and remote plumbing. All gameplay decisions live on the server; this
--- only translates pointer gestures into connect/cut requests and draws
--- whatever comes back.
+-- only translates pointer gestures into reach/cut requests and draws whatever
+-- comes back.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,9 +14,7 @@ local Net = require(Shared.Net)
 local Renderer = require(script.Renderer)
 
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-
-local renderer = Renderer.new(playerGui)
+local renderer = Renderer.new(player:WaitForChild("PlayerGui"))
 
 local RoundStart = Net.get("RoundStart")
 local RoundOver = Net.get("RoundOver")
@@ -34,7 +32,7 @@ local dragSource: number? = nil
 RoundStart.OnClientEvent:Connect(function(payload)
 	faction = payload.faction
 	dragSource = nil
-	renderer:setLayout(payload.cells, payload.factions, payload.faction)
+	renderer:setLayout(payload.cells, payload.factions, payload.faction, payload.limit)
 end)
 
 Snapshot.OnClientEvent:Connect(function(snapshot)
@@ -51,9 +49,7 @@ RoundOver.OnClientEvent:Connect(function(payload)
 	if faction == Config.NEUTRAL then
 		renderer:showBanner(`Faction {payload.winner} wins`, Config.colorOf(payload.winner))
 	elseif payload.winner == faction then
-		-- Stars are a speed award, so the clock is the interesting half.
-		local stars = payload.stars or 0
-		local award = if payload.timedOut then "on time" else `{stars}/3 stars`
+		local award = if payload.timedOut then "on time" else `{payload.stars or 0}/3 stars`
 		renderer:showBanner(`Zone cleared - {award} - {clock}`, Config.colorOf(faction))
 	else
 		local how = if payload.timedOut then "outgrown" else "overrun"
@@ -76,9 +72,9 @@ local function onPress(point: Vector2)
 
 	local cell = renderer:cellAt(point)
 	if cell and renderer:ownerOf(cell.id) == faction then
-		-- A cell with every slot in use cannot start another tentacle; cutting
-		-- one is the only way to free capacity.
-		if renderer:freeSlots(cell.id) <= 0 then
+		-- A cell's class is set by what it currently holds, so a starved cell
+		-- may have no line to give.
+		if renderer:freeSlots(cell.id) <= 0 or renderer:valueOf(cell.id) < 1 then
 			return
 		end
 		dragSource = cell.id
@@ -87,9 +83,11 @@ local function onPress(point: Vector2)
 		return
 	end
 
-	local tentacle = renderer:tentacleAt(point, faction)
-	if tentacle then
-		RequestCut:FireServer(tentacle)
+	-- Where along the chain you click is the cut: everything past it goes
+	-- forward into the target, everything behind it reels home.
+	local chainId, fraction = renderer:chainAt(point, faction)
+	if chainId then
+		RequestCut:FireServer(chainId, fraction)
 	end
 end
 

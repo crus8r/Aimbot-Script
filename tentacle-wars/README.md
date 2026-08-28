@@ -10,35 +10,55 @@ if it is not. A cell drained to zero flips to the attacker.
 This is an original implementation of the genre, not a port: no assets, level
 layouts, or names are taken from any existing game.
 
+## The economy
+
+A tentacle is not free to extend. It is built out of the source cell's own
+energy — one point per two segments, drawn down as it grows — so reaching across
+the board visibly empties the cell that reached. Stretch further than you can
+afford and the chain runs you to zero and is dragged home. Reeling in refunds
+every point, so retreating costs only time.
+
+That means the energy you spent on length is **stored in the chain**.
+
+Once a chain arrives it pulses for free, forever: the source paid once, up
+front, and the pulse rate is set by whatever the source is holding *now*. This
+is why feeding your own cells matters — a fed cell is a faster cell, and can
+hold more lines open.
+
 ## The cut
 
-Energy does not teleport. It leaves the source in discrete pulses and then has
-to physically travel the tentacle, slowly. A long connected tentacle is
-therefore a **loaded pipe** — it can hold more energy in transit than most cells
-hold at rest.
+Cutting splits a chain at the point you click and collapses both halves outward.
+Everything **past** the cut discharges into the target. Everything **behind** it
+reels home and is refunded. So the cut point is the decision:
 
-Cutting a tentacle severs it at the source and shoves that entire column forward
-at once. That is the signature move: attach, let it charge, then cut to land a
-burst far bigger than the trickle would have delivered. The number drawn on your
-own connected tentacles is the standing charge — exactly what a cut would land,
-so it is the number the decision hangs on.
+- Cut at the source and the whole column goes forward — a burst worth far more
+  than the pulse trickle, which is how a defended cell actually falls. Surround
+  one and cut every chain at once and it cannot regenerate through it.
+- Cut at the far end and it all comes back — a clean retreat when a second enemy
+  starts on you and you need the energy at home.
+- Cut in the middle and split it.
 
 Two consequences fall out of the same model:
 
-- Tentacles running opposite directions between the same two cells **annihilate**
-  where their columns meet, so a mutual attack can deadlock a lane completely.
-- Losing the source cell mid-flight destroys the column. Only a deliberate cut
-  pushes it forward, which is why cutting is a skill and being cut off is a loss.
+- Two chains cannot share a lane. Growing into an occupied one **shoves it
+  back**, refunding its owner while the pusher pays to advance, and they settle
+  near the middle.
+- A chain shoved off its target is not touching anything, so its cut has nowhere
+  to discharge. Pushing back is how you defuse a loaded chain.
 
 ## Running it
 
-Requires [Rojo](https://rojo.space).
+Requires [Rojo](https://rojo.space). The version is pinned in `rokit.toml`, so
+with [Rokit](https://github.com/rojo-rbx/rokit) installed:
 
 ```sh
+rokit install         # installs the pinned Rojo
+rojo plugin install   # installs the Studio plugin, once
 rojo serve            # then connect from the Rojo plugin in Studio
-# or build a place file:
-rojo build -o TentacleWars.rbxlx
 ```
+
+Rokit puts tools on your PATH at install time, so **open a new terminal** before
+the first `rokit` command — an already-open shell still has the old PATH.
 
 Press Play. You are seated as green; every faction without a player becomes a
 bot. Clearing a zone advances to the next one; losing it, or running out the
@@ -48,12 +68,15 @@ clock, replays it.
 
 | Action | Input |
 | --- | --- |
-| Attach a tentacle | Drag from one of your cells to a target cell |
-| Cut (and land the charge) | Click one of your own tentacles |
+| Reach out | Drag from one of your cells to a target cell |
+| Cut | Click your own tentacle — **where** you click is where it cuts |
 
-While dragging, the ring shows how far that cell can reach. A cell can only run
-as many outbound tentacles as it has slots (2/3/4 by size) — cut one to free a
-slot.
+While dragging, the ring shows how far that cell can reach; reaching the far
+edge of it costs most of what a starting cell holds. The number on your own
+chains is their stored charge — exactly what a cut at the source would throw.
+
+How many lines a cell can hold open is a function of what it is holding right
+now, not its size: under 15 it manages one, and it earns more as it is fed.
 
 ## Layout
 
@@ -102,15 +125,15 @@ range, and the round clock. Levels are plain data — copy
 
 Three constants are load-bearing and interact:
 
-- `PULSE_SPEED` (85) sets how much a tentacle holds, and therefore how strong
-  cutting is. Raise it and cutting stops mattering.
-- `FLOW_RATE` (3.2) versus a tier-3 cell's `regen` (2.0) leaves only 1.2/sec of
-  net damage, so a lone trickle barely beats a big cell's regeneration. This is
-  deliberate — it is what forces you to cut — but it also means the value is
-  delicate. Raising flow to 4.0 shortened three-way matches but pushed symmetric
-  1v1 boards into stalemate 7 times in 25.
-- `MAX_CONNECT_DISTANCE` (430) caps the longest pipe, and so caps the biggest
-  possible burst at roughly `FLOW_RATE * 430 / PULSE_SPEED`.
+- `SEGMENTS_PER_ENERGY` (2) is the exchange rate between distance and energy. It
+  sets what every board position is worth and how far a cell can reach.
+- `PULSE_CLASSES` versus `REGEN_INTERVAL` (1.4s) decides whether a single line
+  can ever win. A cell in the 35+ band pulses every 0.75s against a defender
+  regenerating every 1.4s — about a third of a point per second of net progress.
+  That is deliberately marginal: one line is pressure, not a kill. The kill is
+  the cut.
+- `MAX_CONNECT_DISTANCE` (430) caps the longest chain, and so caps both the
+  biggest reach and the biggest possible cut.
 
 ## Tests
 
@@ -123,26 +146,26 @@ the levels, the AI) into one standalone script with a small `Vector2`/`Color3`
 shim, so the simulation runs outside Roblox. The runner also parse-checks every
 source file, including the Roblox-only ones.
 
-79 assertions: connect validation, growth and transit timing, cut-to-burst
-(including a control proving the cut is strictly faster than waiting),
-annihilation (a mirrored duel neither side can win, paired with the same attack
-landing when unopposed), capture side effects, regeneration rules, win detection,
-the timeout tiebreak, star thresholds, snapshot shape, red-versus-purple, and 50
-seeded AI matches across both levels that must all resolve inside the clock.
+71 assertions: build cost, overreach and refund, free pulsing, pulse and slot
+classes, all three cut positions (source / middle / far end) measured against the
+charge, a surround-and-cut volley taking a defended cell, lane clashing and
+shove-back, capture rules including the neutral bonus, regeneration and the
+limit, round bookkeeping, red-versus-purple, and 50 seeded AI matches across both
+levels that must all resolve inside the clock.
 
-Those match tests have now caught three real defects: a deadlock where a faction
-holding 12 of 13 cells could not finish because every affordable attack was a
-unit short of its own margin; a flip-flop where bots stripped their own cells to
-zero, so every capture landed with no garrison and immediately reverted; and a
-dead branch where the cost function knew how to price reinforcement but the move
-search skipped friendly cells entirely, so bots never supported their own front.
+Those tests have earned their keep repeatedly. The clash tests caught a chain
+keeping its `attached` flag after being shoved off its target, which would have
+let a defused chain still pulse and still cut. The match tests caught a bot
+re-opening the same blocked lane 656 times in one round — fixing that roughly
+halved match length. Earlier versions of this suite caught a margin deadlock, a
+capture flip-flop, and a dead reinforcement branch.
 
 ## Not in this slice
 
 - Two zones, not eighty. No menus, level select, or persistence — stars are
   reported at the end of a round but not saved.
 - No vaccines (the scarce instant-capture consumable).
-- Tentacles pass through each other; there is no crossing or blocking rule, and
-  no colour-mixing system.
+- Chains only interact head-on in the same lane. Two chains crossing at an angle
+  pass through each other.
 - No matchmaking beyond "players in the server take factions in join order".
 - No sound, particles, or juice of any kind.

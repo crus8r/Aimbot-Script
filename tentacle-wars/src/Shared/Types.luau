@@ -3,68 +3,87 @@
 export type CellSpec = {
 	id: number,
 	position: Vector2,
-	tier: number,
 	owner: number?,
-	units: number?,
+	value: number?,
+	radius: number?,
 }
 
 export type Level = {
 	name: string,
 	factions: { number },
-	-- Which AI profile drives a faction no player is seated in.
 	ai: { [number]: string }?,
-	-- Finish under starTimes[n] seconds to earn n stars. Descending.
 	starTimes: { number }?,
+	powerLimit: number?,
 	cells: { CellSpec },
 }
 
 export type Cell = {
 	id: number,
 	position: Vector2,
-	tier: number,
 	radius: number,
-	capacity: number,
-	regen: number,
-	slots: number,
 	owner: number,
-	units: number,
+	value: number,
 }
 
--- A packet of energy in transit, positioned in board units from the source.
-export type Pulse = {
-	amount: number,
-	position: number,
-}
-
+-- All chain measurements are in segments, not board units. One segment is
+-- Config.SEGMENT_LENGTH long and every Config.SEGMENTS_PER_ENERGY of them cost
+-- the source one energy to extend.
 export type Tentacle = {
 	id: number,
 	from: number,
 	to: number,
 	owner: number,
-	length: number,
-	progress: number,
-	connected: boolean,
+	span: number, -- segments from source edge to target edge
+	length: number, -- segments currently extended
+	attached: boolean,
+	retracting: boolean,
+	spendDebt: number,
+	refundDebt: number,
 	sinceEmit: number,
-	pulses: { Pulse },
+	pulses: { number }, -- positions in segments from the source
 }
 
--- Compact wire formats. Cell positions/tiers never change, so they are sent
--- once at round start and omitted from every snapshot.
-export type CellState = { id: number, owner: number, units: number }
+-- One half of a cut chain, reeling itself in. A refund pays back into `from`;
+-- a discharge empties into `to`, but only if the chain had actually reached it.
+export type Collapse = {
+	id: number,
+	from: number,
+	to: number,
+	owner: number,
+	mode: string, -- "refund" | "discharge"
+	delivers: boolean,
+	remaining: number, -- segments left
+	outer: number, -- outer edge, in segments from the source
+	credit: number,
+}
+
+export type CellState = { id: number, owner: number, value: number }
 export type TentacleState = {
 	id: number,
 	from: number,
 	to: number,
 	owner: number,
-	progress: number,
-	connected: boolean,
-	payload: number,
+	span: number,
+	length: number,
+	attached: boolean,
+	retracting: boolean,
 	pulses: { number },
+}
+export type CollapseState = {
+	id: number,
+	from: number,
+	to: number,
+	owner: number,
+	mode: string,
+	remaining: number,
+	outer: number,
 }
 export type Snapshot = {
 	cells: { CellState },
 	tentacles: { TentacleState },
+	collapses: { CollapseState },
 	remaining: number,
+	limit: number,
 }
 
 return {}

@@ -1,0 +1,4 @@
+# Tool versions for this project. With Rokit installed, `rokit install` from
+# this directory fetches Rojo at the pinned version and puts it on your PATH.
+[tools]
+rojo = "rojo-rbx/rojo@7.7.0"
