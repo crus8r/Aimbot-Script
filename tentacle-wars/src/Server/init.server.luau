@@ -30,6 +30,7 @@ type Round = {
 	sim: Simulation.Simulation,
 	bots: { AI.AI },
 	factionOf: { [Player]: number },
+	playerOf: { [number]: Player },
 	layout: { any },
 	levelIndex: number,
 	over: boolean,
@@ -72,6 +73,7 @@ local function startRound(levelIndex: number)
 	local sim = Simulation.new(level)
 
 	local factionOf: { [Player]: number } = {}
+	local playerOf: { [number]: Player } = {}
 	local claimed: { [number]: boolean } = {}
 
 	-- Seat players into factions in join order; whatever is left over is a bot.
@@ -80,14 +82,16 @@ local function startRound(levelIndex: number)
 		local player = players[index]
 		if player then
 			factionOf[player] = faction
+			playerOf[faction] = player
 			claimed[faction] = true
 		end
 	end
 
+	local profiles = level.ai or {}
 	local bots: { AI.AI } = {}
 	for _, faction in level.factions do
 		if not claimed[faction] then
-			table.insert(bots, AI.new(sim, faction, "Normal"))
+			table.insert(bots, AI.new(sim, faction, profiles[faction]))
 		end
 	end
 
@@ -95,6 +99,7 @@ local function startRound(levelIndex: number)
 		sim = sim,
 		bots = bots,
 		factionOf = factionOf,
+		playerOf = playerOf,
 		layout = buildLayout(sim),
 		levelIndex = levelIndex,
 		over = false,
@@ -108,12 +113,24 @@ end
 
 local function endRound(current: Round, winner: number, timedOut: boolean?)
 	current.over = true
-	RoundOver:FireAllClients({ winner = winner, timedOut = timedOut == true })
+
+	local stars = if timedOut then 0 else current.sim:stars()
+	RoundOver:FireAllClients({
+		winner = winner,
+		timedOut = timedOut == true,
+		stars = stars,
+		elapsed = math.floor(current.sim.elapsed),
+	})
+
+	-- A zone cleared by a seated player advances the campaign; anything else
+	-- (a bot win, or a round that ran out the clock) replays it.
+	local clearedByPlayer = not timedOut and current.playerOf[winner] ~= nil
+	local nextIndex = if clearedByPlayer then current.levelIndex + 1 else current.levelIndex
 
 	task.delay(Config.ROUND_RESTART_DELAY, function()
 		-- Only restart if nothing else already started a newer round.
 		if round == current then
-			startRound(current.levelIndex)
+			startRound(nextIndex)
 		end
 	end)
 end
@@ -212,8 +229,12 @@ Players.PlayerRemoving:Connect(function(player)
 	-- Hand the abandoned faction to a bot so the round can still resolve.
 	local faction = current.factionOf[player]
 	current.factionOf[player] = nil
+	if faction then
+		current.playerOf[faction] = nil
+	end
 	if faction and faction ~= Config.NEUTRAL and not current.over then
-		table.insert(current.bots, AI.new(current.sim, faction, "Normal"))
+		local profiles = current.sim.level.ai or {}
+		table.insert(current.bots, AI.new(current.sim, faction, profiles[faction]))
 	end
 
 	if #Players:GetPlayers() == 0 then

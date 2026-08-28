@@ -11,6 +11,10 @@ export type CellSpec = {
 export type Level = {
 	name: string,
 	factions: { number },
+	-- Which AI profile drives a faction no player is seated in.
+	ai: { [number]: string }?,
+	-- Finish under starTimes[n] seconds to earn n stars. Descending.
+	starTimes: { number }?,
 	cells: { CellSpec },
 }
 
@@ -26,6 +30,12 @@ export type Cell = {
 	units: number,
 }
 
+-- A packet of energy in transit, positioned in board units from the source.
+export type Pulse = {
+	amount: number,
+	position: number,
+}
+
 export type Tentacle = {
 	id: number,
 	from: number,
@@ -34,6 +44,8 @@ export type Tentacle = {
 	length: number,
 	progress: number,
 	connected: boolean,
+	sinceEmit: number,
+	pulses: { Pulse },
 }
 
 -- Compact wire formats. Cell positions/tiers never change, so they are sent
@@ -46,6 +58,8 @@ export type TentacleState = {
 	owner: number,
 	progress: number,
 	connected: boolean,
+	payload: number,
+	pulses: { number },
 }
 export type Snapshot = {
 	cells: { CellState },

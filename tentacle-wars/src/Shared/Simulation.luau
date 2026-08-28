@@ -77,6 +77,28 @@ function Simulation.findTentacle(self: Simulation, fromId: number, toId: number)
 	return nil
 end
 
+-- Energy currently standing inside a tentacle: what a cut would dump forward.
+function Simulation.payload(self: Simulation, tentacle: Types.Tentacle): number
+	local total = 0
+	for _, pulse in tentacle.pulses do
+		total += pulse.amount
+	end
+	return total
+end
+
+-- Energy already committed toward a cell, so a caller does not over-invest in a
+-- target that in-flight pulses are about to take anyway.
+function Simulation.incoming(self: Simulation, cellId: number, owner: number): number
+	local total = 0
+	for _, id in self.tentacleIds do
+		local tentacle = self.tentacles[id]
+		if tentacle.to == cellId and tentacle.owner == owner then
+			total += self:payload(tentacle)
+		end
+	end
+	return total
+end
+
 function Simulation.cellCount(self: Simulation, owner: number): number
 	local count = 0
 	for _, id in self.cellIds do
@@ -142,6 +164,20 @@ function Simulation.timeRemaining(self: Simulation): number
 	return math.max(0, Config.ROUND_TIME_LIMIT - self.elapsed)
 end
 
+-- Stars are purely a speed award: three for a fast clear, none for a slow one.
+function Simulation.stars(self: Simulation): number
+	local thresholds = self.level.starTimes
+	if not thresholds then
+		return 0
+	end
+	for index, limit in thresholds do
+		if self.elapsed <= limit then
+			return #thresholds - index + 1
+		end
+	end
+	return 0
+end
+
 --=============================================================================
 -- Commands
 --=============================================================================
@@ -183,6 +219,8 @@ function Simulation.connect(self: Simulation, owner: number, fromId: number, toI
 		length = length,
 		progress = 0,
 		connected = false,
+		sinceEmit = 0,
+		pulses = {},
 	}
 	table.insert(self.tentacleIds, id)
 	return true, nil
@@ -199,7 +237,65 @@ function Simulation.removeTentacle(self: Simulation, tentacleId: number)
 	end
 end
 
+--=============================================================================
+-- Energy delivery
+--=============================================================================
+
+-- When a cell changes hands, anything the previous owner was pumping out of it
+-- dies with the cell. Incoming tentacles survive and simply start attacking the
+-- new owner on the next step.
+local function onCaptured(self: Simulation, cell: Types.Cell, newOwner: number)
+	cell.owner = newOwner
+
+	local doomed = {}
+	for _, id in self.tentacleIds do
+		local tentacle = self.tentacles[id]
+		if tentacle.from == cell.id and tentacle.owner ~= newOwner then
+			table.insert(doomed, id)
+		end
+	end
+	for _, id in doomed do
+		self:removeTentacle(id)
+	end
+end
+
+local function deliver(self: Simulation, tentacle: Types.Tentacle, amount: number)
+	if amount <= 0 then
+		return
+	end
+	local target = self.cells[tentacle.to]
+
+	if target.owner == tentacle.owner then
+		target.units = math.min(target.capacity, target.units + amount)
+		return
+	end
+
+	target.units -= amount
+	if target.units <= 0 then
+		-- Overflow carries into the captured cell rather than being lost.
+		target.units = math.min(target.capacity, -target.units)
+		onCaptured(self, target, tentacle.owner)
+	end
+end
+
+-- Severing a tentacle at the source end pushes its whole standing column
+-- forward at once instead of letting it trickle. This is the game's signature
+-- move: charge a long tentacle, then cut to land the burst.
 function Simulation.cut(self: Simulation, owner: number, tentacleId: number): boolean
+	local tentacle = self.tentacles[tentacleId]
+	if not tentacle or tentacle.owner ~= owner then
+		return false
+	end
+
+	deliver(self, tentacle, self:payload(tentacle))
+	self:removeTentacle(tentacleId)
+	return true
+end
+
+-- Abandon a tentacle without flushing it: the column is lost. This is how a
+-- cell stops feeding a line it can no longer afford, and it is deliberately
+-- worse than cutting -- cutting is the skilled move.
+function Simulation.detach(self: Simulation, owner: number, tentacleId: number): boolean
 	local tentacle = self.tentacles[tentacleId]
 	if not tentacle or tentacle.owner ~= owner then
 		return false
@@ -222,21 +318,86 @@ local function regenerate(self: Simulation, dt: number)
 	end
 end
 
--- When a cell changes hands, anything the previous owner was pumping out of it
--- dies with the cell. Incoming tentacles survive and simply start attacking the
--- new owner on the next step.
-local function onCaptured(self: Simulation, cell: Types.Cell, newOwner: number)
-	cell.owner = newOwner
+local function emit(self: Simulation, tentacle: Types.Tentacle, dt: number)
+	local source = self.cells[tentacle.from]
+	tentacle.sinceEmit += dt
 
-	local doomed = {}
-	for _, id in self.tentacleIds do
-		local tentacle = self.tentacles[id]
-		if tentacle.from == cell.id and tentacle.owner ~= newOwner then
-			table.insert(doomed, id)
+	while tentacle.sinceEmit >= Config.PULSE_INTERVAL do
+		tentacle.sinceEmit -= Config.PULSE_INTERVAL
+		local amount = math.min(Config.FLOW_RATE * Config.PULSE_INTERVAL, source.units)
+		if amount <= 0 then
+			break
+		end
+		source.units -= amount
+		table.insert(tentacle.pulses, { amount = amount, position = 0 })
+	end
+end
+
+local function advance(self: Simulation, tentacle: Types.Tentacle, dt: number)
+	local index = 1
+	while index <= #tentacle.pulses do
+		local pulse = tentacle.pulses[index]
+		pulse.position += Config.PULSE_SPEED * dt
+		if pulse.position >= tentacle.length then
+			table.remove(tentacle.pulses, index)
+			deliver(self, tentacle, pulse.amount)
+		else
+			index += 1
 		end
 	end
-	for _, id in doomed do
-		self:removeTentacle(id)
+end
+
+-- Opposing columns on the same line annihilate where they overlap.
+local function annihilate(a: Types.Tentacle, b: Types.Tentacle)
+	local i = 1
+	while i <= #a.pulses do
+		local pa = a.pulses[i]
+		local consumed = false
+
+		local j = 1
+		while j <= #b.pulses do
+			local pb = b.pulses[j]
+			-- b runs the other way, so measure its pulse from a's source.
+			local gap = math.abs(pa.position - (a.length - pb.position))
+			if gap <= Config.PULSE_COLLISION_RADIUS then
+				local hit = math.min(pa.amount, pb.amount)
+				pa.amount -= hit
+				pb.amount -= hit
+
+				if pb.amount <= 1e-6 then
+					table.remove(b.pulses, j)
+				else
+					j += 1
+				end
+				if pa.amount <= 1e-6 then
+					table.remove(a.pulses, i)
+					consumed = true
+					break
+				end
+			else
+				j += 1
+			end
+		end
+
+		if not consumed then
+			i += 1
+		end
+	end
+end
+
+local function resolveCollisions(self: Simulation)
+	local ids = self.tentacleIds
+	for i = 1, #ids do
+		local a = self.tentacles[ids[i]]
+		if not a or #a.pulses == 0 then
+			continue
+		end
+		for j = i + 1, #ids do
+			local b = self.tentacles[ids[j]]
+			if b and #b.pulses > 0 and a.from == b.to and a.to == b.from and a.owner ~= b.owner then
+				annihilate(a, b)
+			end
+		end
 	end
 end
 
@@ -251,9 +412,9 @@ local function stepTentacles(self: Simulation, dt: number)
 			continue
 		end
 
-		local source = self.cells[tentacle.from]
-		-- The source flipped to somebody else while this tentacle was growing.
-		if source.owner ~= tentacle.owner then
+		-- The source flipped to somebody else. The tentacle collapses backward
+		-- and its column is lost -- only a deliberate cut pushes it forward.
+		if self.cells[tentacle.from].owner ~= tentacle.owner then
 			table.insert(doomed, id)
 			continue
 		end
@@ -266,28 +427,15 @@ local function stepTentacles(self: Simulation, dt: number)
 			continue
 		end
 
-		local amount = math.min(Config.FLOW_RATE * dt, source.units)
-		if amount <= 0 then
-			continue
-		end
-		source.units -= amount
-
-		local target = self.cells[tentacle.to]
-		if target.owner == tentacle.owner then
-			target.units = math.min(target.capacity, target.units + amount)
-		else
-			target.units -= amount
-			if target.units <= 0 then
-				-- Overflow carries into the captured cell rather than being lost.
-				target.units = -target.units
-				onCaptured(self, target, tentacle.owner)
-			end
-		end
+		emit(self, tentacle, dt)
+		advance(self, tentacle, dt)
 	end
 
 	for _, id in doomed do
 		self:removeTentacle(id)
 	end
+
+	resolveCollisions(self)
 end
 
 function Simulation.step(self: Simulation, dt: number)
@@ -316,6 +464,12 @@ function Simulation.snapshot(self: Simulation): Types.Snapshot
 	local tentacles: { Types.TentacleState } = table.create(#self.tentacleIds)
 	for _, id in self.tentacleIds do
 		local tentacle = self.tentacles[id]
+
+		local positions = table.create(#tentacle.pulses)
+		for _, pulse in tentacle.pulses do
+			table.insert(positions, pulse.position)
+		end
+
 		table.insert(tentacles, {
 			id = tentacle.id,
 			from = tentacle.from,
@@ -323,6 +477,8 @@ function Simulation.snapshot(self: Simulation): Types.Snapshot
 			owner = tentacle.owner,
 			progress = tentacle.progress,
 			connected = tentacle.connected,
+			payload = math.floor(self:payload(tentacle)),
+			pulses = positions,
 		})
 	end
 

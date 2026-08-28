@@ -19,6 +19,7 @@ export type CellLayout = {
 }
 
 local BOARD = Vector2.new(Config.BOARD_WIDTH, Config.BOARD_HEIGHT)
+local PULSE_SIZE = 12
 
 -- Board units -> UDim2 scale. The board frame is aspect-locked to 1000x600, so
 -- this mapping is uniform in pixels and angles survive it unchanged.
@@ -64,7 +65,7 @@ local function buildHud(gui: ScreenGui): (TextLabel, TextLabel)
 	hint.Font = Enum.Font.Gotham
 	hint.TextSize = 14
 	hint.TextColor3 = Color3.fromRGB(150, 150, 165)
-	hint.Text = "Drag from your cell to another to grow a tentacle  -  click a tentacle to cut it"
+	hint.Text = "Drag to attach a tentacle  -  let it charge, then click it to cut and dump the whole charge"
 	hint.ZIndex = 10
 	hint.Parent = gui
 
@@ -72,10 +73,10 @@ local function buildHud(gui: ScreenGui): (TextLabel, TextLabel)
 	banner.Name = "Banner"
 	banner.AnchorPoint = Vector2.new(0.5, 0.5)
 	banner.Position = UDim2.fromScale(0.5, 0.42)
-	banner.Size = UDim2.new(0, 520, 0, 60)
+	banner.Size = UDim2.new(0, 640, 0, 60)
 	banner.BackgroundTransparency = 1
 	banner.Font = Enum.Font.GothamBold
-	banner.TextSize = 40
+	banner.TextSize = 32
 	banner.TextColor3 = Color3.fromRGB(255, 255, 255)
 	banner.Visible = false
 	banner.ZIndex = 12
@@ -130,6 +131,21 @@ function Renderer.new(parent: Instance)
 	cellLayer.ZIndex = 3
 	cellLayer.Parent = board
 
+	-- Energy in transit draws above the tentacles but below the cells.
+	local pulseLayer = Instance.new("Frame")
+	pulseLayer.Name = "Pulses"
+	pulseLayer.Size = UDim2.fromScale(1, 1)
+	pulseLayer.BackgroundTransparency = 1
+	pulseLayer.ZIndex = 2
+	pulseLayer.Parent = board
+
+	local chargeLayer = Instance.new("Frame")
+	chargeLayer.Name = "Charges"
+	chargeLayer.Size = UDim2.fromScale(1, 1)
+	chargeLayer.BackgroundTransparency = 1
+	chargeLayer.ZIndex = 5
+	chargeLayer.Parent = board
+
 	-- Ring showing how far the selected cell can reach.
 	local range = Instance.new("Frame")
 	range.Name = "Range"
@@ -163,6 +179,8 @@ function Renderer.new(parent: Instance)
 		gui = gui,
 		board = board,
 		tentacleLayer = tentacleLayer,
+		pulseLayer = pulseLayer,
+		chargeLayer = chargeLayer,
 		cellLayer = cellLayer,
 		rangeFrame = range,
 		dragFrame = drag,
@@ -176,6 +194,8 @@ function Renderer.new(parent: Instance)
 		tentacleOrder = {} :: { number },
 		cellFrames = {} :: { [number]: Frame },
 		tentacleFrames = {} :: { [number]: Frame },
+		pulsePool = {} :: { Frame },
+		chargePool = {} :: { TextLabel },
 		factions = {} :: { number },
 		faction = Config.NEUTRAL,
 		remaining = Config.ROUND_TIME_LIMIT,
@@ -193,6 +213,13 @@ function Renderer.setLayout(self: any, cells: { CellLayout }, factions: { number
 	end
 	for _, frame in self.tentacleFrames do
 		frame:Destroy()
+	end
+
+	for _, frame in self.pulsePool do
+		frame.Visible = false
+	end
+	for _, label in self.chargePool do
+		label.Visible = false
 	end
 
 	self.cellFrames = {}
@@ -335,8 +362,102 @@ function Renderer.applySnapshot(self: any, snapshot: Types.Snapshot)
 	end
 
 	self.remaining = snapshot.remaining or 0
+	self:drawTransit(snapshot)
 	self:refreshSelection()
 	self:refreshStatus()
+end
+
+-- Pooled: the number of in-flight pulses churns every frame, so frames are
+-- reused and the tail is hidden rather than destroyed and rebuilt.
+function Renderer.pulseFrame(self: any, index: number): Frame
+	local frame = self.pulsePool[index]
+	if frame then
+		return frame
+	end
+
+	frame = Instance.new("Frame")
+	frame.Name = `Pulse{index}`
+	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.Size = scaleSize(PULSE_SIZE, PULSE_SIZE)
+	frame.BorderSizePixel = 0
+	frame.ZIndex = 2
+	frame.Parent = self.pulseLayer
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = frame
+
+	self.pulsePool[index] = frame
+	return frame
+end
+
+function Renderer.chargeLabel(self: any, index: number): TextLabel
+	local label = self.chargePool[index]
+	if label then
+		return label
+	end
+
+	label = Instance.new("TextLabel")
+	label.Name = `Charge{index}`
+	label.AnchorPoint = Vector2.new(0.5, 0.5)
+	label.Size = UDim2.new(0, 44, 0, 16)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 13
+	label.TextStrokeTransparency = 0.4
+	label.ZIndex = 5
+	label.Parent = self.chargeLayer
+
+	self.chargePool[index] = label
+	return label
+end
+
+-- Draws the energy travelling inside every tentacle, plus a readout of the
+-- standing charge on the player's own connected tentacles -- that number is
+-- exactly what a cut would land, so it is the number the decision hangs on.
+function Renderer.drawTransit(self: any, snapshot: Types.Snapshot)
+	local pulses = 0
+	local charges = 0
+
+	for _, state in snapshot.tentacles do
+		local from = self.layout[state.from]
+		local to = self.layout[state.to]
+		if not from or not to then
+			continue
+		end
+
+		local delta = to.position - from.position
+		local length = delta.Magnitude
+		local direction = if length > 1e-6 then delta / length else Vector2.new(1, 0)
+		local start = from.position + direction * from.radius
+		local finish = to.position - direction * to.radius
+		local color = Config.colorOf(state.owner)
+
+		for _, position in state.pulses do
+			pulses += 1
+			local frame = self:pulseFrame(pulses)
+			local fraction = if length > 1e-6 then math.clamp(position / length, 0, 1) else 0
+			frame.Position = scalePos(start + (finish - start) * fraction)
+			frame.BackgroundColor3 = color
+			frame.Visible = true
+		end
+
+		if state.owner == self.faction and state.connected and state.payload >= 1 then
+			charges += 1
+			local label = self:chargeLabel(charges)
+			label.Position = scalePos((start + finish) / 2)
+			label.Text = tostring(state.payload)
+			label.TextColor3 = color
+			label.Visible = true
+		end
+	end
+
+	for index = pulses + 1, #self.pulsePool do
+		self.pulsePool[index].Visible = false
+	end
+	for index = charges + 1, #self.chargePool do
+		self.chargePool[index].Visible = false
+	end
 end
 
 function Renderer.refreshStatus(self: any)

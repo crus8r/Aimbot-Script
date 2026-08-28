@@ -1,7 +1,7 @@
 --!strict
--- Three factions on a 1000x600 board. Faction 1 (the player) starts on the
--- west edge with a short lane to the fat centre cell; the two AI factions
--- start east and have to fight each other for the same prize.
+-- Three-way board. Green (the player) starts on the west edge with a short lane
+-- to the fat centre cell; red and purple start east and have to fight each
+-- other for the same prize. Purple is the strain that cuts its own tentacles.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
@@ -9,6 +9,8 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local level: Types.Level = {
 	name = "Crossroads",
 	factions = { 1, 2, 3 },
+	ai = { [2] = "Red", [3] = "Purple" },
+	starTimes = { 110, 180, 260 },
 	cells = {
 		-- Faction homes.
 		{ id = 1, position = Vector2.new(140, 300), tier = 3, owner = 1, units = 24 },

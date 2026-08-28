@@ -45,13 +45,19 @@ RoundOver.OnClientEvent:Connect(function(payload)
 	dragSource = nil
 	renderer:endDrag()
 
-	local suffix = if payload.timedOut then " on time" else ""
+	local elapsed = payload.elapsed or 0
+	local clock = string.format("%d:%02d", elapsed // 60, elapsed % 60)
+
 	if faction == Config.NEUTRAL then
-		renderer:showBanner(`Faction {payload.winner} wins{suffix}`, Config.colorOf(payload.winner))
+		renderer:showBanner(`Faction {payload.winner} wins`, Config.colorOf(payload.winner))
 	elseif payload.winner == faction then
-		renderer:showBanner(`Victory{suffix}`, Config.colorOf(faction))
+		-- Stars are a speed award, so the clock is the interesting half.
+		local stars = payload.stars or 0
+		local award = if payload.timedOut then "on time" else `{stars}/3 stars`
+		renderer:showBanner(`Zone cleared - {award} - {clock}`, Config.colorOf(faction))
 	else
-		renderer:showBanner(`Defeat{suffix}`, Config.colorOf(payload.winner))
+		local how = if payload.timedOut then "outgrown" else "overrun"
+		renderer:showBanner(`Zone lost - {how} - {clock}`, Config.colorOf(payload.winner))
 	end
 end)
 

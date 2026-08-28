@@ -1,6 +1,7 @@
 --!strict
 
 local Levels = {
+	script.Incision,
 	script.Crossroads,
 }
 

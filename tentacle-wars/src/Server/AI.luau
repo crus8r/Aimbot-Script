@@ -1,7 +1,11 @@
 --!strict
--- A deliberately simple opponent: on a fixed think interval it looks for the
--- best (my cell -> somebody else's cell) pair it can currently afford, and
--- frees up slots that are feeding a cell it has already filled.
+-- Opponent brains. On a fixed think interval a bot looks for the best
+-- (my cell -> somebody else's cell) attack it can currently afford, frees up
+-- slots feeding a cell it has already filled, and -- if its profile allows --
+-- cuts a loaded tentacle to land a finishing burst.
+--
+-- The two profiles map onto the two enemy strains: red plays it straight,
+-- purple thinks faster, commits harder, and knows about cutting.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.Shared.Config)
@@ -10,19 +14,23 @@ local Simulation = require(ReplicatedStorage.Shared.Simulation)
 local AI = {}
 AI.__index = AI
 
-export type Difficulty = "Easy" | "Normal" | "Hard"
-
-local PROFILES = {
-	Easy = { interval = 2.6, margin = 2.0, reserve = 0.45 },
-	Normal = { interval = 1.6, margin = 1.5, reserve = 0.35 },
-	Hard = { interval = 0.9, margin = 1.25, reserve = 0.25 },
+export type Profile = {
+	interval: number,
+	margin: number,
+	reserve: number,
+	cuts: boolean,
 }
 
--- Safety margins are what stop the AI throwing units away, but held to
--- strictly they also deadlock it: a board where every affordable attack is a
--- unit short of the margin never resolves, because cells sitting at capacity
--- stop regenerating and nothing changes again. After this long without a move,
--- the bot drops its standards and commits.
+local PROFILES: { [string]: Profile } = {
+	Red = { interval = 1.8, margin = 1.50, reserve = 0.35, cuts = false },
+	Purple = { interval = 1.0, margin = 1.25, reserve = 0.22, cuts = true },
+}
+
+-- Safety margins are what stop a bot throwing units away, but held to strictly
+-- they also deadlock it: a board where every affordable attack is a unit short
+-- of the margin never resolves, because cells sitting at capacity stop
+-- regenerating and nothing changes again. After this long without a move, the
+-- bot drops its standards and commits.
 local DESPERATION_AFTER = 12
 local DESPERATE_MARGIN = 1.05
 local DESPERATE_RESERVE = 0.08
@@ -31,32 +39,88 @@ export type AI = typeof(setmetatable(
 	{} :: {
 		sim: Simulation.Simulation,
 		owner: number,
-		profile: { interval: number, margin: number, reserve: number },
+		profile: Profile,
 		cooldown: number,
 		idle: number,
 	},
 	AI
 ))
 
-function AI.new(sim: Simulation.Simulation, owner: number, difficulty: Difficulty?): AI
-	local profile = PROFILES[difficulty or "Normal"] or PROFILES.Normal
+function AI.new(sim: Simulation.Simulation, owner: number, profileName: string?): AI
+	local profile = PROFILES[profileName or "Red"] or PROFILES.Red
 	return setmetatable({
 		sim = sim,
 		owner = owner,
 		profile = profile,
-		-- Stagger the first think so multiple AIs do not act in lockstep.
+		-- Stagger the first think so multiple bots do not act in lockstep.
 		cooldown = math.random() * profile.interval,
 		idle = 0,
 	}, AI)
 end
 
--- Cost to take a cell: whatever is sitting in it, plus a flat premium so the AI
--- does not open a tentacle it can only just barely afford.
-local function captureCost(target, owner: number): number
-	if target.owner == owner then
+-- Reinforcing is always available and always safe. Scored against attacks it
+-- wins far too often and the bot turtles, so it is a strict fallback instead:
+-- only a near-full cell may give, only a starving cell may receive, and only
+-- when there is no attack on the board worth making.
+local REINFORCE_FROM = 0.9
+local REINFORCE_TO = 0.3
+
+-- Fraction of a cell's capacity a bot wants to land on top of a capture. Taking
+-- a cell with nothing left in it just hands it straight back to the next
+-- trickle, which is how boards used to grind to a standstill.
+local GARRISON = 0.2
+
+-- What it would still cost to take and *hold* a cell, discounting energy
+-- already in the pipe toward it. Never returns zero: committed energy can be
+-- annihilated in transit, so a target is never written off as already won.
+local function captureCost(self: AI, target): number
+	local sim = self.sim
+	if target.owner == self.owner then
 		return math.max(0, target.capacity - target.units)
 	end
-	return target.units + 5
+
+	local committed = sim:incoming(target.id, self.owner)
+	return math.max(0, target.units - committed) + target.capacity * GARRISON + 5
+end
+
+-- Stop feeding a line the source can no longer afford. Without this the reserve
+-- is only an entry condition: a bot opens an attack it can afford, then drains
+-- the source to zero anyway and loses the cell to any passing pulse.
+local function manageSupply(self: AI)
+	local sim = self.sim
+	local floor = self.profile.reserve * 0.5
+
+	for _, id in table.clone(sim.tentacleIds) do
+		local tentacle = sim.tentacles[id]
+		if not tentacle or tentacle.owner ~= self.owner or not tentacle.connected then
+			continue
+		end
+
+		local source = sim.cells[tentacle.from]
+		if source.units < source.capacity * floor then
+			if self.profile.cuts then
+				sim:cut(self.owner, id) -- purple salvages the column on the way out
+			else
+				sim:detach(self.owner, id)
+			end
+		end
+	end
+end
+
+-- Purple's trick: a tentacle holding more than its target has left is a kill,
+-- so sever it and land the whole column at once.
+local function cutForKills(self: AI)
+	local sim = self.sim
+	for _, id in table.clone(sim.tentacleIds) do
+		local tentacle = sim.tentacles[id]
+		if not tentacle or tentacle.owner ~= self.owner or not tentacle.connected then
+			continue
+		end
+		local target = sim.cells[tentacle.to]
+		if target.owner ~= self.owner and sim:payload(tentacle) > target.units + 2 then
+			sim:cut(self.owner, id)
+		end
+	end
 end
 
 local function recycleFullTentacles(self: AI)
@@ -115,13 +179,58 @@ local function bestMove(self: AI): ({ from: number, to: number }?)
 				continue
 			end
 
-			local cost = captureCost(target, self.owner)
+			local cost = captureCost(self, target)
 			if spendable < cost * margin then
 				continue
 			end
 
 			-- Cheap, close, and high-value (bigger tier) targets win.
 			local score = -(cost * 1.2 + distance * 0.05) + target.capacity * 0.35
+			if score > bestScore then
+				bestScore = score
+				best = { from = fromId, to = toId }
+			end
+		end
+	end
+
+	return best
+end
+
+-- Late in a round the rear of a big territory is out of range of anything
+-- hostile and just sits at capacity while the front starves. Pushing that
+-- surplus forward is the only move left, but it must never crowd out an attack.
+local function bestReinforce(self: AI): ({ from: number, to: number }?)
+	local sim = self.sim
+	local best: { from: number, to: number }? = nil
+	local bestScore = -math.huge
+
+	for _, fromId in sim.cellIds do
+		local source = sim.cells[fromId]
+		if source.owner ~= self.owner or source.units < source.capacity * REINFORCE_FROM then
+			continue
+		end
+		-- Never spend a cell's last slot on support; keep it free for an attack.
+		if sim:outboundCount(fromId) >= source.slots - 1 then
+			continue
+		end
+
+		for _, toId in sim.cellIds do
+			if toId == fromId then
+				continue
+			end
+			local target = sim.cells[toId]
+			if target.owner ~= self.owner or target.units >= target.capacity * REINFORCE_TO then
+				continue
+			end
+			if (target.position - source.position).Magnitude > Config.MAX_CONNECT_DISTANCE then
+				continue
+			end
+			if sim:findTentacle(fromId, toId) then
+				continue
+			end
+
+			-- Feed whoever is emptiest.
+			local score = -(target.units / target.capacity)
 			if score > bestScore then
 				bestScore = score
 				best = { from = fromId, to = toId }
@@ -139,9 +248,13 @@ function AI.step(self: AI, dt: number)
 	end
 	self.cooldown = self.profile.interval
 
+	if self.profile.cuts then
+		cutForKills(self)
+	end
+	manageSupply(self)
 	recycleFullTentacles(self)
 
-	local move = bestMove(self)
+	local move = bestMove(self) or bestReinforce(self)
 	if move and self.sim:connect(self.owner, move.from, move.to) then
 		self.idle = 0
 	else

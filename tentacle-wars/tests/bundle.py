@@ -18,6 +18,7 @@ MODULES = [
     ("Config", "src/Shared/Config.luau"),
     ("Simulation", "src/Shared/Simulation.luau"),
     ("Crossroads", "src/Shared/Levels/Crossroads.luau"),
+    ("Incision", "src/Shared/Levels/Incision.luau"),
     ("AI", "src/Server/AI.luau"),
 ]
 

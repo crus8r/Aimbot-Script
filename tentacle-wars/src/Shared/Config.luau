@@ -24,31 +24,46 @@ Config.CELL_TIERS = {
 }
 
 -- A tentacle extends at a constant board-units/second rate, so distant targets
--- take proportionally longer to reach. This delay is the core tension of the
--- game: you commit to an attack well before it lands.
+-- take proportionally longer to reach. This delay is the first half of the core
+-- tension: you commit to an attack well before it can land.
 Config.TENTACLE_GROWTH_SPEED = 150
 Config.TENTACLE_THICKNESS = 7
 
--- Units transferred per second down a connected tentacle.
+-- Energy leaves the source at FLOW_RATE, in discrete pulses, and then has to
+-- physically travel the length of the tentacle at PULSE_SPEED. Because
+-- PULSE_SPEED is slow, a long connected tentacle is a loaded pipe: it can hold
+-- more energy in transit than most cells hold at rest.
+--
+-- That standing charge is the point. Cutting a tentacle severs it at the source
+-- and shoves the entire column forward into the target at once, which is the
+-- signature move -- see Simulation.cut.
 Config.FLOW_RATE = 3.2
+Config.PULSE_SPEED = 85
+Config.PULSE_INTERVAL = 0.25
+
+-- Two tentacles running opposite directions between the same pair of cells
+-- shoot past each other; where columns meet, they annihilate.
+Config.PULSE_COLLISION_RADIUS = 16
 
 -- Neutral cells sit inert until somebody takes them.
 Config.NEUTRAL_REGENERATES = false
 
 Config.MAX_CONNECT_DISTANCE = 430
 
-Config.ROUND_RESTART_DELAY = 5
+Config.ROUND_RESTART_DELAY = 6
 
 -- Hard stop on a round. Without it a board can genuinely lock up: cells at
 -- capacity stop regenerating, so two evenly matched factions can sit forever.
 -- On timeout the faction holding the most ground wins.
 Config.ROUND_TIME_LIMIT = 420
 
+-- Green is the player's antibody colour; red is the standard infection and
+-- purple is the smarter strain that cuts its own tentacles.
 Config.FACTION_COLORS = {
-	[0] = Color3.fromRGB(150, 150, 158),
-	[1] = Color3.fromRGB(168, 85, 247),
+	[0] = Color3.fromRGB(148, 148, 156),
+	[1] = Color3.fromRGB(74, 222, 128),
 	[2] = Color3.fromRGB(239, 68, 68),
-	[3] = Color3.fromRGB(56, 189, 248),
+	[3] = Color3.fromRGB(168, 85, 247),
 	[4] = Color3.fromRGB(250, 204, 21),
 }
 

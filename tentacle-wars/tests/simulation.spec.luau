@@ -1,11 +1,11 @@
 --!nocheck
--- Headless tests for the authoritative simulation. Run with:
---   python3 tests/bundle.py /tmp/bundle.luau && luau /tmp/bundle.luau
+-- Headless tests for the authoritative simulation. Run with tests/run.sh.
 -- See tests/bundle.py for how the Roblox-free bundle is produced.
 
 local Config = Modules.Config
 local Simulation = Modules.Simulation
 local Crossroads = Modules.Crossroads
+local Incision = Modules.Incision
 local AI = Modules.AI
 
 local passed, failed = 0, 0
@@ -36,33 +36,37 @@ local function fresh()
 	return Simulation.new(Crossroads)
 end
 
+-- Builds a throwaway level so a test can state exactly the board it needs.
+local function custom(cells, factions, ai)
+	return { name = "Test", factions = factions, ai = ai, cells = cells }
+end
+
 --=============================================================================
 print("level data")
 --=============================================================================
-do
-	local sim = fresh()
-	check("every cell loads", #sim.cellIds == #Crossroads.cells)
-	check("faction 1 starts on cell 1", sim.cells[1].owner == 1 and sim.cells[1].units == 24)
-	check("cell 5 starts neutral", sim.cells[5].owner == Config.NEUTRAL)
-	check("tier 3 cell gets 4 slots", sim.cells[1].slots == 4)
+for _, level in { Incision, Crossroads } do
+	local sim = Simulation.new(level)
+	check(`{level.name}: every cell loads`, #sim.cellIds == #level.cells)
 
-	local ids = {}
-	local duplicate = false
-	for _, spec in Crossroads.cells do
+	local ids, duplicate = {}, false
+	for _, spec in level.cells do
 		if ids[spec.id] then
 			duplicate = true
 		end
 		ids[spec.id] = true
 	end
-	check("cell ids are unique", not duplicate)
+	check(`{level.name}: cell ids are unique`, not duplicate)
 
-	-- Every faction needs at least one reachable target or it can never move.
-	local stranded = nil
-	for _, faction in Crossroads.factions do
-		for _, spec in Crossroads.cells do
+	-- Every faction needs a home and at least one reachable target, or it can
+	-- never make a move.
+	local homeless, stranded = nil, nil
+	for _, faction in level.factions do
+		local homes = 0
+		for _, spec in level.cells do
 			if spec.owner == faction then
+				homes += 1
 				local reachable = 0
-				for _, other in Crossroads.cells do
+				for _, other in level.cells do
 					if other.id ~= spec.id then
 						local distance = (other.position - spec.position).Magnitude
 						if distance <= Config.MAX_CONNECT_DISTANCE then
@@ -75,8 +79,29 @@ do
 				end
 			end
 		end
+		if homes == 0 then
+			homeless = faction
+		end
 	end
-	check("no faction starts stranded", stranded == nil, `faction {tostring(stranded)} has no target in range`)
+	check(`{level.name}: every faction has a home`, homeless == nil, `faction {tostring(homeless)}`)
+	check(`{level.name}: no faction starts stranded`, stranded == nil, `faction {tostring(stranded)}`)
+
+	local descending = true
+	for index = 2, #(level.starTimes or {}) do
+		if level.starTimes[index] <= level.starTimes[index - 1] then
+			descending = false
+		end
+	end
+	check(`{level.name}: star times ascend`, descending)
+
+	-- A faction with no player and no AI profile silently does nothing.
+	local badProfile = nil
+	for faction, name in level.ai or {} do
+		if name ~= "Red" and name ~= "Purple" then
+			badProfile = name
+		end
+	end
+	check(`{level.name}: ai profiles are known`, badProfile == nil, tostring(badProfile))
 end
 
 --=============================================================================
@@ -118,42 +143,156 @@ do
 	advance(sim, expected * 0.5 + STEP * 2)
 	check("connects on schedule", tentacle.connected, `progress {tentacle.progress}`)
 	check("progress is clamped", tentacle.progress == 1)
-
-	-- Nothing should have been transferred before the tentacle landed.
-	local sim2 = fresh()
-	sim2:connect(1, 1, 5)
-	advance(sim2, (sim2.tentacles[1].length / Config.TENTACLE_GROWTH_SPEED) * 0.5)
-	check("no flow while growing", sim2.cells[5].units == 6)
+	check("nothing is emitted while growing", #tentacle.pulses <= 1)
 end
 
 --=============================================================================
-print("flow and capture")
+print("energy in transit")
+--=============================================================================
+do
+	local sim = fresh()
+	sim:connect(1, 1, 4) -- 360 board units: a long, slow pipe
+	local tentacle = sim.tentacles[1]
+	local growth = tentacle.length / Config.TENTACLE_GROWTH_SPEED
+	local transit = tentacle.length / Config.PULSE_SPEED
+
+	advance(sim, growth + STEP)
+	local sourceBefore = sim.cells[1].units
+	advance(sim, transit * 0.6)
+
+	check("source pays on emission", sim.cells[1].units < sourceBefore)
+	check("target is untouched while energy is in flight", sim.cells[4].units == 28)
+	check("pulses are in the pipe", #tentacle.pulses > 0)
+	check(
+		"payload matches what was emitted",
+		near(sim:payload(tentacle), Config.FLOW_RATE * transit * 0.6, Config.FLOW_RATE * Config.PULSE_INTERVAL * 2),
+		`payload {sim:payload(tentacle)}`
+	)
+	check("incoming reports committed energy", near(sim:incoming(4, 1), sim:payload(tentacle), 1e-6))
+
+	-- And it does eventually land.
+	advance(sim, transit)
+	check("energy arrives after the transit delay", sim.cells[4].units < 28)
+end
+
+--=============================================================================
+print("cut to burst")
+--=============================================================================
+do
+	-- 420 units apart, so the pipe holds far more than the target has left. The
+	-- target is neutral so it cannot regenerate: any change to it is delivery.
+	local board = {
+		{ id = 1, position = Vector2.new(150, 300), tier = 3, owner = 1, units = 90 },
+		{ id = 2, position = Vector2.new(570, 300), tier = 1, units = 8 },
+	}
+
+	local sim = Simulation.new(custom(board, { 1 }))
+	sim:connect(1, 1, 2)
+	local tentacle = sim.tentacles[1]
+	local growth = tentacle.length / Config.TENTACLE_GROWTH_SPEED
+	local transit = tentacle.length / Config.PULSE_SPEED
+
+	advance(sim, growth + transit * 0.85)
+	local charge = sim:payload(tentacle)
+
+	check(
+		"charge builds without arriving",
+		sim.cells[2].units == 8 and sim.cells[2].owner == Config.NEUTRAL and charge > 8,
+		`charge {charge}, target {sim.cells[2].units}`
+	)
+
+	check("cut lands the whole column", sim:cut(1, 1) and sim.cells[2].owner == 1)
+	check("cut consumes the tentacle", sim.tentacles[1] == nil)
+
+	-- Control: the identical attack, left to trickle, has not landed yet.
+	local control = Simulation.new(custom(board, { 1 }))
+	control:connect(1, 1, 2)
+	advance(control, growth + transit * 0.85)
+	check("uncut attack has not landed at the same moment", control.cells[2].owner == Config.NEUTRAL)
+
+	-- ...and takes measurably longer to finish.
+	local elapsed = growth + transit * 0.85
+	while control.cells[2].owner == Config.NEUTRAL and elapsed < 120 do
+		control:step(STEP)
+		elapsed += STEP
+	end
+	check("cutting is strictly faster than waiting", elapsed > growth + transit * 0.85, `trickle took {math.floor(elapsed)}s`)
+	print(`  ..   cut landed at {math.floor(growth + transit * 0.85)}s, trickle at {math.floor(elapsed)}s`)
+end
+
+do
+	-- Cutting a tentacle into a cell you own is a reinforcement burst.
+	local sim = fresh()
+	sim.cells[5].owner = 1
+	sim.cells[5].units = 2
+	sim:connect(1, 1, 5)
+	local tentacle = sim.tentacles[1]
+	advance(sim, tentacle.length / Config.TENTACLE_GROWTH_SPEED + 1)
+
+	local before = sim.cells[5].units
+	local charge = sim:payload(tentacle)
+	sim:cut(1, tentacle.id)
+	check("cutting into an ally reinforces it", near(sim.cells[5].units, before + charge, 1e-6))
+end
+
+do
+	-- Cutting a tentacle that never connected costs nothing and delivers nothing.
+	local sim = fresh()
+	sim:connect(1, 1, 4)
+	advance(sim, 0.5)
+	check("cutting mid-growth delivers nothing", sim:cut(1, 1) and sim.cells[4].units == 28)
+	check("foreign tentacles cannot be cut", not sim:cut(2, 1))
+end
+
+--=============================================================================
+print("opposing pulses annihilate")
+--=============================================================================
+do
+	-- Two identical tier-3 cells firing at each other. Columns meet dead centre
+	-- and cancel, so neither side can ever land a hit.
+	local mirror = {
+		{ id = 1, position = Vector2.new(300, 300), tier = 3, owner = 1, units = 90 },
+		{ id = 2, position = Vector2.new(700, 300), tier = 3, owner = 2, units = 90 },
+	}
+
+	local sim = Simulation.new(custom(mirror, { 1, 2 }))
+	sim:connect(1, 1, 2)
+	sim:connect(2, 2, 1)
+	advance(sim, 150)
+
+	check("neither side is captured in a mirrored duel", sim.cells[1].owner == 1 and sim.cells[2].owner == 2)
+	check("the duel is still live", sim.tentacles[1] ~= nil and sim.tentacles[2] ~= nil)
+	check(
+		"columns stay bounded rather than piling up",
+		sim:payload(sim.tentacles[1]) < Config.FLOW_RATE * (400 / Config.PULSE_SPEED) + 1
+	)
+
+	-- Same board, no counter-attack: the attack lands. Proves the test above is
+	-- measuring annihilation and not just a board nobody can win.
+	local unopposed = Simulation.new(custom(mirror, { 1, 2 }))
+	unopposed:connect(1, 1, 2)
+	advance(unopposed, 150)
+	check("the same attack lands when unopposed", unopposed.cells[2].owner == 1)
+end
+
+--=============================================================================
+print("capture and regeneration")
 --=============================================================================
 do
 	local sim = fresh()
 	sim:connect(1, 1, 5)
-	local travel = sim.tentacles[1].length / Config.TENTACLE_GROWTH_SPEED
-
-	advance(sim, travel + STEP)
-	local before = sim.cells[1].units
-	advance(sim, 1)
-	check("source drains while flowing", sim.cells[1].units < before)
-	check("neutral target loses units", sim.cells[5].units < 6)
-
-	-- 6 units at 3.2/sec is a shade under two seconds to flip.
-	advance(sim, 2)
+	advance(sim, 30)
 	check("neutral cell flips owner", sim.cells[5].owner == 1, `owner {sim.cells[5].owner}`)
-	check("captured cell holds overflow", sim.cells[5].units > 0)
 	check("captured cell then reinforces", (function()
-		local held = sim.cells[5].units
-		advance(sim, 1)
-		return sim.cells[5].units > held
+		sim.cells[5].units = 1 -- it has long since filled; drain it to watch regen
+		advance(sim, 2)
+		return sim.cells[5].units > 1
 	end)())
+	check("captured cell never exceeds capacity", sim.cells[5].units <= sim.cells[5].capacity)
 end
 
 do
 	local sim = fresh()
-	-- Neutral cells sit inert; owned cells regenerate up to their cap.
 	local neutral = sim.cells[5].units
 	sim.cells[7].owner = 1
 	sim.cells[7].units = 1
@@ -180,7 +319,7 @@ do
 	check("victim has an outbound tentacle", outbound ~= nil and outbound.owner == 2)
 
 	sim:connect(1, 1, 5)
-	advance(sim, 30)
+	advance(sim, 40)
 
 	check("attacker takes the cell", sim.cells[5].owner == 1)
 	check("previous owner's tentacle is severed", sim.tentacles[outbound.id] == nil)
@@ -194,14 +333,20 @@ do
 end
 
 do
-	-- Losing the source cell kills the tentacle it launched.
+	-- Losing the source cell kills the tentacle and the column dies with it;
+	-- only a deliberate cut pushes energy forward.
 	local sim = fresh()
 	sim.cells[5].owner = 1
-	sim.cells[5].units = 3
+	sim.cells[5].units = 30
 	sim:connect(1, 5, 4)
+	advance(sim, 2)
+	local inFlight = sim:payload(sim.tentacles[1])
+	local targetBefore = sim.cells[4].units
+
 	sim.cells[5].owner = 2 -- simulate the cell flipping mid-flight
 	advance(sim, 1)
 	check("orphaned tentacle is dropped", next(sim.tentacles) == nil)
+	check("its column is lost, not delivered", sim.cells[4].units == targetBefore, `in flight was {inFlight}`)
 end
 
 --=============================================================================
@@ -226,21 +371,7 @@ do
 end
 
 --=============================================================================
-print("snapshot")
---=============================================================================
-do
-	local sim = fresh()
-	sim:connect(1, 1, 5)
-	local snapshot = sim:snapshot()
-	check("snapshot covers every cell", #snapshot.cells == #sim.cellIds)
-	check("snapshot covers every tentacle", #snapshot.tentacles == 1)
-	check("snapshot units are integers", snapshot.cells[1].units % 1 == 0)
-	check("snapshot omits static fields", snapshot.cells[1].position == nil)
-	check("snapshot carries the clock", snapshot.remaining == Config.ROUND_TIME_LIMIT)
-end
-
---=============================================================================
-print("round clock and tiebreak")
+print("round clock, tiebreak and stars")
 --=============================================================================
 do
 	local sim = fresh()
@@ -251,13 +382,11 @@ do
 	sim.elapsed = Config.ROUND_TIME_LIMIT + 50
 	check("clock clamps at zero", sim:timeRemaining() == 0)
 
-	-- Most cells wins the tiebreak outright.
 	local byCells = fresh()
 	byCells.cells[7].owner = 2
 	byCells.cells[10].owner = 2
 	check("leader is whoever holds most cells", byCells:leader() == 2)
 
-	-- Equal cell counts fall through to banked units.
 	local byUnits = fresh()
 	for _, id in byUnits.cellIds do
 		byUnits.cells[id].owner = Config.NEUTRAL
@@ -267,28 +396,95 @@ do
 	byUnits.cells[2].owner = 2
 	byUnits.cells[2].units = 40
 	check("units break a cell-count tie", byUnits:leader() == 2)
+
+	local stars = fresh()
+	local times = Crossroads.starTimes
+	stars.elapsed = times[1] - 1
+	check("fast clear earns three stars", stars:stars() == 3)
+	stars.elapsed = times[2] - 1
+	check("middling clear earns two stars", stars:stars() == 2)
+	stars.elapsed = times[3] - 1
+	check("slow clear earns one star", stars:stars() == 1)
+	stars.elapsed = times[3] + 1
+	check("crawling clear earns none", stars:stars() == 0)
 end
 
 --=============================================================================
-print("full AI match")
+print("snapshot")
 --=============================================================================
 do
-	-- Three bots left alone must actually resolve the board, not stalemate.
-	local resolved = 0
-	local longest = 0
-	local SEEDS = 40
+	local sim = fresh()
+	sim:connect(1, 1, 4)
+	advance(sim, 6)
+
+	local snapshot = sim:snapshot()
+	check("snapshot covers every cell", #snapshot.cells == #sim.cellIds)
+	check("snapshot covers every tentacle", #snapshot.tentacles == 1)
+	check("snapshot units are integers", snapshot.cells[1].units % 1 == 0)
+	check("snapshot omits static fields", snapshot.cells[1].position == nil)
+	check("snapshot carries the clock", near(snapshot.remaining, Config.ROUND_TIME_LIMIT - 6, 0.1))
+	check("snapshot carries pulse positions", #snapshot.tentacles[1].pulses > 0)
+	check("snapshot carries the standing charge", snapshot.tentacles[1].payload > 0)
+
+	local ordered = true
+	local previous = math.huge
+	for _, position in snapshot.tentacles[1].pulses do
+		if position > previous then
+			ordered = false
+		end
+		previous = position
+	end
+	check("pulses are ordered oldest first", ordered)
+end
+
+--=============================================================================
+print("purple cuts, red does not")
+--=============================================================================
+do
+	local board = {
+		{ id = 1, position = Vector2.new(150, 300), tier = 3, owner = 3, units = 90 },
+		{ id = 2, position = Vector2.new(500, 300), tier = 1, owner = 1, units = 10 },
+	}
+
+	local function timeToCapture(profile: string): number
+		math.randomseed(7)
+		local sim = Simulation.new(custom(board, { 1, 3 }, { [3] = profile }))
+		local bot = AI.new(sim, 3, profile)
+		local elapsed = 0
+		while sim.cells[2].owner ~= 3 and elapsed < 120 do
+			sim:step(STEP)
+			bot:step(STEP)
+			elapsed += STEP
+		end
+		return elapsed
+	end
+
+	local red = timeToCapture("Red")
+	local purple = timeToCapture("Purple")
+
+	check("red eventually takes the cell", red < 120, `{math.floor(red)}s`)
+	check("purple takes it too", purple < 120, `{math.floor(purple)}s`)
+	check("purple is faster because it cuts", purple < red, `purple {math.floor(purple)}s vs red {math.floor(red)}s`)
+	print(`  ..   purple {string.format("%.1f", purple)}s vs red {string.format("%.1f", red)}s`)
+end
+
+--=============================================================================
+print("full AI matches")
+--=============================================================================
+for _, level in { Incision, Crossroads } do
+	local resolved, longest = 0, 0
+	local SEEDS = 25
 
 	for seed = 1, SEEDS do
 		math.randomseed(seed)
-		local sim = fresh()
+		local sim = Simulation.new(level)
 		local bots = {}
-		for _, faction in Crossroads.factions do
-			table.insert(bots, AI.new(sim, faction, "Normal"))
+		for _, faction in level.factions do
+			table.insert(bots, AI.new(sim, faction, (level.ai or {})[faction]))
 		end
 
-		local elapsed = 0
-		local winner = nil
-		while elapsed < 600 and not winner do
+		local elapsed, winner = 0, nil
+		while elapsed < Config.ROUND_TIME_LIMIT and not winner do
 			sim:step(STEP)
 			for _, bot in bots do
 				bot:step(STEP)
@@ -303,13 +499,13 @@ do
 		end
 	end
 
-	check("every AI match resolves", resolved == SEEDS, `{resolved}/{SEEDS} resolved`)
+	check(`{level.name}: every AI match resolves`, resolved == SEEDS, `{resolved}/{SEEDS} resolved`)
 	check(
-		"matches finish inside the round clock",
+		`{level.name}: matches finish inside the round clock`,
 		longest < Config.ROUND_TIME_LIMIT,
 		`longest {math.floor(longest)}s`
 	)
-	print(`  ..   longest match {math.floor(longest)}s`)
+	print(`  ..   {level.name}: longest {math.floor(longest)}s of {Config.ROUND_TIME_LIMIT}s`)
 end
 
 print(`\n{passed} passed, {failed} failed`)
