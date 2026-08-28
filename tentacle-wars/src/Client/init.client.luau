@@ -13,8 +13,25 @@ local Net = require(Shared.Net)
 
 local Renderer = require(script.Renderer)
 
+local StarterGui = game:GetService("StarterGui")
+
 local player = Players.LocalPlayer
 local renderer = Renderer.new(player:WaitForChild("PlayerGui"))
+
+-- This is a full-screen board game: the default Roblox chrome (player list,
+-- backpack, emotes) just floats over the board. Retry because SetCoreGuiEnabled
+-- errors if called before CoreGui has registered.
+task.spawn(function()
+	for _ = 1, 10 do
+		local ok = pcall(function()
+			StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+		end)
+		if ok then
+			return
+		end
+		task.wait(0.5)
+	end
+end)
 
 local RoundStart = Net.get("RoundStart")
 local RoundOver = Net.get("RoundOver")
