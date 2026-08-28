@@ -14,6 +14,11 @@ local Simulation = require(Shared.Simulation)
 
 local AI = require(script.AI)
 
+-- This is a board game played entirely in a ScreenGui. Without this a character
+-- spawns behind the board and, in a place with no SpawnLocation, falls forever
+-- and respawn-loops behind the backdrop.
+Players.CharacterAutoLoads = false
+
 Net.init()
 
 local RoundStart = Net.get("RoundStart")
