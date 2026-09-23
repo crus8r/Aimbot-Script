@@ -168,6 +168,10 @@ export class HUD {
       g.day.paused = v === 'paused';
       g.day.rate = v === 'fast' ? 1 / 6 : 1 / 60;
     });
+    const q = this.el('menu-quality');
+    q.value = g.quality;
+    q.addEventListener('change', () => g.setQuality(q.value));
+    g.onQuality = (v) => { q.value = v; };
     this.el('menu-mute').addEventListener('change', (e) => { g.speech.muted = e.target.checked; g.audio?.setMuted(e.target.checked); });
     const models = this.el('menu-models');
     for (const [k, label] of [['man', 'Man in a suit'], ['michelle', 'Michelle'], ['girl', 'Casual girl'], ['soldier', 'Soldier'], ['mannequin', 'Mannequin']]) {

@@ -47,6 +47,9 @@ export class DayCycle {
     this.sun.shadow.mapSize.set(2048, 2048);
     const sc = this.sun.shadow.camera;
     sc.left = -55; sc.right = 55; sc.top = 55; sc.bottom = -55; sc.near = 1; sc.far = 400;
+    // Without this the shadow camera keeps its default 10m frustum: there
+    // were no visible shadows anywhere until this line (measured).
+    sc.updateProjectionMatrix();
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.04;
     scene.add(this.sun, this.sun.target);
@@ -57,6 +60,11 @@ export class DayCycle {
     this.fog = new THREE.Fog(0xc9dbea, 60, 900);
     scene.fog = this.fog;
 
+    // Preetham goes black after sunset; a gradient dome over it carries the
+    // night: fog colour at the horizon (so buildings melt into it), deep blue
+    // overhead, a little warm city glow low down.
+    this.nightDome = makeNightDome();
+    scene.add(this.nightDome);
     this.stars = makeStars();
     scene.add(this.stars);
     this.moon = makeMoon();
@@ -72,6 +80,10 @@ export class DayCycle {
     this.sunDir = new THREE.Vector3();
     this.night = 0;
     this.focus = new THREE.Vector3();
+    // Tunables, measured against frame luminance (tools/scenarios.mjs light).
+    // Ambient is high when the sun is low (golden hour lives on skylight)
+    // and low at noon (so shadows read). Values from the luminance sweeps.
+    this.k = { sun: 3.4, hemi: [1.0, 0.55], env: [0.65, 0.3], noonExposure: 0.36 };
   }
 
   // 0 at noon .. 1 at deep night; lamps switch on around 0.35.
@@ -95,6 +107,8 @@ export class DayCycle {
     // as a hole. Stars and a tinted fog carry the night.
     this.sky.material.uniforms.rayleigh.value = 1.2 + 1.8 * THREE.MathUtils.clamp(1 - elev / 30, 0, 1);
 
+    const noon = THREE.MathUtils.clamp((elev - 8) / 27, 0, 1);
+    const kv = (v) => (Array.isArray(v) ? THREE.MathUtils.lerp(v[0], v[1], noon) : v);
     const fogC = keyed(FOG_KEYS, elev);
     this.fog.color.copy(fogC);
     this.fog.near = 80;
@@ -109,7 +123,7 @@ export class DayCycle {
     const lightDir = day > 0.02 ? dir : moonDir;
     this.sun.color.set('#ffffff').lerp(new THREE.Color('#ff9a5a'), warm * 0.75);
     if (day <= 0.02) this.sun.color.set('#8aa4ff');
-    this.sun.intensity = day > 0.02 ? 3.2 * day : 0.35;
+    this.sun.intensity = day > 0.02 ? this.k.sun * day : 0.35;
     this.sun.position.copy(this.focus).addScaledVector(lightDir, 200);
     this.sun.target.position.copy(this.focus);
     // Snap the shadow camera to texels so shadows don't crawl as you walk.
@@ -120,8 +134,12 @@ export class DayCycle {
 
     this.hemi.color.copy(keyed(HEMI_SKY, elev));
     this.hemi.groundColor.copy(keyed(HEMI_GROUND, elev));
-    this.hemi.intensity = THREE.MathUtils.lerp(1.15, 0.55, this.night);
+    this.hemi.intensity = THREE.MathUtils.lerp(kv(this.k.hemi), 0.55, this.night);
 
+    const du = this.nightDome.material.uniforms;
+    du.horizon.value.copy(fogC);
+    du.opacity.value = THREE.MathUtils.clamp((this.night - 0.05) / 0.6, 0, 1);
+    this.nightDome.position.copy(this.focus);
     this.stars.material.opacity = THREE.MathUtils.clamp((this.night - 0.4) / 0.5, 0, 1);
     this.stars.position.copy(this.focus);
     this.moon.position.copy(this.focus).addScaledVector(moonDir, 900);
@@ -129,7 +147,10 @@ export class DayCycle {
     this.moon.visible = this.moon.material.opacity > 0.01;
     this.sky.position.copy(this.focus);
 
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(0.62, 0.95, this.night);
+    // A camera stops down in full sun: the midday sky alone clipped 40% of
+    // the frame at the golden-hour exposure (measured).
+    const dayExp = THREE.MathUtils.lerp(0.62, this.k.noonExposure ?? 0.42, noon);
+    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(dayExp, 0.95, this.night);
 
     // Environment reflections follow the sky, refreshed every ~20 game minutes.
     if (Math.abs(this.hours - this.lastEnvHours) > 0.33) {
@@ -141,7 +162,7 @@ export class DayCycle {
       this.envScene.background = null;
       this.envTarget = this.pmrem.fromScene(this.envScene, 0, 0.1, 2000);
       this.scene.environment = this.envTarget.texture;
-      this.scene.environmentIntensity = THREE.MathUtils.lerp(1.0, 0.25, this.night);
+      this.scene.environmentIntensity = THREE.MathUtils.lerp(kv(this.k.env), 0.25, this.night);
       old?.dispose();
     }
   }
@@ -150,6 +171,25 @@ export class DayCycle {
     const h = Math.floor(this.hours), m = Math.floor((this.hours - h) * 60);
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
+}
+
+function makeNightDome() {
+  const m = new THREE.ShaderMaterial({
+    uniforms: { horizon: { value: new THREE.Color('#1a2140') }, zenith: { value: new THREE.Color('#050a1f') }, glow: { value: new THREE.Color('#5a3a50') }, opacity: { value: 0 } },
+    vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform vec3 horizon, zenith, glow; uniform float opacity; varying vec3 vDir;
+      void main(){
+        float h = clamp(vDir.y, 0.0, 1.0);
+        vec3 c = mix(horizon, zenith, pow(h, 0.45));
+        c += glow * exp(-h * 18.0) * 0.6;
+        gl_FragColor = vec4(c, opacity);
+      }`,
+    side: THREE.BackSide, transparent: true, depthWrite: false, fog: false,
+  });
+  const d = new THREE.Mesh(new THREE.SphereGeometry(2500, 32, 16), m);
+  d.renderOrder = -2;
+  d.frustumCulled = false;
+  return d;
 }
 
 function makeStars() {
@@ -169,6 +209,7 @@ function makeStars() {
   const p = new THREE.Points(g, m);
   p.frustumCulled = false;
   p.renderOrder = -1;
+  m.depthTest = true;
   return p;
 }
 

@@ -210,7 +210,7 @@ export class Crowd {
     const p = this.game.player;
     const candidates = this.npcs.filter((n) => n.state !== 'mannequin' && n.actor.object.position.distanceTo(p.object.position) < 12);
     candidates.sort((a, b) => a.actor.object.position.distanceTo(p.object.position) - b.actor.object.position.distanceTo(p.object.position));
-    candidates.slice(0, 2).forEach((n, i) => setTimeout(() => n.waveBack(), 500 + i * 700));
+    candidates.slice(0, 2).forEach((n, i) => this.game.later(0.5 + i * 0.7, () => n.waveBack()));
   }
 }
 
@@ -477,7 +477,7 @@ class NPC {
     const inRoom = player && post.room.inside(player.object.position.x, player.object.position.z, -0.3);
     if (inRoom && !this.greeted && STAFF_GREET[this.job]) {
       this.greeted = true;
-      setTimeout(() => this.game.speech?.say(a, pick(STAFF_GREET[this.job], this.r), { priority: 1 }), 600);
+      this.game.later(0.6, () => this.game.speech?.say(a, pick(STAFF_GREET[this.job], this.r), { priority: 1 }));
     }
     if (!inRoom) this.greeted = false;
     // Idle work gestures now and then.
@@ -542,7 +542,7 @@ class NPC {
     a.lookAt(p);
     a.emote('wave');
     this.game.speech?.say(a, pick(WAVE_BACK, this.r), { priority: 0 });
-    setTimeout(() => { if (!this.busyTalking) a.lookAt(null); }, 3000);
+    this.game.later(3, () => { if (!this.busyTalking) a.lookAt(null); });
   }
 
   beginTalk() {
@@ -553,7 +553,7 @@ class NPC {
     this.talkFace = Math.atan2(q.x - pos.x, q.z - pos.z);
     a.lookAt(p);
     if (a.state === 'free') a.cancel();
-    setTimeout(() => this.game.speech?.say(a, pick(GREETINGS, this.r), { priority: 2 }), 350);
+    this.game.later(0.35, () => this.game.speech?.say(a, pick(GREETINGS, this.r), { priority: 2 }));
   }
 
   endTalk() {
@@ -571,11 +571,12 @@ class NPC {
     const wasBusy = this.busyTalking;
     this.busyTalking = true;
     const line = replyTo(text, a, this.r);
-    const delay = 600 + Math.min(2500, text.length * 25);
-    setTimeout(() => this.game.speech?.say(a, line, {
+    // Let the player's line land before answering.
+    const delay = 0.6 + Math.min(2.5, text.length * 0.025);
+    this.game.later(delay, () => this.game.speech?.say(a, line, {
       priority: 2,
-      onEnd: () => { if (!wasBusy && this.crowd.talking !== this) { this.busyTalking = false; setTimeout(() => a.lookAt(null), 1500); } },
-    }), delay);
+      onEnd: () => { if (!wasBusy && this.crowd.talking !== this) { this.busyTalking = false; this.game.later(1.5, () => a.lookAt(null)); } },
+    }));
   }
 }
 

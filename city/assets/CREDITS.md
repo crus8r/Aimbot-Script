@@ -14,7 +14,7 @@ in this repository.
 | `props/GlassVaseFlowers.glb`, `props/Lantern.glb`, `props/WaterBottle.glb`, `props/BoomBox.glb` | KhronosGroup/glTF-Sample-Assets — textures downscaled | CC0 1.0 |
 | `props/CesiumMilkTruck.glb` | KhronosGroup/glTF-Sample-Assets (Cesium) | CC BY 4.0 |
 | `textures/waternormals.jpg` | three.js examples | MIT (three.js) |
-| `draco/*` | Draco decoder, via three.js | Apache 2.0 (Google) |
+| `draco/draco_decoder.js` | Draco decoder (JS build), via three.js | Apache 2.0 (Google) |
 
 The Ready Player Me *animation library* (readyplayerme/animation-library) was
 evaluated and deliberately not used: its licence forbids redistribution, and

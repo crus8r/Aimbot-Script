@@ -24,6 +24,12 @@ export async function build({ minify = true, entries = ['main'] } = {}) {
     legalComments: 'none',
   });
   fs.cpSync(path.join(root, 'assets'), path.join(dist, 'assets'), { recursive: true });
+  // The artifact host won't serve .glb, so every model also ships as base64
+  // text, which src/core/loadglb.js decodes.
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+  for (const f of walk(path.join(dist, 'assets'))) {
+    if (f.endsWith('.glb')) fs.writeFileSync(`${f}.txt`, fs.readFileSync(f).toString('base64'));
+  }
   for (const f of fs.readdirSync(path.join(root, 'web'))) {
     fs.copyFileSync(path.join(root, 'web', f), path.join(dist, f));
   }

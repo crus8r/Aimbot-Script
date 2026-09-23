@@ -24,6 +24,112 @@ const helpers = `
 `;
 
 const scenarios = {
+  async props(page, shot, log) {
+    await page.evaluate(helpers);
+    const views = [['apartment', 1.6, 3.2, 2.6], ['boutique', 1.5, 3.0, 3.6], ['bar', 0, 1.5, 3.2]];
+    for (const [kind, lx, lz, back] of views) {
+      await page.evaluate(({ kind, lx, lz, back }) => {
+        const r = game.world.rooms.find((x) => x.kind === kind);
+        const [x, z] = r.w(lx, lz - back);
+        game.player.place(x, r.y, z, r.yaw);
+        T.look(r.yaw + Math.PI, 0.3); game.follow.distTarget = 2.5; T.step(10);
+      }, { kind, lx, lz, back });
+      await shot(kind);
+    }
+    await page.evaluate(() => { game.player.place(165, 0.15, 9.5, Math.PI / 2 + 0.5); T.look(Math.PI / 2 + 0.5 + Math.PI, 0.15); game.follow.distTarget = 6; T.step(10); });
+    await shot('truck');
+  },
+  async hooks(page, shot, log) {
+    await page.evaluate(helpers);
+    // Go to an interaction of a kind (in a room), face it, press E.
+    const use = async (kind, room, name, after = 30) => {
+      const r = await page.evaluate(({ kind, room, after }) => {
+        const it = game.interactions.items.find((i) => i.kind === kind && (!room || (i.seat ? i.seat.room?.kind === room : game.world.rooms.find((r) => r.kind === room)?.inside(i.pos.x, i.pos.z, 0.5))));
+        if (!it) return 'none';
+        const q = it.pos;
+        const rm = game.world.rooms.find((r) => r.inside(q.x, q.z, 0.5));
+        // Stand a little back from it, facing it.
+        const back = rm ? new q.constructor(rm.cx, 0, rm.cz).sub(q).setY(0).normalize() : new q.constructor(1, 0, 0);
+        game.player.place(q.x + back.x * 0.4, q.y, q.z + back.z * 0.4, Math.atan2(-back.x, -back.z));
+        T.look(Math.atan2(back.x, back.z), 0.3); game.follow.distTarget = 3;
+        T.step(3);
+        const before = T.state().prompt;
+        T.tap('KeyE'); T.step(after);
+        return { before, after: T.state() };
+      }, { kind, room, after });
+      log(kind, room || '', JSON.stringify(r));
+      if (name) await shot(name);
+    };
+    await use('tv', 'apartment', null, 5);
+    await use('seat', 'apartment', null, 80);
+    await page.evaluate(() => { const c = game.player.object.position; T.look(game.player.heading + Math.PI + 0.5, 0.25); T.step(3); });
+    await shot('01-sofa-tv');
+    await page.evaluate(() => { T.hold(['KeyW']); T.step(2); T.release(['KeyW']); T.step(40); });
+    await use('lamp', 'apartment', '02-lamp', 20);
+    await use('fridge', 'store', null, 30);
+    log('holding', await page.evaluate(() => !!game.player.held));
+    await page.evaluate(() => { T.tap('KeyE'); T.step(20); });
+    await shot('03-sip');
+    await page.evaluate(() => { T.tap('KeyQ'); T.step(30); });
+    log('after drop', await page.evaluate(() => !!game.player.held));
+    await use('jukebox', 'diner', '04-jukebox', 20);
+    await use('seat', 'bar', null, 90);
+    log('bar seat', await page.evaluate(() => ({ st: T.state(), seat: game.player.seat && game.player.seat.kind })));
+    await shot('05-bar');
+    const piano = await page.evaluate(() => {
+      const seat = game.world.seats.find((s) => s.kind === 'piano');
+      if (game.player.state === 'seated') { game.player.stand(); T.step(40); }
+      game.player.place(seat.standPoint.x, seat.standPoint.y, seat.standPoint.z, seat.heading);
+      T.step(3); T.tap('KeyE'); T.step(80);
+      T.look(seat.heading + Math.PI * 0.75, 0.25); T.step(3);
+      return T.state();
+    });
+    log('piano', piano);
+    await shot('06-piano');
+    await page.evaluate(() => { T.hold(['KeyW']); T.step(2); T.release(['KeyW']); T.step(40); });
+    await use('wardrobe', 'boutique', '07-boutique', 30);
+    log('model after wardrobe', await page.evaluate(() => game.player.modelKey));
+    await use('seat', 'office', null, 90);
+    await page.evaluate(() => { T.look(game.player.heading + Math.PI * 0.8, 0.3); T.step(3); });
+    await shot('08-office');
+  },
+  async light(page, shot, log) {
+    await page.evaluate(helpers);
+    const combos = JSON.parse(process.env.COMBOS || '[[3.2,1.15,1.0]]');
+    const views = [[199, 10, Math.PI * 0.75, -0.9], [150, 3, -Math.PI / 2, Math.PI / 2 + 0.3]];
+    for (const [sun, hemi, env, noonExposure] of combos) {
+      for (const h of [8.5, 13, 17.5]) {
+        for (let v = 0; v < views.length; v++) {
+          const [x, z, hd, yaw] = views[v];
+          const lum = await page.evaluate(({ sun, hemi, env, noonExposure, h, x, z, hd, yaw }) => {
+            game.day.k = { sun, hemi, env, noonExposure: noonExposure ?? game.day.k.noonExposure };
+            game.day.setHours(h); game.day.paused = true;
+            game.player.place(x, 0.15, z, hd); T.look(yaw, 0.08); game.follow.distTarget = 5;
+            T.step(4);
+            // Mean luminance of what is on screen, sRGB 0..1.
+            const c = game.renderer.domElement;
+            const g2 = document.createElement('canvas'); g2.width = 160; g2.height = 90;
+            const x2 = g2.getContext('2d'); x2.drawImage(c, 0, 0, 160, 90);
+            const d = x2.getImageData(0, 0, 160, 90).data;
+            let s = 0, hi = 0;
+            for (let i = 0; i < d.length; i += 4) { const l = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255; s += l; if (l > 0.95) hi++; }
+            return { mean: +(s / (d.length / 4)).toFixed(3), clipped: +(hi / (d.length / 4)).toFixed(3) };
+          }, { sun, hemi, env, noonExposure, h, x, z, hd, yaw });
+          log(`sun ${sun} hemi ${hemi} env ${env} exp ${noonExposure} @${h} view${v}`, lum);
+          if (v === 0) await shot(`k${sun}_${hemi}_${env}_${noonExposure}_h${h}`);
+        }
+      }
+    }
+  },
+  async times(page, shot, log) {
+    await page.evaluate(helpers);
+    await page.evaluate(() => { game.player.place(199, 0.15, 10, Math.PI * 0.75); T.look(-0.9, 0.08); game.follow.distTarget = 5; });
+    for (const h of [8, 13, 18.4, 19.4, 22]) {
+      await page.evaluate((h) => { game.day.setHours(h); game.day.paused = true; T.step(6); }, h);
+      log(h, await page.evaluate(() => ({ night: game.day.night.toFixed(2), calls: game.renderer.info.render.calls })));
+      await shot(`h${String(h).replace('.', '_')}`);
+    }
+  },
   async drive(page, shot, log) {
     await page.evaluate(helpers);
     log('traffic', await page.evaluate(() => ({ cars: game.traffic.cars.length, ai: game.traffic.cars.filter((c) => c.mode === 'ai').length, parked: game.traffic.parkedCount, hero: !!game.traffic.hero, lanes: game.traffic.lanes.length })));

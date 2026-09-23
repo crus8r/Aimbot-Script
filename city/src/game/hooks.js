@@ -74,7 +74,7 @@ const HOOKS = {
     });
     if (tv.on) draw();
     const pos = front(h, 2.0);
-    game.interactions.add({ kind: 'tv', pos, radius: 2.6, label: () => (tv.on ? 'Change channel (hold: off)' : 'Turn TV on'), act: (a) => {
+    game.interactions.add({ kind: 'tv', pos, radius: 2.6, label: () => (!tv.on ? 'Turn the TV on' : tv.channel < 2 ? 'Next channel' : 'Turn the TV off'), act: (a) => {
       if (!tv.on) tv.on = true;
       else if (tv.channel === 2) { tv.on = false; tv.channel = 0; }
       else tv.channel++;
@@ -109,21 +109,21 @@ const HOOKS = {
   fridge(game, room, h) {
     game.interactions.add({ kind: 'fridge', pos: front(h, h.drinks ? 0.6 : 0.8), radius: h.drinks ? 3 : 1.4, label: (a) => (a.held ? null : 'Grab a drink'), act: (a) => {
       a.playLayer('use', { mask: 'armR', time: 1 });
-      setTimeout(() => { giveDrink(game, a); game.audio?.fizz(); }, 450);
+      game.later(0.45, () => { giveDrink(game, a); game.audio?.fizz(); });
     } });
   },
 
   drink(game, room, h) {
     game.interactions.add({ kind: 'drink', pos: front(h, 0.7), radius: 1.4, label: (a) => (a.held ? null : 'Get some water'), act: (a) => {
       a.playLayer('use', { mask: 'armR', time: 1 });
-      setTimeout(() => giveDrink(game, a, 'cup'), 450);
+      game.later(0.45, () => giveDrink(game, a, 'cup'));
     } });
   },
 
   wardrobe(game, room, h) {
     game.interactions.add({ kind: 'wardrobe', pos: front(h, 0.8), radius: 1.6, label: () => 'Change outfit', act: (a) => {
       a.playLayer('use', { mask: 'armR', time: 1 });
-      setTimeout(() => game.swapPlayer(a.modelKey, true), 500);
+      game.later(0.5, () => game.swapPlayer(a.modelKey, true));
     } });
   },
 
@@ -138,7 +138,7 @@ const HOOKS = {
   register(game, room, h) {
     game.interactions.add({ kind: 'register', pos: front(h, 0.8), radius: 1.6, label: () => 'Pay', act: (a) => {
       a.playLayer('use', { mask: 'armR', time: 1 });
-      game.audio?.blip(1320, 0.06); setTimeout(() => game.audio?.blip(1760, 0.08), 90);
+      game.audio?.blip(1320, 0.06); game.later(0.09, () => game.audio?.blip(1760, 0.08));
       const clerk = game.crowd?.npcs.find((n) => n.job === 'clerk' && n.post?.room === room);
       if (clerk) game.speech.say(clerk.actor, 'Thanks, have a good one!', { priority: 2 });
     } });
@@ -198,7 +198,7 @@ export function dropHeld(game, actor) {
   const fall = (dt) => {
     vy.v -= 9.8 * dt;
     m.position.y = Math.max(g, m.position.y + vy.v * dt);
-    if (m.position.y <= g) { m.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2); game.updaters.splice(game.updaters.indexOf(fall), 1); setTimeout(() => m.removeFromParent(), 30000); }
+    if (m.position.y <= g) { m.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2); game.updaters.splice(game.updaters.indexOf(fall), 1); game.later(30, () => m.removeFromParent()); }
   };
   game.updaters.push(fall);
 }

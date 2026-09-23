@@ -206,8 +206,9 @@ export class Car {
 
 // Arcade handling for the player's car.
 export function drive(car, input, dt) {
-  const up = input.down('KeyW', 'ArrowUp'), down = input.down('KeyS', 'ArrowDown');
-  const left = input.down('KeyA'), right = input.down('KeyD');
+  const vm = input.virtualMove || { x: 0, y: 0 };
+  const up = input.down('KeyW', 'ArrowUp') || vm.y > 0.3, down = input.down('KeyS', 'ArrowDown') || vm.y < -0.3;
+  const left = input.down('KeyA') || vm.x < -0.3, right = input.down('KeyD') || vm.x > 0.3;
   const hand = input.down('Space');
   const s = car.speed;
   let acc = 0;

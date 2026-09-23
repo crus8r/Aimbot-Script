@@ -213,6 +213,14 @@ export class Actor {
     this.state = 'seated';
     const opts = { h: seat.h, ...(seat.opts || {}) };
     const loopName = seat.loop || 'sit';
+    if (seat.hop) {
+      // Slide onto the seat while crossfading into sitting.
+      const from = this.object.position.clone(), fromH = this.heading;
+      let dh = seat.heading - fromH; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+      this.playFull(loopName, { opts, fade: 0.4 });
+      this.hopAnim = { t: 0, dur: 0.4, from, to: seat.pos.clone(), fromH, dh, done: () => { this.busy = false; then?.(); } };
+      return true;
+    }
     this.playFull('sit_down', {
       opts,
       fade: 0.2,
@@ -232,6 +240,14 @@ export class Actor {
     this.busy = true;
     const seat = this.seat;
     const opts = { h: seat.h, ...(seat.opts || {}) };
+    if (seat.hop) {
+      this.stopFull(0.4);
+      const from = this.object.position.clone();
+      this.hopAnim = { t: 0, dur: 0.4, from, to: seat.standPoint.clone().setY(seat.floorY ?? seat.pos.y), fromH: this.heading, dh: 0, done: () => {
+        this.state = 'free'; this.seat = null; this.busy = false; seat.occupant = null; then?.();
+      } };
+      return true;
+    }
     const f = this.forward(_v);
     this.place(seat.pos.x + f.x * STAND_AT_SEAT, seat.floorY ?? seat.pos.y, seat.pos.z + f.z * STAND_AT_SEAT, seat.heading);
     this.playFull('stand_up', {
@@ -313,6 +329,14 @@ export class Actor {
 
   update(dt) {
     this._t += dt;
+    if (this.hopAnim) {
+      const h = this.hopAnim;
+      h.t += dt;
+      const u = Math.min(1, h.t / h.dur), e = u * u * (3 - 2 * u);
+      this.object.position.lerpVectors(h.from, h.to, e);
+      this.heading = h.fromH + h.dh * e;
+      if (u >= 1) { this.hopAnim = null; h.done(); }
+    }
     this.object.rotation.y = this.heading;
     this._updateLocomotion(dt);
     // Full-body weights.

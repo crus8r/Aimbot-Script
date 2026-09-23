@@ -11,6 +11,7 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { Rig, retargetClip } from './rig.js';
 import { PoseSolver, bakeClip } from './pose.js';
 import { CLIPS, MOCAP } from './clips.js';
+import { loadGLB } from './loadglb.js';
 
 export const MODELS = {
   man: { file: 'readyplayer.me', height: 1.8, sex: 'm', walk: 'walk', idle: 'idle_m' },
@@ -40,7 +41,7 @@ export class Cast {
     const files = [...new Set(Object.values(MODELS).map((m) => m.file))];
     let done = 0;
     await Promise.all(files.map(async (f) => {
-      const gltf = await this.loader.loadAsync(`assets/models/${f}.glb`);
+      const gltf = await loadGLB(this.loader, `assets/models/${f}.glb`);
       const def = Object.values(MODELS).find((m) => m.file === f);
       this.rigs.set(f, new Rig(f, gltf, { height: def.height }));
       onProgress?.(++done / files.length);

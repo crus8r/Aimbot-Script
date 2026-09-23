@@ -37,10 +37,13 @@ export class Game {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 3000);
     this.loader = new GLTFLoader();
-    // The Ferrari ships Draco-compressed; the decoder is published next to the page.
+    // The Ferrari ships Draco-compressed; the decoder is published next to
+    // the page. The plain-JS decoder, not WASM: embedded viewers may forbid
+    // compiling WebAssembly, and simplifying the model offline to avoid
+    // Draco altogether barely reduced it (328k -> 305k triangles, 6MB).
     const draco = new DRACOLoader();
     draco.setDecoderPath('assets/draco/');
-    draco.setDecoderConfig({ type: 'wasm' });
+    draco.setDecoderConfig({ type: 'js' });
     this.loader.setDRACOLoader(draco);
     this.cast = new Cast(this.loader);
     this.input = new Input(canvas);
@@ -53,6 +56,7 @@ export class Game {
     this.speech = new Speech(this);
     this.audio = new GameAudio(this);
     this.log = [];                 // what was said, for the studio to read later
+    this.timers = [];              // [time, fn]: game-time callbacks
     this.frustum = new THREE.Frustum();
     this._pv = new THREE.Matrix4();
     this._sphere = new THREE.Sphere(new THREE.Vector3(), 1.3);
@@ -63,6 +67,34 @@ export class Game {
     this.setupPost();
   }
 
+  // high: 1.5x pixels, bloom, SMAA, 2048 shadows. medium: 1x, bloom.
+  // low: 1x, no post, 1024 shadows. Chosen automatically after start.
+  setQuality(q) {
+    this.quality = q;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, q === 'high' ? 1.5 : 1));
+    this.renderer.setSize(innerWidth, innerHeight);
+    const size = q === 'low' ? 1024 : 2048;
+    const sh = this.day.sun.shadow;
+    if (sh.mapSize.x !== size) { sh.mapSize.set(size, size); sh.map?.dispose(); sh.map = null; }
+    this.setupPost();
+    this.onQuality?.(q);
+  }
+
+  // Watch the first seconds of play and step quality down if frames are slow.
+  autoQuality(dt) {
+    if (this.params.has('quality') || this.params.has('test')) return;
+    const a = this._aq || (this._aq = { t: 0, frames: 0, sum: 0 });
+    a.t += dt;
+    if (a.t < 1.5) return;                 // let shaders compile first
+    a.frames++; a.sum += this._frameMs || dt * 1000;
+    if (a.frames < 90) return;
+    const avg = a.sum / a.frames;
+    a.t = 0; a.frames = 0; a.sum = 0;
+    if (avg > 26 && this.quality !== 'low') this.setQuality(this.quality === 'high' ? 'medium' : 'low');
+    else this._aq.done = (this._aq.done || 0) + 1;
+    if (this._aq.done > 1) this.autoQuality = () => {};
+  }
+
   setupPost() {
     if (this.quality === 'low') { this.composer = null; return; }
     const c = new EffectComposer(this.renderer);
@@ -71,6 +103,8 @@ export class Game {
     c.addPass(this.bloom);
     c.addPass(new OutputPass());
     if (this.quality === 'high') c.addPass(new SMAAPass());
+    c.setPixelRatio(this.renderer.getPixelRatio());
+    c.setSize(innerWidth, innerHeight);
     this.composer = c;
   }
 
@@ -108,16 +142,29 @@ export class Game {
 
   start() {
     this.clock.start();
+    let last = performance.now();
     const loop = () => {
       requestAnimationFrame(loop);
-      this.step(Math.min(this.clock.getDelta(), 1 / 20));
+      const now = performance.now();
+      this._frameMs = now - last; last = now;
+      const dt = Math.min(this.clock.getDelta(), 1 / 20);
+      this.step(dt);
+      this.autoQuality(dt);
     };
     loop();
   }
 
+  // Run fn after `s` seconds of game time. Game time, not wall time, so a
+  // scripted or recorded run replays identically at any frame rate.
+  later(s, fn) { this.timers.push([this.time + s, fn]); }
+
   step(dt, render = true) {
     this.time += dt;
     this.frame++;
+    if (this.timers.length) {
+      const due = this.timers.filter((t) => t[0] <= this.time);
+      if (due.length) { this.timers = this.timers.filter((t) => t[0] > this.time); for (const [, fn] of due) fn(); }
+    }
     const p = this.player;
     this.follow.input(this.input, dt);
     if (this.input.hit('KeyE') && p) this.useInteraction();
@@ -182,7 +229,13 @@ export class Game {
 
   render() {
     if (this.composer) {
-      this.bloom.strength = 0.22 + 0.5 * this.day.night;
+      // Bloom works on linear HDR values, and the daytime sky alone is far
+      // above any usable threshold: measured, even a threshold of 3.5 hazed
+      // noon white. So bloom is a night effect only (lamps, neon, windows).
+      const n = this.day.night;
+      this.bloom.enabled = n > 0.08;
+      this.bloom.threshold = 0.85;
+      this.bloom.strength = 0.6 * Math.min(1, (n - 0.08) / 0.5);
       this.composer.render();
     } else {
       this.renderer.render(this.scene, this.camera);

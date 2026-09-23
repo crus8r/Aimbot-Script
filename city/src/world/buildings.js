@@ -3,7 +3,7 @@
 // hotel neon. Enterable lots get their ground floor from interiors.js.
 import * as THREE from 'three';
 import { box, plane, mat4 } from './build.js';
-import { M, std, facadeMat, shopMat, neonMat, glowMat } from './materials.js';
+import { M, std, facadeMat, shopMat, neonMat, glowMat, wallT, trimT, facadeT, shopAtlasMat, SHOP_NAMES } from './materials.js';
 import { CURB_H } from './layout.js';
 import { rng, shade } from './textures.js';
 
@@ -12,11 +12,14 @@ const FLOOR = 3.4;
 const BAY = 3;
 
 // A vertical wall quad from (ax,az) to (bx,bz), facing `n` (outward).
-export function wallQuad(ax, az, bx, bz, y0, y1, n, { u0 = 0, v0 = 0, tu = 1, tv = 1 } = {}) {
+export function wallQuad(ax, az, bx, bz, y0, y1, n, { u0 = 0, v0 = 0, tu = 1, tv = 1, rect = null } = {}) {
   const len = Math.hypot(bx - ax, bz - az);
   const g = new THREE.BufferGeometry();
   const pos = [ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y1, az];
-  const uv = [u0, v0, u0 + len / tu, v0, u0 + len / tu, v0 + (y1 - y0) / tv, u0, v0 + (y1 - y0) / tv];
+  // `rect` maps the quad onto one atlas cell [u0,v0,u1,v1] instead of tiling.
+  const uv = rect
+    ? [rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]]
+    : [u0, v0, u0 + len / tu, v0, u0 + len / tu, v0 + (y1 - y0) / tv, u0, v0 + (y1 - y0) / tv];
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('normal', new THREE.Float32BufferAttribute([...n, ...n, ...n, ...n], 3));
@@ -47,9 +50,9 @@ export function buildBuilding(game, B, lot, { skipGround = false, noCollider = f
   const base = CURB_H;
   const top = base + Math.max(h, GF + 0.2);
   const style = lot.style;
-  const wallM = M.plaster(lot.wall);
-  const fac = facadeMat(style, lot.wall, lot.trim, lot.glass || '#4f6f80');
-  const trimM = std(lot.trim, { rough: 0.7, key: 'trim' });
+  const wallM = wallT(lot.wall);
+  const fac = facadeT(style, lot.wall, lot.trim, lot.glass || '#4f6f80');
+  const trimM = trimT(lot.trim);
   const uOff = Math.floor(r() * 40), vOff = Math.floor(r() * 40);
   const faces = sides(x0, x1, z0, z1, lot.face);
   const tower = style === 'glass' && h > 45;
@@ -63,7 +66,14 @@ export function buildBuilding(game, B, lot, { skipGround = false, noCollider = f
     // Ground floor.
     if (!skipGround) {
       if (k === 0 && lot.shop) {
-        B.add(wallQuad(ax, az, bx, bz, base, base + GF, f.n, { tu: 9, tv: GF }), shopMat(shade(lot.wall, -0.05), lot.trim, lot.signColor, lot.shop));
+        // A row of shopfronts about 9m each, drawn from the shared atlas.
+        const shops = shopAtlasMat();
+        const n = Math.max(1, Math.round(f.len / 9));
+        for (let i = 0; i < n; i++) {
+          const t0 = i / n, t1 = (i + 1) / n;
+          const name = i === 0 ? (SHOP_NAMES.includes(lot.shop) ? lot.shop : 'CAFE') : SHOP_NAMES[Math.floor(r() * 18)];
+          B.add(wallQuad(ax + (bx - ax) * t0, az + (bz - az) * t0, ax + (bx - ax) * t1, az + (bz - az) * t1, base, base + GF, f.n, { rect: shops.userData.cells[name] }), shops);
+        }
       } else {
         B.add(wallQuad(ax, az, bx, bz, base, base + GF, f.n, { tu: 3, tv: 3 }), wallM);
       }
@@ -107,7 +117,7 @@ export function buildBuilding(game, B, lot, { skipGround = false, noCollider = f
         const px = f.key === 'e' ? x1 : f.key === 'w' ? x0 : (x0 + x1) / 2;
         const pz = f.key === 's' ? z1 : f.key === 'n' ? z0 : (z0 + z1) / 2;
         const depth = style === 'deco' ? 0.22 : 0.12;
-        B.add(box(isX ? depth : len, 0.14, isX ? len : depth), style === 'deco' ? trimM : M.plaster(shade(lot.wall, -0.1)), mat4(px + f.n[0] * depth / 2, y, pz + f.n[2] * depth / 2), { shadow: false });
+        B.add(box(isX ? depth : len, 0.14, isX ? len : depth), style === 'deco' ? trimM : wallT(shade(lot.wall, -0.1)), mat4(px + f.n[0] * depth / 2, y, pz + f.n[2] * depth / 2), { shadow: false });
       }
     }
   }
@@ -153,7 +163,7 @@ function roof(B, x0, x1, z0, z1, top, trimM, r, style) {
   const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
   B.add(plane(w, d, { tile: 3 }), M.roof(), mat4(cx, top, cz), { shadow: false });
   const ph = style === 'tower' ? 1.2 : style === 'deco' ? 1.0 : 0.7, pt = 0.3;
-  const pm = style === 'deco' || style === 'podium' || style === 'tower' ? trimM : M.plaster('#cfc8bb');
+  const pm = style === 'deco' || style === 'podium' || style === 'tower' ? trimM : wallT('#cfc8bb');
   B.add(box(w, ph, pt), pm, mat4(cx, top + ph / 2, z0 + pt / 2));
   B.add(box(w, ph, pt), pm, mat4(cx, top + ph / 2, z1 - pt / 2));
   B.add(box(pt, ph, d - pt * 2), pm, mat4(x0 + pt / 2, top + ph / 2, cz));

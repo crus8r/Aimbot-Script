@@ -25,12 +25,18 @@ export class PlayerController {
     if (input.down('KeyS')) mz -= 1;
     if (input.down('KeyA')) mx -= 1;
     if (input.down('KeyD')) mx += 1;
+    // Touch thumbstick, when present, adds analog movement.
+    const vm = input.virtualMove;
+    if (vm && (vm.x || vm.y)) { mx += vm.x; mz += vm.y; }
     it.dir.set(0, 0, 0).addScaledVector(_f, mz).addScaledVector(_r, mx);
-    const moving = it.dir.lengthSq() > 0;
+    const mag = Math.min(1, Math.hypot(mx, mz));
+    const moving = it.dir.lengthSq() > 0.02;
     if (moving) it.dir.normalize();
     if (input.hit('CapsLock', 'KeyC')) this.walkToggle = !this.walkToggle;
     const sprint = input.down('ShiftLeft', 'ShiftRight');
     it.speed = !moving ? 0 : sprint ? (this.walkToggle ? SPEEDS.run : SPEEDS.sprint) : this.walkToggle ? SPEEDS.run : SPEEDS.walk;
+    // Push the stick all the way to jog.
+    if (vm && (vm.x || vm.y) && !sprint) it.speed = mag > 0.92 ? SPEEDS.run : SPEEDS.walk * Math.max(0.4, mag / 0.9);
     it.face = null;
 
     // Leaving a seat/bed or an emote: any movement key does it.

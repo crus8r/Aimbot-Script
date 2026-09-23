@@ -111,8 +111,8 @@ export const T = {
     const r = rng(13);
     const [c, x] = canvas(256);
     // Terracotta and cream pavers in a wave pattern, a nod to Copacabana.
-    x.fillStyle = '#efe4cf'; x.fillRect(0, 0, 256, 256);
-    x.fillStyle = '#c9785a';
+    x.fillStyle = '#e2d7c3'; x.fillRect(0, 0, 256, 256);
+    x.fillStyle = '#bf6d50';
     for (let y = 0; y < 256; y += 1) {
       const off = Math.sin(y / 256 * Math.PI * 4) * 40;
       x.fillRect(96 + off, y, 64, 1);
@@ -124,7 +124,7 @@ export const T = {
   sand: () => cached('sand', () => {
     const r = rng(14);
     const [c, x] = canvas(512);
-    x.fillStyle = '#e6d3a8'; x.fillRect(0, 0, 512, 512);
+    x.fillStyle = '#dcc79c'; x.fillRect(0, 0, 512, 512);
     noise(x, 512, 512, 30, r);
     blotches(x, 512, 512, 80, 'rgba(200,170,120,0.2)', r, 50);
     blotches(x, 512, 512, 50, 'rgba(255,245,220,0.18)', r, 40);
@@ -236,16 +236,23 @@ export const T = {
 
   // One window bay of a facade: 3m wide x 3.4m floor. Alpha channel of the
   // emissive map marks glass, so night windows can light per bay.
-  facade: (style, wall, trim, glass, seed = 1) => cached(`facade:${style}:${wall}:${trim}:${glass}`, () => {
+  facade: (style, wall, trim, glass, seed = 1, withMask = false) => cached(`facade:${style}:${wall}:${trim}:${glass}:${withMask}`, () => {
     const r = rng(30 + seed);
     const W = 128, H = 144;
     const [c, x] = canvas(W, H);
     const [ec, ex] = canvas(W, H);
     ex.fillStyle = '#000'; ex.fillRect(0, 0, W, H);
+    // Mask for tinting: red = wall, green = trim, black = glass/untinted.
+    const [mc, mx] = canvas(W, H);
+    mx.fillStyle = '#ff0000'; mx.fillRect(0, 0, W, H);
+    const maskRect = (col, a, b, w, h) => { mx.fillStyle = col; mx.fillRect(a, b, w, h); };
     x.fillStyle = wall; x.fillRect(0, 0, W, H);
     noise(x, W, H, 10, r);
     const win = (wx, wy, ww, wh, frame = trim) => {
       x.fillStyle = frame; x.fillRect(wx - 4, wy - 4, ww + 8, wh + 8);
+      maskRect('#00ff00', wx - 4, wy - 4, ww + 8, wh + 8);
+      maskRect('#000000', wx, wy, ww, wh);
+      maskRect('#00ff00', wx + ww / 2 - 1.5, wy, 3, wh);
       const g = x.createLinearGradient(wx, wy, wx + ww, wy + wh);
       g.addColorStop(0, glass); g.addColorStop(0.55, shade(glass, 0.35)); g.addColorStop(1, shade(glass, -0.25));
       x.fillStyle = g; x.fillRect(wx, wy, ww, wh);
@@ -258,10 +265,14 @@ export const T = {
       win(22, 38, 84, 70);
       // Eyebrow shade above the window, with its shadow.
       x.fillStyle = trim; x.fillRect(12, 24, 104, 8);
+      maskRect('#00ff00', 12, 24, 104, 8);
       x.fillStyle = 'rgba(0,0,0,0.18)'; x.fillRect(16, 32, 96, 10);
       x.fillStyle = shade(wall, -0.08); x.fillRect(0, H - 6, W, 6);
     } else if (style === 'glass') {
       x.fillStyle = shade(trim, -0.1); x.fillRect(0, 0, W, H);
+      maskRect('#00ff00', 0, 0, W, H);
+      maskRect('#000000', 4, 10, W - 8, H - 20);
+      maskRect('#00ff00', W / 2 - 2, 0, 4, H); maskRect('#00ff00', 0, H - 10, W, 10);
       const g = x.createLinearGradient(0, 0, W, H);
       g.addColorStop(0, shade(glass, 0.25)); g.addColorStop(0.5, glass); g.addColorStop(1, shade(glass, -0.2));
       x.fillStyle = g; x.fillRect(4, 10, W - 8, H - 20);
@@ -270,15 +281,18 @@ export const T = {
     } else if (style === 'apart') {
       win(30, 34, 68, 78);
       x.fillStyle = shade(wall, -0.15); x.fillRect(26, 112, 76, 6);   // sill
+      maskRect('#ff0000', 26, 112, 76, 6);
       x.fillStyle = 'rgba(0,0,0,0.15)'; x.fillRect(28, 118, 72, 6);
     } else if (style === 'brick') {
       for (let yy = 0; yy < H; yy += 8) for (let xx = (yy / 8) % 2 ? -8 : 0; xx < W; xx += 16) {
         x.fillStyle = shade(wall, (r() - 0.5) * 0.2); x.fillRect(xx + 1, yy + 1, 14, 6);
       }
       win(30, 34, 68, 80, '#e8e0d0');
+      maskRect('#000000', 26, 30, 76, 88);
+      maskRect('#000000', 30, 34, 68, 80);
       x.fillStyle = '#d8d0c0'; x.fillRect(26, 114, 76, 7);
     }
-    return { map: tex(c), emissive: tex(ec, { srgb: true }) };
+    return { map: tex(c), emissive: tex(ec, { srgb: true }), mask: withMask ? tex(mc, { srgb: false }) : null };
   }),
 
   // Ground-floor shopfront: 9m wide x 4.2m tall.
@@ -312,6 +326,26 @@ export const T = {
     return { map: tex(c), emissive: tex(ec) };
   }),
 
+  // Every shopfront in one texture: 4 columns x 8 rows of 512x256 cells,
+  // so all street-level shops share a single material.
+  shopAtlas: (names, colors) => cached(`shopatlas:${names.join(',')}`, () => {
+    const CW = 512, CH = 256, COLS = 4, ROWS = 8;
+    const [c, x] = canvas(CW * COLS, CH * ROWS);
+    const [ec, ex] = canvas(CW * COLS, CH * ROWS);
+    ex.fillStyle = '#000'; ex.fillRect(0, 0, ec.width, ec.height);
+    const cells = {};
+    names.forEach((name, i) => {
+      const col = i % COLS, row = Math.floor(i / COLS);
+      const one = T.shopfront('#d9cfc0', '#3a3f45', colors[i % colors.length], name, i);
+      x.drawImage(one.map.image, col * CW, row * CH, CW, CH);
+      ex.drawImage(one.emissive.image, col * CW, row * CH, CW, CH);
+      // v runs bottom-up in UV space.
+      cells[name] = [col / COLS, 1 - (row + 1) / ROWS, (col + 1) / COLS, 1 - row / ROWS];
+    });
+    const m = tex(c, { repeat: false }), e = tex(ex.canvas, { repeat: false });
+    return { map: m, emissive: e, cells };
+  }),
+
   // Neon or painted sign text.
   sign: (text, color = '#ff4fa0', bg = null, font = 'bold 72px "Trebuchet MS", sans-serif', w = 512, h = 128) => cached(`sign:${text}:${color}:${bg}:${font}:${w}`, () => {
     const [c, x] = canvas(w, h);
@@ -343,7 +377,7 @@ export const T = {
   bark: () => cached('bark', () => {
     const r = rng(22);
     const [c, x] = canvas(64, 256);
-    x.fillStyle = '#8a7a62'; x.fillRect(0, 0, 64, 256);
+    x.fillStyle = '#76684f'; x.fillRect(0, 0, 64, 256);
     for (let y = 0; y < 256; y += 10) { x.fillStyle = 'rgba(60,45,30,0.5)'; x.fillRect(0, y, 64, 3); x.fillStyle = 'rgba(200,185,160,0.3)'; x.fillRect(0, y + 3, 64, 2); }
     noise(x, 64, 256, 30, r);
     return { map: tex(c), normal: normalFrom(c, 2) };

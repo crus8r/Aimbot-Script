@@ -100,6 +100,16 @@
     #hints { display: none; }
     #help dl { font-size: 14px; }
   }
+  #touch { position: fixed; inset: 0; pointer-events: none; z-index: 6; font-family: var(--ui); }
+  #touch .stick { position: absolute; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; background: #ffffff14; border: 2px solid #ffffff40; }
+  #touch .knob { position: absolute; left: 32px; top: 32px; width: 48px; height: 48px; border-radius: 50%; background: #f3e9dccc; }
+  #touch .tbtns { position: absolute; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); display: grid; grid-template-columns: repeat(3, 58px); gap: 10px; pointer-events: auto; }
+  #touch button { width: 58px; height: 58px; border-radius: 50%; border: 1px solid #ffffff33; background: var(--panel); color: var(--cream); font: 700 13px var(--ui); letter-spacing: .04em; }
+  #touch button.act { background: linear-gradient(135deg, var(--coral), var(--pink)); color: #1b0f0a; font-size: 20px; }
+  #touch button.on { background: var(--teal); color: #06201d; }
+  .touch #hints, .touch #lock-hint { display: none; }
+  .touch #minimap { width: 120px; height: 120px; left: 12px; bottom: auto; top: calc(60px + env(safe-area-inset-top, 0px)); }
+  .touch #prompt { bottom: calc(170px + env(safe-area-inset-bottom, 0px)); }
   @media (prefers-reduced-motion: reduce) { #place.flash { animation: none; } }
 </style>
 <canvas id="view" tabindex="0"></canvas>
@@ -137,10 +147,22 @@
   <div id="menu" class="panel">
     <h2>Port Solana</h2>
     <div class="row"><label for="menu-time">Time of day</label><input id="menu-time" type="range" min="0" max="23.99" step="0.05"></div>
+    <div class="row"><label for="menu-quality">Graphics</label><select id="menu-quality"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low (fastest)</option></select></div>
     <div class="row"><label for="menu-speed">Clock</label><select id="menu-speed"><option value="normal">1 minute = 1 hour</option><option value="fast">Fast</option><option value="paused">Stopped</option></select></div>
     <div class="row"><label>Play as</label><div id="menu-models"></div></div>
     <div class="row"><label for="menu-mute">Sound</label><label style="text-transform:none;letter-spacing:0;font-size:15px;color:var(--cream)"><input id="menu-mute" type="checkbox"> Mute voices and sound</label><div id="menu-voices"></div></div>
     <div class="menu-actions"><button type="button" class="btn primary" id="menu-resume">Back to the city</button><button type="button" class="btn" id="menu-restyle">New outfit</button><button type="button" class="btn" id="menu-voicetest">Test my voice</button></div>
+  </div>
+</div>
+<div id="touch" hidden>
+  <div class="stick" hidden><div class="knob"></div></div>
+  <div class="tbtns">
+    <button type="button" data-key="KeyT">Talk</button>
+    <button type="button" data-key="KeyG">Emote</button>
+    <button type="button" data-key="KeyF">Car</button>
+    <button type="button" data-key="ShiftLeft">Run</button>
+    <button type="button" data-key="Space">Jump</button>
+    <button type="button" data-key="KeyE" class="act">E</button>
   </div>
 </div>
 <div id="loading"><div><div class="logo">PORT SOLANA</div><div class="tagline">a city to stage stories in</div><div id="load-bar-wrap"><div id="load-bar"></div></div><div id="load-note">Loading</div></div></div>

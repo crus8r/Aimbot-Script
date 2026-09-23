@@ -356,6 +356,8 @@ export async function buildCity(game) {
   game.setPlayer(player);
   game.follow.yaw = 0;
   game.follow.pitch = 0.18;
+  const { loadModelProps, placeModelProps } = await import('./models.js');
+  placeModelProps(game, await loadModelProps(game));
   // People, fixtures, and the interface.
   const { Crowd } = await import('../game/npcs.js');
   const { registerHooks } = await import('../game/hooks.js');
@@ -365,6 +367,8 @@ export async function buildCity(game) {
   game.crowd.spawn({ scale: people });
   const { HUD } = await import('../ui/hud.js');
   if (document.getElementById('hud')) game.hud = new HUD(game);
+  const { setupTouch } = await import('../ui/touch.js');
+  setupTouch(game);
   try {
     const { Traffic } = await import('../game/traffic.js');
     game.traffic = new Traffic(game);

@@ -7,6 +7,34 @@ import { setSignals } from '../world/roads.js';
 import { CarRenderer, Car, VARIANTS, drive } from './vehicles.js';
 import { approach } from './interact.js';
 import { rng } from '../world/textures.js';
+import { loadGLB } from '../core/loadglb.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// Collapse a model's meshes into one mesh per material, in `base`'s frame.
+// The Ferrari arrives as 90 meshes: 90 draw calls (and 90 more for shadows)
+// for one car. Merged, it is about 17.
+function mergeByMaterial(root, base, skip) {
+  base.updateMatrixWorld(true);
+  const inv = base.matrixWorld.clone().invert();
+  const groups = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh || (skip && skip(o))) return;
+    let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (!groups.has(o.material)) groups.set(o.material, []);
+    groups.get(o.material).push(g);
+  });
+  const out = new THREE.Group();
+  for (const [mat, geos] of groups) {
+    const m = new THREE.Mesh(mergeGeometries(geos), mat);
+    m.castShadow = true;
+    out.add(m);
+  }
+  return out;
+}
 
 const STOP = HALF_ROAD + 3.5;          // stop line distance from the intersection centre
 const DIRS = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
@@ -176,7 +204,7 @@ export class Traffic {
   async spawnHero() {
     const g = this.game;
     try {
-      const gltf = await g.loader.loadAsync('assets/models/ferrari.glb');
+      const gltf = await loadGLB(g.loader, 'assets/models/ferrari.glb');
       const model = gltf.scene;
       model.traverse((o) => {
         if (!o.isMesh) return;
@@ -184,10 +212,22 @@ export class Traffic {
         if (o.material.name === 'Body_Color') { o.material = o.material.clone(); o.material.color.set('#ff2a6a'); o.material.metalness = 0.6; o.material.roughness = 0.25; }
       });
       const box = new THREE.Box3().setFromObject(model);
+      model.updateMatrixWorld(true);
+      const wheels = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'].map((n) => model.getObjectByName(n)).filter(Boolean);
+      const inWheel = (o) => wheels.some((w) => { let p = o; while (p) { if (p === w) return true; p = p.parent; } return false; });
+      const merged = mergeByMaterial(model, model, inWheel);
+      const pivots = wheels.map((w) => {
+        const pivot = new THREE.Group();
+        const rel = new THREE.Matrix4().multiplyMatrices(model.matrixWorld.clone().invert(), w.matrixWorld);
+        rel.decompose(pivot.position, pivot.quaternion, pivot.scale);
+        pivot.add(mergeByMaterial(w, w));
+        merged.add(pivot);
+        return pivot;
+      });
       const car = new Car(this.renderer, 'sedan', null, { noSlot: true });
-      car.hero = model;
-      car.heroWheels = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'].map((n) => model.getObjectByName(n)).filter(Boolean);
-      car.spec = { ...VARIANTS.sedan, L: box.max.z - box.min.z, W: box.max.x - box.min.x, seat: [-0.3, 0.42], r: 0.34 };
+      car.hero = merged;
+      car.heroWheels = pivots;
+      car.spec = { ...VARIANTS.sedan, L: box.max.z - box.min.z, W: box.max.x - box.min.x, seat: [-0.4, 0.3], r: 0.34 };
       car.showDriver = false;
       car.mode = 'parked';
       car.sync = function sync(dt) {
@@ -195,9 +235,9 @@ export class Traffic {
         this.hero.position.copy(this.object.position);
         this.hero.rotation.y = this.heading;
         this.wheelSpin += (this.speed * dt) / this.spec.r;
-        for (const w of this.heroWheels) w.rotation.x = this.wheelSpin;
+        for (const w of this.heroWheels) { w.rotation.order = 'YXZ'; w.rotation.x = this.wheelSpin; }
       };
-      g.scene.add(model);
+      g.scene.add(merged);
       const x = 190 + HALF_ROAD - 1.25, z = -24;
       car.place(x, 0.02, z, Math.PI);
       car.sync(0);
@@ -370,7 +410,7 @@ export class Traffic {
     const g = this.game;
     if (!g.audio?.ctx || car.object.position.distanceTo(g.camera.position) > 40) return;
     g.audio.blip(415, 0.35, 0.18);
-    setTimeout(() => g.audio.blip(415, 0.25, 0.18), 420);
+    g.later(0.42, () => g.audio.blip(415, 0.25, 0.18));
   }
 
   engineSound(car) {

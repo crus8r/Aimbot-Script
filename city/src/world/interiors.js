@@ -4,7 +4,7 @@
 // the characters can see and walk in without a loading screen.
 import * as THREE from 'three';
 import { box, plane, mat4 } from './build.js';
-import { M, std, glowMat, neonMat, nightLit } from './materials.js';
+import { M, std, glowMat, neonMat, nightLit, wallT } from './materials.js';
 import { CURB_H } from './layout.js';
 import { buildBuilding, GF } from './buildings.js';
 import { F } from './furniture.js';
@@ -103,10 +103,12 @@ export class Room {
   put(def, lx, lz, rot = 0, { ly = 0 } = {}) {
     const c = Math.cos(rot), s = Math.sin(rot);
     const loc = (x, z) => [lx + x * c + z * s, lz - x * s + z * c];
+    // Furniture sits under a ceiling that already shades it from the sun,
+    // and room lights cast no shadows: casting would only cost a draw each.
     for (const p of def.parts) {
       const g = p.geo.clone();
       if (p.m) g.applyMatrix4(p.m);
-      this.B.add(g, p.material, this.m(lx, ly, lz, rot));
+      this.B.add(g, p.material, this.m(lx, ly, lz, rot), { shadow: false });
     }
     for (const col of def.cols || []) {
       const [x, z] = loc(col.x, col.z);
@@ -199,7 +201,7 @@ export class Room {
       [lot.x0, rx0, lot.z0, lot.z1], [rx1, lot.x1, lot.z0, lot.z1],
       [rx0, rx1, lot.z0, rz0], [rx0, rx1, rz1, lot.z1],
     ];
-    const outer = M.plaster(lot.wall);
+    const outer = wallT(lot.wall);
     for (const [x0, x1, z0, z1] of rects) {
       if (x1 - x0 < 0.05 || z1 - z0 < 0.05) continue;
       this.B.add(box(x1 - x0, GF, z1 - z0, { tile: 3 }), outer, mat4((x0 + x1) / 2, CURB_H + GF / 2, (z0 + z1) / 2));
@@ -208,7 +210,7 @@ export class Room {
     // Upper storeys and the slab between them and the room.
     buildBuilding(this.game, this.B, lot, { skipGround: true, noCollider: true });
     this.game.physics.add({ x: (lot.x0 + lot.x1) / 2, z: (lot.z0 + lot.z1) / 2, hx: (lot.x1 - lot.x0) / 2, hz: (lot.z1 - lot.z0) / 2, y0: CURB_H + this.ceil, y1: CURB_H + Math.max(lot.h, GF + 0.2), tag: 'building' });
-    this.B.add(box(lot.x1 - lot.x0, 0.3, lot.z1 - lot.z0), M.plaster(lot.wall), mat4((lot.x0 + lot.x1) / 2, CURB_H + GF - 0.15, (lot.z0 + lot.z1) / 2));
+    this.B.add(box(lot.x1 - lot.x0, 0.3, lot.z1 - lot.z0), wallT(lot.wall), mat4((lot.x0 + lot.x1) / 2, CURB_H + GF - 0.15, (lot.z0 + lot.z1) / 2));
   }
 }
 
@@ -352,7 +354,10 @@ const LAYOUTS = {
     room.put(F.mirror(), -W / 2 + 0.2, -D / 2 + 2.5, Math.PI / 2);
     room.put(F.counter({ w: 2.2, front: '#f4c7c3', top: '#ffffff' }), W / 2 - 2.2, -D / 2 + 1.4);
     room.put(F.plant(), W / 2 - 0.6, D / 2 - 0.7);
-    room.put(F.sofa({ w: 1.6, color: '#e3d4f2' }), 1.5, D / 2 - 1.2, Math.PI);
+    // Seats only: the velvet sofa model (models.js) is what you see here.
+    const sofa = F.sofa({ w: 2.2, color: '#e3d4f2' });
+    sofa.parts = [];
+    room.put(sofa, 1.5, D / 2 - 1.2, Math.PI);
     room.mannequins = [[-1.6, D / 2 - 1.2, Math.PI], [3.2, D / 2 - 1.2, Math.PI], [-W / 2 + 1, -D / 2 + 1, Math.PI / 4]];
     for (const [x, z] of room.mannequins) room.box(x, 0, z, 0.8, 0.2, 0.8, M.plaster('#ffffff'), { collide: true });
     room.light(-2, 3, 0, { color: '#fff6ea', intensity: 12 }); room.light(3, 3, 0, { color: '#fff6ea', intensity: 12 });

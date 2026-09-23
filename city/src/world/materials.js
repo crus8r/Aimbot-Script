@@ -43,6 +43,59 @@ export function nightLit(m, { windows = false, floor = 0.0, strength = 1.0 } = {
   return m;
 }
 
+// Tinting: base colour from the per-vertex `tint` (and `tint2` for trim),
+// written by Batcher.add from a {isTint} wrapper. A mask texture (R = wall,
+// G = trim) decides which parts of a facade texture take which tint.
+function tintShader(m, { mask = false, key }) {
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = (sh, r) => {
+    prev?.(sh, r);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 tint; attribute vec3 tint2; varying vec3 vTint; varying vec3 vTint2;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTint = tint; vTint2 = tint2;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vTint; varying vec3 vTint2;${mask ? '\nuniform sampler2D tintMask;' : ''}`)
+      .replace('#include <map_fragment>', mask
+        ? `#include <map_fragment>
+          { vec4 mk = texture2D(tintMask, vMapUv);
+            vec3 tc = mix(vec3(1.0), vTint, mk.r) * mix(vec3(1.0), vTint2, mk.g);
+            diffuseColor.rgb *= tc; }`
+        : '#include <map_fragment>\n diffuseColor.rgb *= vTint;');
+    if (mask) sh.uniforms.tintMask = { value: m.userData.tintMask };
+  };
+  const prevKey = m.customProgramCacheKey?.bind(m);
+  m.customProgramCacheKey = () => `tint:${mask}:${key}:${prevKey ? prevKey() : ''}`;
+  return m;
+}
+
+const tinted = (material, c1, c2) => ({ isTint: true, material, tint: new THREE.Color(c1), tint2: new THREE.Color(c2 || c1) });
+
+export function wallT(color) {
+  return tinted(get('wallT', () => tintShader(new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.92, normalMap: T.stucco().normal }), { key: 'wall' })), color);
+}
+
+export function trimT(color) {
+  return tinted(get('trimT', () => tintShader(new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.7 }), { key: 'trim' })), color);
+}
+
+// One material per facade style (and glass tint): walls and trims tinted.
+export function facadeT(style, wall, trim, glass) {
+  const g = style === 'glass' ? glass : '#5f8fa0';
+  const mat = get(`facadeT:${style}:${g}`, () => {
+    const t = T.facade(style, '#ffffff', '#ffffff', g, 1, true);
+    const m = new THREE.MeshStandardMaterial({
+      map: t.map, emissiveMap: t.emissive, emissive: new THREE.Color('#ffffff'), emissiveIntensity: 1.6,
+      roughness: style === 'glass' ? 0.25 : 0.85, metalness: style === 'glass' ? 0.35 : 0,
+      normalMap: style === 'glass' ? null : T.stucco().normal,
+    });
+    if (m.normalMap) m.normalScale.set(0.35, 0.35);
+    m.userData.tintMask = t.mask;
+    nightLit(m, { windows: true, strength: style === 'glass' ? 0.9 : 1.2 });
+    return tintShader(m, { mask: true, key: `facade:${style}` });
+  });
+  return tinted(mat, wall, trim);
+}
+
 export function facadeMat(style, wall, trim, glass) {
   return get(`facade:${style}:${wall}:${trim}:${glass}`, () => {
     const t = T.facade(style, wall, trim, glass);
@@ -60,6 +113,18 @@ export function shopMat(wall, trim, sign, text) {
   return get(`shop:${wall}:${trim}:${sign}:${text}`, () => {
     const t = T.shopfront(wall, trim, sign, text);
     const m = new THREE.MeshStandardMaterial({ map: t.map, emissiveMap: t.emissive, emissive: new THREE.Color('#ffe2b8'), emissiveIntensity: 1.4, roughness: 0.7 });
+    return nightLit(m, { floor: 0.12 });
+  });
+}
+
+export const SHOP_NAMES = ['CAFE', 'BAKERY', 'PHARMACY', 'BOOKS', 'FLOWERS', 'SURF SHOP', 'PIZZA', 'LAUNDRY', 'TACOS', 'SUSHI', 'GELATO', 'RECORDS', 'BARBER', 'NAILS', 'DELI', 'TATTOO', 'HARDWARE', 'VINTAGE', 'LOBBY', 'MARKET', 'BANK', 'GYM', 'HOTEL', 'DINER'];
+const SHOP_COLORS = ['#2a9d8f', '#e76f51', '#264653', '#8338ec', '#d62828', '#1d3557', '#6a994e', '#bc6c25'];
+
+export function shopAtlasMat() {
+  return get('shopAtlas', () => {
+    const t = T.shopAtlas(SHOP_NAMES, SHOP_COLORS);
+    const m = new THREE.MeshStandardMaterial({ map: t.map, emissiveMap: t.emissive, emissive: new THREE.Color('#ffe2b8'), emissiveIntensity: 1.4, roughness: 0.7 });
+    m.userData.cells = t.cells;
     return nightLit(m, { floor: 0.12 });
   });
 }

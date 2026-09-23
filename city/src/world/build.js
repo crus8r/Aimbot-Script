@@ -44,16 +44,29 @@ export function mat4(x, y, z, ry = 0, sx = 1, sy = 1, sz = 1, rx = 0, rz = 0) {
 }
 
 export class Batcher {
-  constructor(scene, chunk = 76) {
+  // 152m chunks: two blocks. Measured: 76m chunks gave 1317 city meshes.
+  constructor(scene, chunk = 152) {
     this.scene = scene;
     this.chunk = chunk;
     this.groups = new Map();
     this.meshes = [];
   }
 
-  // Adds a geometry (consumed) under a material; `m` places it.
+  // Adds a geometry (consumed) under a material; `m` places it. A tinted
+  // material ({isTint, material, tint, tint2}) stamps its colours into the
+  // vertices, so a hundred differently-coloured buildings share one material
+  // (and one draw call per chunk) instead of one each.
   add(geo, material, m, { shadow = true, receive = true, chunkKey } = {}) {
     if (m) geo.applyMatrix4(m);
+    if (material.isTint) {
+      const n = geo.attributes.position.count;
+      const a = new Float32Array(n * 3), b = new Float32Array(n * 3);
+      const t1 = material.tint, t2 = material.tint2 || material.tint;
+      for (let i = 0; i < n; i++) { a[i * 3] = t1.r; a[i * 3 + 1] = t1.g; a[i * 3 + 2] = t1.b; b[i * 3] = t2.r; b[i * 3 + 1] = t2.g; b[i * 3 + 2] = t2.b; }
+      geo.setAttribute('tint', new THREE.BufferAttribute(a, 3));
+      geo.setAttribute('tint2', new THREE.BufferAttribute(b, 3));
+      material = material.material;
+    }
     // Chunk by the piece's centre.
     let ck = chunkKey;
     if (ck === undefined) {
@@ -71,7 +84,7 @@ export class Batcher {
     for (const g of this.groups.values()) {
       const norm = g.geos.map((x) => (x.index ? x.toNonIndexed() : x));
       for (const x of norm) {
-        for (const k of Object.keys(x.attributes)) if (!['position', 'normal', 'uv'].includes(k)) x.deleteAttribute(k);
+        for (const k of Object.keys(x.attributes)) if (!['position', 'normal', 'uv', 'tint', 'tint2'].includes(k)) x.deleteAttribute(k);
         if (!x.attributes.uv) x.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(x.attributes.position.count * 2), 2));
       }
       const merged = mergeGeometries(norm, false);

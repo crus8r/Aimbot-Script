@@ -15,7 +15,15 @@ export function makeSeat({ x, y = 0, z, heading, h = 0.46, kind = 'chair', loop,
     lieLoop: kind === 'lounger' ? 'lie' : 'lie',
     occupant: null,
   };
-  seat.standPoint = new THREE.Vector3(x + Math.sin(heading) * STAND_AT_SEAT, y, z + Math.cos(heading) * STAND_AT_SEAT);
+  // Stools, booth benches, piano benches and desk chairs have a counter or
+  // table right in front: there is no room to stand there and sit back. For
+  // those, walk up beside the seat and hop on (a short slide + crossfade).
+  seat.hop = ['stool', 'piano', 'desk'].includes(kind) || !!(opts && opts.hands === 'table');
+  const f = [Math.sin(heading), Math.cos(heading)];
+  const right = [-f[1], f[0]];
+  seat.standPoint = seat.hop
+    ? new THREE.Vector3(x + right[0] * 0.62 - f[0] * 0.1, y, z + right[1] * 0.62 - f[1] * 0.1)
+    : new THREE.Vector3(x + f[0] * STAND_AT_SEAT, y, z + f[1] * STAND_AT_SEAT);
   seat.label = label || { chair: 'Sit', stool: 'Sit', sofa: 'Sit', bench: 'Sit', bed: 'Sit on bed', lounger: 'Sit', desk: 'Sit at desk', piano: 'Play piano', toilet: 'Sit', ground: 'Sit' }[kind] || 'Sit';
   return seat;
 }
@@ -41,7 +49,7 @@ export function sitActor(actor, seat, game, then) {
   if (actor.state === 'lying' && actor.seat === seat) return actor.getUp(then);
   if (actor.state !== 'free' || seat.occupant) return false;
   seat.occupant = actor;
-  approach(actor, seat.standPoint, seat.heading, () => {
+  approach(actor, seat.standPoint, seat.hop ? seat.heading - Math.PI / 2 : seat.heading, () => {
     const ok = actor.sit(seat, () => {
       seat.onSit?.(actor, game);
       then?.();
