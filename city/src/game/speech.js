@@ -115,6 +115,7 @@ class Bubbles {
     this.list = [];
     this.layer = document.getElementById('bubbles') || document.body;
     this._v = new THREE.Vector3();
+    this.maxDist = 32;             // metres; a top-down game sets it wider
   }
 
   show(actor, text, life) {
@@ -125,7 +126,8 @@ class Bubbles {
     el.style.opacity = '0';          // until the first frame positions it
     if (actor.isPlayer) el.classList.add('you');
     const name = document.createElement('b');
-    name.textContent = actor.isPlayer ? 'You' : actor.name;
+    // Sims are all yours: their bubbles carry their own names.
+    name.textContent = actor.isPlayer && !actor.sim ? 'You' : actor.name;
     const body = document.createElement('span');
     el.append(name, body);
     this.layer.appendChild(el);
@@ -135,7 +137,7 @@ class Bubbles {
         // Reveal whole words up to character i, so the bubble reads in step
         // with the voice.
         const end = i >= text.length ? text.length : Math.max(i, text.indexOf(' ', i + 1) === -1 ? text.length : text.indexOf(' ', i + 1));
-        if (end !== b.shown) { b.shown = end; body.textContent = text.slice(0, end); }
+        if (end !== b.shown) { b.shown = end; body.textContent = text.slice(0, end); b.w = 0; }
       },
       hold: (s) => { b.life = Math.max(b.life, b.t + s); },
       kill: () => { b.life = 0; },
@@ -154,13 +156,32 @@ class Bubbles {
       v.y += 0.42;
       const d = v.distanceTo(cam.position);
       v.project(cam);
-      const visible = v.z < 1 && d < 32 && b.actor.object.visible !== false;
-      const fade = Math.min(1, (b.life - b.t) / 0.4) * Math.min(1, (32 - d) / 8);
+      const visible = v.z < 1 && d < this.maxDist && b.actor.object.visible !== false;
+      const fade = Math.min(1, (b.life - b.t) / 0.4) * Math.min(1, (this.maxDist - d) / 8);
       b.el.style.opacity = visible ? Math.max(0, fade).toFixed(2) : '0';
+      b._xy = null;
       if (visible) {
-        const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h;
         const s = THREE.MathUtils.clamp(9 / d, 0.62, 1.1);
+        // Keep the whole bubble on screen, not just its tail.
+        const half = ((b.w || (b.w = b.el.offsetWidth)) * s) / 2 + 6;
+        const x = THREE.MathUtils.clamp((v.x * 0.5 + 0.5) * w, half, Math.max(half, w - half)), y = (-v.y * 0.5 + 0.5) * h;
         b.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%) scale(${s.toFixed(3)})`;
+        b._xy = [x, y, s];
+      }
+    }
+    // Several people talking at once: nudge overlapping bubbles upward so
+    // every line stays readable.
+    const shown = this.list.filter((b) => b._xy).sort((a, b) => b._xy[1] - a._xy[1]);
+    for (let i = 0; i < shown.length; i++) {
+      const a = shown[i];
+      const ra = a.el.getBoundingClientRect();
+      for (let j = 0; j < i; j++) {
+        const rb = shown[j].el.getBoundingClientRect();
+        if (ra.right > rb.left && ra.left < rb.right && ra.bottom > rb.top && ra.top < rb.bottom) {
+          a._xy[1] -= ra.bottom - rb.top + 4;
+          a.el.style.transform = `translate(${a._xy[0].toFixed(1)}px, ${a._xy[1].toFixed(1)}px) translate(-50%, -100%) scale(${a._xy[2].toFixed(3)})`;
+          break;
+        }
       }
     }
     this.list = this.list.filter((b) => {

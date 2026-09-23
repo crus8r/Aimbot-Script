@@ -20,6 +20,14 @@ export function serve(port = 0) {
         res.writeHead(404); res.end('not found'); return;
       }
       res.writeHead(200, { 'content-type': types[path.extname(file)] || 'application/octet-stream' });
+      // Pages are written as the artifact host expects (no skeleton); wrap
+      // them the way it does, so local runs render in standards mode too.
+      if (file.endsWith('.html')) {
+        const html = fs.readFileSync(file, 'utf8');
+        if (/^\s*<!doctype/i.test(html)) { res.end(html); return; }
+        res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>${html}</body></html>`);
+        return;
+      }
       fs.createReadStream(file).pipe(res);
     });
     server.listen(port, '127.0.0.1', () => resolve(server));

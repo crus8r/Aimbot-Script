@@ -8,7 +8,8 @@
     "build": "node tools/build.mjs",
     "serve": "node tools/serve.mjs",
     "shots": "node tools/scenarios.mjs",
-    "lab": "node tools/lab-shot.mjs"
+    "lab": "node tools/lab-shot.mjs",
+    "homes": "node tools/homes-shots.mjs"
   },
   "dependencies": {
     "three": "^0.186.0"

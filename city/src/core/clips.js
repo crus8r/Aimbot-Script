@@ -361,6 +361,9 @@ export const CLIPS = {
       delete s.ik.RightArm;
       s.aim.RightArm = [-0.25, -1, 0.3];
       s.aim.RightForeArm = v3([-0.1, -0.4, 1], [-0.5, 0.1, 1], r);
+      // sitSpec has no twist table: without this, anyone who spoke while
+      // seated threw here (never exercised in the city until homes).
+      s.twist = s.twist || {};
       s.twist.RightForeArm = -20 - 40 * r;
       s.hand.right = { curl: 0.2 - 0.15 * r, spread: r };
       s.rot.Head = [3 * S(t * TAU / 0.75), 6 * S(t * 0.8), 3 * S(t * 0.6)];

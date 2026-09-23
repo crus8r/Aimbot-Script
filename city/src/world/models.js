@@ -15,9 +15,9 @@ const FILES = {
   sofa: { file: 'GlamVelvetSofa', size: { x: 2.2 } },
 };
 
-export async function loadModelProps(game) {
+export async function loadModelProps(game, keys = Object.keys(FILES)) {
   const out = {};
-  await Promise.all(Object.entries(FILES).map(async ([k, def]) => {
+  await Promise.all(Object.entries(FILES).filter(([k]) => keys.includes(k)).map(async ([k, def]) => {
     try {
       const g = await loadGLB(game.loader, `assets/props/${def.file}.glb`);
       const root = g.scene;

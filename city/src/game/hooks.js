@@ -42,30 +42,8 @@ const HOOKS = {
     game.scene.add(screen);
     const tv = { on: room.kind === 'apartment', channel: 0, t: 0 };
     const draw = () => {
-      const x = c.getContext('2d');
       tv.t += 0.2;
-      if (tv.channel === 0) {
-        // News: anchor desk, ticker.
-        x.fillStyle = '#1d3557'; x.fillRect(0, 0, 256, 144);
-        x.fillStyle = '#e63946'; x.fillRect(0, 112, 256, 32);
-        x.fillStyle = '#f1faee'; x.font = 'bold 14px sans-serif';
-        const msg = 'PORT SOLANA NEWS  ·  SURF ADVISORY FOR SOLANA BEACH  ·  NEON LOUNGE ADDS LIVE PIANO  ·  DINER PIE SHORTAGE ENTERS THIRD DAY  ·  ';
-        x.fillText(msg + msg, -((tv.t * 40) % 900), 133);
-        x.fillStyle = '#a8dadc'; x.fillRect(96, 30, 64, 70);
-        x.fillStyle = '#e9c46a'; x.beginPath(); x.arc(128, 48, 16, 0, 7); x.fill();
-        x.fillStyle = '#264653'; x.fillRect(40, 92, 176, 20);
-      } else if (tv.channel === 1) {
-        // Cartoon: bouncing shapes.
-        x.fillStyle = '#8ecae6'; x.fillRect(0, 0, 256, 144);
-        x.fillStyle = '#90be6d'; x.fillRect(0, 110, 256, 34);
-        const b = Math.abs(Math.sin(tv.t * 2)) * 60;
-        x.fillStyle = '#ffb703'; x.beginPath(); x.arc(80 + Math.sin(tv.t) * 40, 100 - b, 18, 0, 7); x.fill();
-        x.fillStyle = '#fb8500'; x.fillRect(170 + Math.cos(tv.t * 1.3) * 30, 80, 30, 30);
-      } else {
-        const cols = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
-        cols.forEach((col, i) => { x.fillStyle = col; x.fillRect((i * 256) / 7, 0, 256 / 7 + 1, 110); });
-        x.fillStyle = '#111'; x.fillRect(0, 110, 256, 34);
-      }
+      drawTV(c.getContext('2d'), tv);
       tex.needsUpdate = true;
     };
     game.updaters.push((dt) => {
@@ -148,6 +126,32 @@ const HOOKS = {
     game.interactions.add({ kind: 'use', pos: front(h, 0.5), radius: 1.4, label: () => h.label || 'Use', act: (a) => { a.playLayer('use', { mask: 'armR', time: 1.2 }); game.audio?.blip(990, 0.05); } });
   },
 };
+
+// One frame of whatever the TV is showing: news, a cartoon, or bars.
+export function drawTV(x, tv) {
+  if (tv.channel === 0) {
+    // News: anchor desk, ticker.
+    x.fillStyle = '#1d3557'; x.fillRect(0, 0, 256, 144);
+    x.fillStyle = '#e63946'; x.fillRect(0, 112, 256, 32);
+    x.fillStyle = '#f1faee'; x.font = 'bold 14px sans-serif';
+    const msg = tv.ticker || 'PORT SOLANA NEWS  ·  SURF ADVISORY FOR SOLANA BEACH  ·  NEON LOUNGE ADDS LIVE PIANO  ·  DINER PIE SHORTAGE ENTERS THIRD DAY  ·  ';
+    x.fillText(msg + msg, -((tv.t * 40) % 900), 133);
+    x.fillStyle = '#a8dadc'; x.fillRect(96, 30, 64, 70);
+    x.fillStyle = '#e9c46a'; x.beginPath(); x.arc(128, 48, 16, 0, 7); x.fill();
+    x.fillStyle = '#264653'; x.fillRect(40, 92, 176, 20);
+  } else if (tv.channel === 1) {
+    // Cartoon: bouncing shapes.
+    x.fillStyle = '#8ecae6'; x.fillRect(0, 0, 256, 144);
+    x.fillStyle = '#90be6d'; x.fillRect(0, 110, 256, 34);
+    const b = Math.abs(Math.sin(tv.t * 2)) * 60;
+    x.fillStyle = '#ffb703'; x.beginPath(); x.arc(80 + Math.sin(tv.t) * 40, 100 - b, 18, 0, 7); x.fill();
+    x.fillStyle = '#fb8500'; x.fillRect(170 + Math.cos(tv.t * 1.3) * 30, 80, 30, 30);
+  } else {
+    const cols = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
+    cols.forEach((col, i) => { x.fillStyle = col; x.fillRect((i * 256) / 7, 0, 256 / 7 + 1, 110); });
+    x.fillStyle = '#111'; x.fillRect(0, 110, 256, 34);
+  }
+}
 
 // Held drinks follow the right hand; E drinks, Q drops.
 export function giveDrink(game, actor, kind = 'can') {

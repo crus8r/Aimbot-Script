@@ -77,6 +77,12 @@ export class GameAudio {
     for (const s of this.sources) s.update?.(p);
   }
 
+  // Stop and forget a source (its furniture was sold or moved).
+  remove(s) {
+    s.stop?.();
+    this.sources = this.sources.filter((x) => x !== s);
+  }
+
   // A positional music source: the jukebox tune.
   jukebox(pos, { on = false, room = null } = {}) {
     const self = this;

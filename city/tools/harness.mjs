@@ -19,7 +19,7 @@ export async function withPage(query, fn, { width = 1280, height = 720, rebuild 
   page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
   page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}\n${e.stack}`));
   try {
-    page.on('response', (r) => { if (r.status() >= 400) logs.push(`[http ${r.status()}] ${r.url()}`); });
+    page.on('response', (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) logs.push(`[http ${r.status()}] ${r.url()}`); });
     await page.goto(`http://127.0.0.1:${port}/${query}`);
     return await fn(page, logs);
   } finally {

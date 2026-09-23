@@ -139,6 +139,62 @@ plain-JS Draco decoder, not WASM, in case the viewer forbids compiling it.
 - Sitting on the left edge of a bed isn't supported (lie_down turns the head
   to the character's left).
 
+## Sunny Lane: the life-sim
+
+`homes.html` is a second game on the same engine: a street of three preset
+houses (Starter Cottage, Family House, Beach Bungalow) with a household of
+three who live in whichever one you pick.
+
+Live build: https://claude.ai/artifact/XJ7aB3S2jg1ZUynM7NcckL
+
+- **Live**: click a thing for what you can do with it (pie menu), click the
+  floor to walk. Six needs (hunger, energy, bladder, hygiene, fun, social)
+  drift down; idle sims pick something that helps, weighted by how badly
+  they need it and how far it is. Beds, sofas, TV, fridge, stove, shower,
+  bath, toilet, piano, computer, stereo, grill, loungers, mailbox, wardrobe.
+  Sims chat, joke, wave and dance with each other. **Talk** (T) makes the
+  selected sim say what you type in one of the four voices; say a
+  housemate's name and they answer.
+- **Buy**: ~80 catalogue pieces in nine categories (indoor and yard), with
+  rendered thumbnails. A ghost follows the pointer, snaps to a 25cm grid,
+  turns in quarter (or eighth) turns, and says why it won't fit (a wall, a
+  doorway, another piece, the lot line). Paintings snap to walls, lamps and
+  vases to table tops. Move, turn, duplicate, sell, undo.
+- **Build**: paint any wall side (or a whole room), lay floors, change the
+  siding and roof, cut doors, windows and archways, or wall them up.
+- Walls cut away in front of rooms (or all up, or all down), roofs toggle,
+  trees in front of the house fade out. Day and night, with room lights.
+- Lots save in the browser; **Export** gives a lot as JSON (plan, finishes,
+  every piece and where it is), which is also what a studio "set" will be.
+
+How it is built (`src/homes/`):
+
+```
+house.js     rooms (rectangles) -> wall runs with two paintable sides, doors,
+             windows, floors, hip roofs, cutaway; merged into one mesh per finish
+plans.js     the three preset houses, their furnishing and yards; the household
+catalog.js   the buy catalogue (furniture.js, props.js, models + new yard pieces)
+items.js     placed pieces: colliders, seats, TVs/lamps/music, validity, snapping,
+             one merged mesh per material for everything placed
+nav.js       25cm occupancy grid from the physics boxes, A*, string pulling
+sims.js      Sim (needs, queue) and Task: steps go/sit/lie/stand/anim/wait/say
+actions.js   what each thing offers, socials, free will, typed-line replies
+buildmode.js buy and build tools, undo/redo
+view.js      orbit camera, mouse/keyboard/touch gestures
+ui.js        HUD, pie menu, catalogue, swatches, chat, menu
+```
+
+Tasks are data (`go -> sit -> wait`), so the studio can build the same lists
+from a screenplay line. Checked headlessly with `node tools/homes-shots.mjs
+<tour|actions|actions2|presets|persist|showcase|phone>`: every action on all
+three lots completes, every preset piece passes the buy rules, every seat is
+reachable, and saving, moving house, export/import and undo round-trip.
+
+Measured: merging placed furniture and walls per material took the Family
+House from 1041 draw calls to 531. Also fixed on the way: a seated character
+who spoke crashed the `sit_talk` clip (it wrote to a `twist` table the sit
+pose never makes), and bubbles now stack instead of covering each other.
+
 ## Next: the studio
 
 The city is the stage. The Playhouse plan (see git history on the

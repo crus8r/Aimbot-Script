@@ -39,6 +39,6 @@ export async function build({ minify = true, entries = ['main'] } = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dev = process.argv.includes('--dev');
   const extra = process.argv.filter((a) => a.startsWith('--entry=')).map((a) => a.slice(8));
-  const ms = await build({ minify: !dev, entries: ['main', ...extra] });
+  const ms = await build({ minify: !dev, entries: ['main', 'homes', ...extra] });
   console.log(`built dist/ in ${ms}ms`);
 }
