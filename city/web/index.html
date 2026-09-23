@@ -1,0 +1,147 @@
+<title>Port Solana</title>
+<meta name="description" content="An open-world city sandbox: walk, sit, talk, and meet the locals.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Monoton&family=Rajdhani:wght@500;600;700&family=Karla:wght@400;600&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --night: #0d0f14;
+    --panel: rgba(13, 15, 20, 0.74);
+    --panel-edge: rgba(255, 255, 255, 0.08);
+    --cream: #f3e9dc;
+    --muted: #a9a39a;
+    --coral: #ff7a59;
+    --pink: #ff4fa0;
+    --teal: #2ec4b6;
+    --ui: 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
+    --body: 'Karla', 'Segoe UI', system-ui, sans-serif;
+  }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--night); color: var(--cream); font-family: var(--body); }
+  #view { display: block; width: 100%; height: 100%; outline: none; }
+
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 120%, #ff7a5933 0%, transparent 60%), linear-gradient(#1a1030, var(--night)); z-index: 20; transition: opacity .7s; }
+  .loaded #loading { opacity: 0; pointer-events: none; }
+  .logo { font-family: 'Monoton', var(--ui); font-size: clamp(36px, 8vw, 84px); letter-spacing: .04em; color: var(--pink); text-shadow: 0 0 18px #ff4fa088, 0 0 42px #ff7a5955; line-height: 1; text-align: center; }
+  .tagline { font-family: var(--ui); letter-spacing: .3em; text-transform: uppercase; color: var(--muted); text-align: center; margin-top: 10px; font-size: 13px; }
+  #load-bar-wrap { width: min(340px, 72vw); height: 3px; background: #2a2d36; margin: 28px auto 10px; border-radius: 2px; overflow: hidden; }
+  #load-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--coral), var(--pink)); transition: width .3s; }
+  #load-note { font-family: var(--ui); font-size: 14px; color: var(--muted); text-align: center; }
+
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; font-family: var(--ui); }
+  #hud button, #hud input, #hud select, #hud form, #hud .panel, #hud label { pointer-events: auto; }
+  kbd { font-family: var(--ui); font-weight: 700; display: inline-grid; place-items: center; min-width: 1.6em; height: 1.6em; padding: 0 .35em; border-radius: 5px; background: var(--cream); color: var(--night); font-size: 13px; box-shadow: 0 2px 0 #0006; }
+
+  #bubbles { position: absolute; inset: 0; overflow: hidden; }
+  .bubble { position: absolute; left: 0; top: 0; max-width: 280px; padding: 8px 12px 9px; border-radius: 14px; background: #fffaf2; color: #1b1d22; font: 600 15px/1.3 var(--body); box-shadow: 0 6px 18px #0005; transform-origin: 50% 100%; transition: opacity .2s; white-space: normal; }
+  .bubble::after { content: ''; position: absolute; left: 50%; bottom: -7px; margin-left: -7px; border: 7px solid transparent; border-bottom: 0; border-top-color: #fffaf2; }
+  .bubble b { display: block; font: 700 11px/1 var(--ui); letter-spacing: .12em; text-transform: uppercase; color: #8a6f5a; margin-bottom: 3px; }
+  .bubble.you { background: var(--coral); color: #1b0f0a; }
+  .bubble.you::after { border-top-color: var(--coral); }
+  .bubble.you b { color: #4a1f10; }
+
+  #place { position: absolute; left: 24px; top: calc(20px + env(safe-area-inset-top, 0px)); font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; text-shadow: 0 2px 10px #000a; opacity: .92; }
+  #place.flash { animation: flash 3.2s ease; }
+  @keyframes flash { 0% { opacity: 0; transform: translateY(-6px); } 12% { opacity: 1; transform: none; } 70% { opacity: 1; } 100% { opacity: .55; } }
+  #topright { position: absolute; right: 24px; top: calc(18px + env(safe-area-inset-top, 0px)); text-align: right; text-shadow: 0 2px 8px #000a; }
+  #clock { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+  #speed { font-size: 22px; font-weight: 700; color: var(--teal); font-variant-numeric: tabular-nums; }
+  #minimap { position: absolute; left: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); width: 190px; height: 190px; border-radius: 50%; box-shadow: 0 0 0 3px #0d0f14cc, 0 0 0 5px #ff7a5955, 0 10px 30px #0008; background: #1b2230; }
+  #prompt { position: absolute; left: 50%; bottom: calc(110px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: flex; gap: 10px; align-items: center; padding: 9px 16px 9px 10px; border-radius: 999px; background: var(--panel); border: 1px solid var(--panel-edge); font-size: 18px; font-weight: 600; letter-spacing: .02em; backdrop-filter: blur(6px); }
+  #hints { position: absolute; right: 24px; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); font-size: 14px; font-weight: 600; color: var(--muted); letter-spacing: .05em; text-shadow: 0 1px 4px #000c; }
+  #lock-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 10px 18px; border-radius: 999px; background: var(--panel); border: 1px solid var(--panel-edge); font-size: 16px; font-weight: 600; pointer-events: auto; cursor: pointer; opacity: .9; }
+  .locked #lock-hint, .chat-open #lock-hint, .menu-open #lock-hint, .looked #lock-hint, .test #lock-hint { display: none; }
+
+  #chat-form { position: absolute; left: 50%; bottom: calc(28px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(620px, calc(100vw - 32px)); padding: 14px; border-radius: 16px; background: var(--panel); border: 1px solid var(--panel-edge); backdrop-filter: blur(8px); display: none; box-sizing: border-box; }
+  .chat-open #chat-form { display: block; }
+  .chat-open #prompt, .chat-open #hints { display: none; }
+  #chat-to { font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--coral); margin-bottom: 8px; }
+  .chat-row { display: flex; gap: 8px; }
+  #chat-input { flex: 1; min-width: 0; font: 600 17px var(--body); padding: 11px 14px; border-radius: 10px; border: 1px solid #ffffff22; background: #0d0f14; color: var(--cream); outline: none; }
+  #chat-input:focus { border-color: var(--coral); }
+  #chat-form button[type=submit] { font: 700 16px var(--ui); letter-spacing: .08em; text-transform: uppercase; padding: 0 18px; border-radius: 10px; border: 0; background: linear-gradient(135deg, var(--coral), var(--pink)); color: #1b0f0a; cursor: pointer; }
+  #voice-chips, #menu-models { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip { font: 600 14px var(--ui); letter-spacing: .04em; padding: 6px 12px; border-radius: 999px; border: 1px solid #ffffff26; background: transparent; color: var(--cream); cursor: pointer; }
+  .chip:hover { border-color: #ffffff66; }
+  .chip.on { background: var(--teal); border-color: var(--teal); color: #06201d; }
+  .chat-tip { margin-top: 8px; font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+
+  .panel { position: absolute; background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 16px; padding: 16px 18px; backdrop-filter: blur(8px); display: none; box-sizing: border-box; max-width: calc(100vw - 32px); }
+  .panel-title { font-size: 13px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--coral); margin-bottom: 10px; }
+  #emotes { right: 24px; bottom: 60px; width: 300px; }
+  .emotes-open #emotes { display: block; }
+  #emote-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .emote { display: flex; align-items: center; gap: 8px; font: 600 15px var(--ui); color: var(--cream); background: #ffffff0d; border: 1px solid #ffffff14; border-radius: 10px; padding: 6px 8px; cursor: pointer; text-align: left; }
+  .emote:hover { background: #ffffff1f; }
+  #help { left: 50%; top: 50%; transform: translate(-50%, -50%); width: 560px; }
+  .help-open #help { display: block; }
+  #help dl { display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; margin: 0; font-size: 16px; }
+  #help dt { text-align: right; white-space: nowrap; }
+  #help dd { margin: 0; color: var(--cream); font-family: var(--body); font-size: 15px; align-self: center; }
+  #bigmap-wrap { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(900px, 92vw); height: min(640px, 80vh); padding: 8px; }
+  .map-open #bigmap-wrap { display: block; }
+  #bigmap { width: 100%; height: 100%; display: block; border-radius: 10px; }
+  #menu { left: 50%; top: 50%; transform: translate(-50%, -50%); width: 520px; }
+  .menu-open #menu { display: block; }
+  #menu h2 { font-family: 'Monoton', var(--ui); font-weight: 400; color: var(--pink); font-size: 34px; margin: 0 0 12px; letter-spacing: .04em; }
+  .row { margin: 14px 0; }
+  .row label { display: block; font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .row input[type=range] { width: 100%; accent-color: var(--coral); }
+  .row select { font: 600 15px var(--ui); background: #0d0f14; color: var(--cream); border: 1px solid #ffffff26; border-radius: 8px; padding: 6px 10px; }
+  .menu-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .btn { font: 700 15px var(--ui); letter-spacing: .08em; text-transform: uppercase; padding: 9px 16px; border-radius: 10px; border: 1px solid #ffffff26; background: transparent; color: var(--cream); cursor: pointer; }
+  .btn.primary { background: linear-gradient(135deg, var(--coral), var(--pink)); color: #1b0f0a; border: 0; }
+  #menu-voices { font-family: var(--body); font-size: 12px; color: var(--muted); margin-top: 6px; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+  @media (max-width: 640px) {
+    #minimap { width: 120px; height: 120px; left: 16px; }
+    #place { font-size: 20px; left: 16px; }
+    #hints { display: none; }
+    #help dl { font-size: 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) { #place.flash { animation: none; } }
+</style>
+<canvas id="view" tabindex="0"></canvas>
+<div id="hud">
+  <div id="bubbles"></div>
+  <div id="place"></div>
+  <div id="topright"><div id="clock">--:--</div><div id="speed" hidden></div></div>
+  <canvas id="minimap" width="190" height="190"></canvas>
+  <div id="prompt" hidden><kbd id="prompt-key">E</kbd><span id="prompt-text"></span></div>
+  <div id="hints">T talk · G emotes · M map · H help · Esc menu</div>
+  <div id="lock-hint">Click to look around</div>
+  <form id="chat-form" autocomplete="off">
+    <div id="chat-to">Say something out loud</div>
+    <div class="chat-row"><input id="chat-input" maxlength="200" placeholder="Type what your character says…" aria-label="What your character says"><button type="submit">Say</button></div>
+    <div id="voice-chips" role="group" aria-label="Voice"></div>
+    <div class="chat-tip">Enter to say · Tab switches voice · Esc cancels</div>
+  </form>
+  <div id="emotes" class="panel"><div class="panel-title">Emotes</div><div id="emote-list"></div></div>
+  <div id="help" class="panel">
+    <div class="panel-title">How to play</div>
+    <dl>
+      <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Walk. Hold <kbd>Shift</kbd> to run, <kbd>C</kbd> toggles jogging.</dd>
+      <dt><kbd>Space</kbd></dt><dd>Jump</dd>
+      <dt>Mouse</dt><dd>Look around (click the view first). Wheel zooms. Arrow keys work too.</dd>
+      <dt><kbd>E</kbd></dt><dd>Sit, lie down, open, switch on, talk to whoever you face</dd>
+      <dt><kbd>F</kbd></dt><dd>Get in or out of a car</dd>
+      <dt><kbd>T</kbd></dt><dd>Type a line and your character says it, in the voice you choose</dd>
+      <dt><kbd>1</kbd>…<kbd>0</kbd> <kbd>G</kbd></dt><dd>Emotes: wave, point, cheer, clap, dance, phone and more</dd>
+      <dt><kbd>Q</kbd></dt><dd>Drop what you are holding</dd>
+      <dt><kbd>M</kbd></dt><dd>City map</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Menu: change character, time of day, sound</dd>
+    </dl>
+  </div>
+  <div id="bigmap-wrap" class="panel"><canvas id="bigmap"></canvas></div>
+  <div id="menu" class="panel">
+    <h2>Port Solana</h2>
+    <div class="row"><label for="menu-time">Time of day</label><input id="menu-time" type="range" min="0" max="23.99" step="0.05"></div>
+    <div class="row"><label for="menu-speed">Clock</label><select id="menu-speed"><option value="normal">1 minute = 1 hour</option><option value="fast">Fast</option><option value="paused">Stopped</option></select></div>
+    <div class="row"><label>Play as</label><div id="menu-models"></div></div>
+    <div class="row"><label for="menu-mute">Sound</label><label style="text-transform:none;letter-spacing:0;font-size:15px;color:var(--cream)"><input id="menu-mute" type="checkbox"> Mute voices and sound</label><div id="menu-voices"></div></div>
+    <div class="menu-actions"><button type="button" class="btn primary" id="menu-resume">Back to the city</button><button type="button" class="btn" id="menu-restyle">New outfit</button><button type="button" class="btn" id="menu-voicetest">Test my voice</button></div>
+  </div>
+</div>
+<div id="loading"><div><div class="logo">PORT SOLANA</div><div class="tagline">a city to stage stories in</div><div id="load-bar-wrap"><div id="load-bar"></div></div><div id="load-note">Loading</div></div></div>
+<script type="module" src="./main.js"></script>
